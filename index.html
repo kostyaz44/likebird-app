@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#F59E0B" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="LikeBird" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="LikeBird" />
+    <meta name="msapplication-TileColor" content="#F59E0B" />
+    
+    <!-- SEO -->
+    <meta name="description" content="LikeBird — приложение для учёта продаж птичек-свистулек и сувениров. Работает оффлайн." />
+    
+    <!-- Favicon (emoji bird) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐦</text></svg>" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    
+    <title>LikeBird — Учёт продаж</title>
+    
+    <style>
+      /* Предотвращаем белый экран при загрузке */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        background: linear-gradient(135deg, #FDE68A, #FB923C, #F43F5E);
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+      }
+      
+      /* Splash screen */
+      #splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        background: linear-gradient(135deg, #FDE68A, #FB923C, #F43F5E);
+        z-index: 99999;
+        transition: opacity 0.4s;
+      }
+      #splash.hide { opacity: 0; pointer-events: none; }
+      #splash-icon {
+        width: 80px; height: 80px;
+        background: rgba(255,255,255,0.2);
+        backdrop-filter: blur(8px);
+        border-radius: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 48px;
+        margin-bottom: 16px;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      #splash-text { color: white; font: bold 28px system-ui; }
+      #splash-sub { color: rgba(255,255,255,0.7); font: 14px system-ui; margin-top: 4px; }
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+      }
+      
+      /* Safe area для iPhone с чёлкой */
+      @supports (padding: env(safe-area-inset-top)) {
+        body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Splash screen пока React загружается -->
+    <div id="splash">
+      <div id="splash-icon">🐦</div>
+      <div id="splash-text">LikeBird</div>
+      <div id="splash-sub">Загрузка...</div>
+    </div>
+    
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+    
+    <script>
+      // Убираем splash после загрузки React
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const splash = document.getElementById('splash');
+          if (splash) { splash.classList.add('hide'); setTimeout(() => splash.remove(), 400); }
+        }, 300);
+      });
+    </script>
+  </body>
+</html>
