@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ShoppingBag, FileText, BarChart3, Plus, Search, ArrowLeft, Trash2, X, FileInput, AlertTriangle, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Clock, Package, Bell, RefreshCw, Download, Upload, Copy, Settings, Calendar, RotateCcw, Info, CheckCircle, Shield, DollarSign, Users, Lock, TrendingUp, Award, MapPin, Archive, MessageCircle, Star, Camera, Image, LogOut, Key, Wifi, WifiOff, Eye, EyeOff, Smartphone } from 'lucide-react';
+import { fbSave, fbSubscribe, SYNC_KEYS } from './firebase.js';
 
 // ===== УТИЛИТЫ: Хэширование пароля =====
 const hashPassword = async (password) => {
@@ -754,6 +755,54 @@ export default function LikeBirdApp() {
     };
   }, []);
 
+
+  // ===== FIREBASE: Realtime синхронизация между устройствами =====
+  useEffect(() => {
+    // Маппинг: ключ localStorage → React-setter
+    // Firebase уведомляет нас об изменениях от ДРУГИХ устройств
+    const subscriptions = [
+      // Отчёты (с миграцией старого формата)
+      fbSubscribe('likebird-reports', (val) => {
+        const migrated = Array.isArray(val) ? val.map(r => {
+          if (r.product && typeof r.product === 'object' && r.product.name) return { ...r, product: r.product.name };
+          return r;
+        }) : [];
+        setReports(migrated);
+        localStorage.setItem('likebird-reports', JSON.stringify(migrated));
+      }),
+      fbSubscribe('likebird-expenses', (val) => { setExpenses(val); localStorage.setItem('likebird-expenses', JSON.stringify(val)); }),
+      fbSubscribe('likebird-stock', (val) => { setStock(val); localStorage.setItem('likebird-stock', JSON.stringify(val)); }),
+      fbSubscribe('likebird-given', (val) => { setGivenToAdmin(val); localStorage.setItem('likebird-given', JSON.stringify(val)); }),
+      fbSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); }),
+      fbSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); localStorage.setItem('likebird-owncard', JSON.stringify(val)); }),
+      fbSubscribe('likebird-partners', (val) => { setPartnerStock(val); localStorage.setItem('likebird-partners', JSON.stringify(val)); }),
+      fbSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); }),
+      fbSubscribe('likebird-schedule', (val) => { setScheduleData(val); localStorage.setItem('likebird-schedule', JSON.stringify(val)); }),
+      fbSubscribe('likebird-events', (val) => { setEventsCalendar(val); localStorage.setItem('likebird-events', JSON.stringify(val)); }),
+      fbSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); localStorage.setItem('likebird-manuals', JSON.stringify(val)); } }),
+      fbSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); }),
+      fbSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); localStorage.setItem('likebird-admin-password', JSON.stringify(val)); }),
+      fbSubscribe('likebird-employees', (val) => { setEmployees(val); localStorage.setItem('likebird-employees', JSON.stringify(val)); }),
+      fbSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); }),
+      fbSubscribe('likebird-audit-log', (val) => { setAuditLog(val); localStorage.setItem('likebird-audit-log', JSON.stringify(val)); }),
+      fbSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); localStorage.setItem('likebird-custom-products', JSON.stringify(val)); }),
+      fbSubscribe('likebird-locations', (val) => { setLocations(val); localStorage.setItem('likebird-locations', JSON.stringify(val)); }),
+      fbSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); }),
+      fbSubscribe('likebird-penalties', (val) => { setPenalties(val); localStorage.setItem('likebird-penalties', JSON.stringify(val)); }),
+      fbSubscribe('likebird-bonuses', (val) => { setBonuses(val); localStorage.setItem('likebird-bonuses', JSON.stringify(val)); }),
+      fbSubscribe('likebird-timeoff', (val) => { setTimeOff(val); localStorage.setItem('likebird-timeoff', JSON.stringify(val)); }),
+      fbSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); localStorage.setItem('likebird-ratings', JSON.stringify(val)); }),
+      fbSubscribe('likebird-chat', (val) => { setChatMessages(val); localStorage.setItem('likebird-chat', JSON.stringify(val)); }),
+      fbSubscribe('likebird-stock-history', (val) => { setStockHistory(val); localStorage.setItem('likebird-stock-history', JSON.stringify(val)); }),
+      fbSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); }),
+      fbSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
+      fbSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
+    ];
+
+    // Отписываемся при размонтировании компонента
+    return () => { subscriptions.forEach(unsub => { if (typeof unsub === 'function') unsub(); }); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ===== Интеграция кастомных товаров в поиск =====
   useEffect(() => {
     DYNAMIC_ALL_PRODUCTS = [
@@ -780,7 +829,14 @@ export default function LikeBirdApp() {
     }
   }, [stock]);
 
-  const save = (key, data) => localStorage.setItem(key, JSON.stringify(data));
+  // ===== Реф для блокировки Firebase-обновлений пока мы сами пишем =====
+  const fbWriting = useRef(false);
+
+  // Сохраняет данные: локально + в Firebase (для всех устройств)
+  const save = (key, data) => {
+    localStorage.setItem(key, JSON.stringify(data));
+    fbSave(key, data);
+  };
   const updateReports = (r) => { setReports(r); save('likebird-reports', r); };
   const updateStock = (s) => { setStock(s); save('likebird-stock', s); };
   const updateSalaryDecision = (id, dec) => { const u = {...salaryDecisions, [id]: dec}; setSalaryDecisions(u); save('likebird-salary-decisions', u); };
