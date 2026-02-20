@@ -47,6 +47,7 @@ export const SYNC_KEYS = new Set([
   'likebird-kpi',
   'likebird-profiles',
   'likebird-users',
+  'likebird-invite-codes',
 ]);
 
 // likebird-reports → data/likebird-reports

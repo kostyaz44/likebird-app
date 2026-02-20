@@ -821,6 +821,10 @@ export default function LikeBirdApp() {
           }
         } catch {}
       }),
+      fbSubscribe('likebird-invite-codes', (val) => {
+        if (!Array.isArray(val)) return;
+        localStorage.setItem('likebird-invite-codes', JSON.stringify(val));
+      }),
     ];
 
     // Отписываемся при размонтировании компонента
@@ -4826,6 +4830,7 @@ export default function LikeBirdApp() {
                   const newCodes = [...inviteCodes, { code, createdAt: Date.now(), used: false, usedBy: null }];
                   setInviteCodes(newCodes);
                   localStorage.setItem('likebird-invite-codes', JSON.stringify(newCodes));
+                  fbSave('likebird-invite-codes', newCodes);
                   logAction('Создан код приглашения', code);
                   showNotification(`Код: ${code}`);
                 }} className="w-full bg-green-500 text-white py-3 rounded-lg font-bold hover:bg-green-600 mb-3">🔑 Сгенерировать код</button>
@@ -4842,6 +4847,7 @@ export default function LikeBirdApp() {
                           const updated = inviteCodes.filter((_, j) => j !== inviteCodes.length - 1 - i);
                           setInviteCodes(updated);
                           localStorage.setItem('likebird-invite-codes', JSON.stringify(updated));
+                          fbSave('likebird-invite-codes', updated);
                         }} className="text-red-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
@@ -6415,10 +6421,12 @@ export default function LikeBirdApp() {
       if (password !== confirmPassword) { setError('Пароли не совпадают'); return; }
       if (!inviteCode.trim()) { setError('Введите код приглашения от администратора'); return; }
 
-      // Проверяем код приглашения
+      // Проверяем код приглашения — всегда читаем свежие данные из localStorage
+      // (Firebase subscription обновляет localStorage автоматически)
       let codes = [];
       try { codes = JSON.parse(localStorage.getItem('likebird-invite-codes') || '[]'); } catch {}
-      const validCode = codes.find(c => c.code === inviteCode.trim().toUpperCase() && !c.used);
+      const normalizedCode = inviteCode.trim().toUpperCase();
+      const validCode = codes.find(c => c.code === normalizedCode && !c.used);
       if (!validCode) { setError('Неверный или использованный код приглашения'); return; }
 
       // Проверяем что логин не занят
@@ -6432,9 +6440,10 @@ export default function LikeBirdApp() {
       localStorage.setItem('likebird-users', JSON.stringify(users));
       fbSave('likebird-users', users);
 
-      // Помечаем код как использованный
+      // Помечаем код как использованный — синхронизируем на все устройства
       const updatedCodes = codes.map(c => c.code === validCode.code ? {...c, used: true, usedBy: login.trim(), usedAt: Date.now()} : c);
       localStorage.setItem('likebird-invite-codes', JSON.stringify(updatedCodes));
+      fbSave('likebird-invite-codes', updatedCodes);
 
       // Авторизуем
       const authData = { authenticated: true, name: login.trim(), login: login.trim(), expiry: Date.now() + (30*24*60*60*1000), createdAt: Date.now() };
