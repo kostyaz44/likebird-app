@@ -48,6 +48,8 @@ export const SYNC_KEYS = new Set([
   'likebird-profiles',
   'likebird-users',
   'likebird-invite-codes',
+  'likebird-custom-achievements',
+  'likebird-achievements-granted',
 ]);
 
 // likebird-reports → data/likebird-reports
@@ -59,6 +61,18 @@ export const fbSave = (key, data) => {
   set(ref(db, toFbPath(key)), data).catch((e) => {
     console.warn('[Firebase] Ошибка записи', key, e.message);
   });
+};
+
+// Получить данные из Firebase один раз (Promise)
+export const fbGet = async (key) => {
+  try {
+    const snapshot = await get(ref(db, `data/${key}`));
+    if (snapshot.exists()) return snapshot.val();
+    return null;
+  } catch (e) {
+    console.warn('[Firebase] Ошибка чтения', key, e.message);
+    return null;
+  }
 };
 
 // Подписаться на изменения ключа в Firebase

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ShoppingBag, FileText, BarChart3, Plus, Search, ArrowLeft, Trash2, X, FileInput, AlertTriangle, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Clock, Package, Bell, RefreshCw, Download, Upload, Copy, Settings, Calendar, RotateCcw, Info, CheckCircle, Shield, DollarSign, Users, Lock, TrendingUp, Award, MapPin, Archive, MessageCircle, Star, Camera, Image, LogOut, Key, Wifi, WifiOff, Eye, EyeOff, Smartphone } from 'lucide-react';
-import { fbSave, fbSubscribe, SYNC_KEYS } from './firebase.js';
+import { fbSave, fbSubscribe, fbGet, SYNC_KEYS } from './firebase.js';
 
 // ===== УТИЛИТЫ: Хэширование пароля =====
 const hashPassword = async (password) => {
@@ -625,6 +625,10 @@ export default function LikeBirdApp() {
   
   // KPI и цели сотрудников
   const [employeeKPI, setEmployeeKPI] = useState({});
+  // Кастомные достижения (созданные администратором)
+  const [customAchievements, setCustomAchievements] = useState([]);
+  // Выданные вручную достижения { achievementId: [login1, login2, ...] }
+  const [achievementsGranted, setAchievementsGranted] = useState({});
   
   // ===== Профили сотрудников (аватар, bio, синхронизируется) =====
   const [profilesData, setProfilesData] = useState({});
@@ -756,6 +760,8 @@ export default function LikeBirdApp() {
     loadJson('likebird-writeoffs', setWriteOffs, []);
     loadJson('likebird-autoorder', setAutoOrderList, []);
     loadJson('likebird-kpi', setEmployeeKPI, {});
+    loadJson('likebird-custom-achievements', setCustomAchievements, []);
+    loadJson('likebird-achievements-granted', setAchievementsGranted, {});
     
     // ===== Cleanup =====
     return () => {
@@ -807,6 +813,8 @@ export default function LikeBirdApp() {
       fbSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); }),
       fbSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
       fbSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
+      fbSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } }),
+      fbSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } }),
       fbSubscribe('likebird-profiles', (val) => { setProfilesData(val); localStorage.setItem('likebird-profiles', JSON.stringify(val)); }),
       fbSubscribe('likebird-users', (val) => {
         if (!Array.isArray(val)) return;
@@ -1064,6 +1072,8 @@ export default function LikeBirdApp() {
   
   // KPI и цели
   const updateEmployeeKPI = (kpi) => { setEmployeeKPI(kpi); save('likebird-kpi', kpi); };
+  const updateCustomAchievements = (a) => { setCustomAchievements(a); save('likebird-custom-achievements', a); };
+  const updateAchievementsGranted = (g) => { setAchievementsGranted(g); save('likebird-achievements-granted', g); };
   const updateProfilesData = (p) => { setProfilesData(p); save('likebird-profiles', p); };
   const setEmployeeGoal = (employeeId, goalType, target, period = 'month') => {
     const key = `${employeeId}_${goalType}_${period}`;
@@ -3317,6 +3327,7 @@ export default function LikeBirdApp() {
       { id: 'settings', label: '⚙️ Настройки', icon: Settings },
       { id: 'security', label: '🔐 Доступ', icon: Lock },
       { id: 'manuals', label: '📚 Мануалы', icon: FileText },
+      { id: 'achievements-admin', label: '🏅 Достижения', icon: Award },
     ];
 
     return (
@@ -5048,6 +5059,203 @@ export default function LikeBirdApp() {
               </div>
             );
           })()}
+
+          {/* ===== ВКЛАДКА: ДОСТИЖЕНИЯ ===== */}
+          {adminTab === 'achievements-admin' && (() => {
+            const [achForm, setAchForm] = React.useState({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '' });
+            const [editingAch, setEditingAch] = React.useState(null);
+            const COND_TYPES = [
+              { id: 'manual', label: '🎖️ Выдать вручную' },
+              { id: 'sales_count', label: '🛒 Кол-во продаж' },
+              { id: 'revenue', label: '💰 Выручка (₽)' },
+              { id: 'big_sale', label: '🎯 Продажа от N ₽' },
+              { id: 'tips_count', label: '⭐ Чаевые (раз)' },
+            ];
+            const ICON_PRESETS = ['🏆','🥇','🥈','🥉','🌟','⭐','🔥','💎','🎯','🎖️','👑','🚀','💪','🦅','🐦','🎁','💡','🌈','⚡','🎪','🏅','✨','🌙','🦁','🐯'];
+
+            const handleSaveAch = () => {
+              if (!achForm.title.trim()) { showNotification('Введите название', 'error'); return; }
+              if (achForm.condType !== 'manual' && !achForm.condValue) { showNotification('Укажите значение условия', 'error'); return; }
+              if (editingAch) {
+                updateCustomAchievements(customAchievements.map(a => a.id === editingAch ? { ...a, ...achForm } : a));
+                setEditingAch(null);
+              } else {
+                const newA = { ...achForm, id: 'custom_' + Date.now(), condValue: Number(achForm.condValue) || 0, createdAt: Date.now() };
+                updateCustomAchievements([...customAchievements, newA]);
+              }
+              setAchForm({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '' });
+              showNotification(editingAch ? 'Достижение обновлено' : 'Достижение создано');
+            };
+
+            const handleDeleteAch = (id) => {
+              showConfirm('Удалить достижение?', () => {
+                updateCustomAchievements(customAchievements.filter(a => a.id !== id));
+                // Убираем из выданных
+                const newGranted = { ...achievementsGranted };
+                delete newGranted[id];
+                updateAchievementsGranted(newGranted);
+                showNotification('Удалено');
+              });
+            };
+
+            const handleGrantToggle = (achId, userLogin) => {
+              const current = achievementsGranted[achId] || [];
+              const updated = current.includes(userLogin)
+                ? current.filter(l => l !== userLogin)
+                : [...current, userLogin];
+              updateAchievementsGranted({ ...achievementsGranted, [achId]: updated });
+            };
+
+            const users = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+
+            return (
+              <div className="space-y-4">
+
+                {/* Форма создания/редактирования */}
+                <div className="bg-white rounded-2xl p-4 shadow">
+                  <h3 className="font-bold mb-4 flex items-center gap-2">
+                    <Award className="w-5 h-5 text-amber-500" />
+                    {editingAch ? 'Редактировать достижение' : 'Новое достижение'}
+                  </h3>
+
+                  {/* Выбор иконки */}
+                  <div className="mb-3">
+                    <label className="text-xs text-gray-500 font-semibold block mb-2">Иконка</label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {ICON_PRESETS.map(ic => (
+                        <button key={ic} onClick={() => setAchForm({...achForm, icon: ic})}
+                          className={`w-10 h-10 text-xl rounded-xl transition-all ${achForm.icon === ic ? 'bg-amber-100 ring-2 ring-amber-400 scale-110' : 'bg-gray-100 hover:bg-gray-200'}`}>
+                          {ic}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-3xl">{achForm.icon}</span>
+                      <input type="text" value={achForm.icon} onChange={e => setAchForm({...achForm, icon: e.target.value})}
+                        placeholder="или введите свой эмодзи"
+                        className="flex-1 p-2 border-2 border-gray-200 rounded-xl text-sm focus:border-amber-400 focus:outline-none" maxLength={4} />
+                    </div>
+                  </div>
+
+                  {/* Название и описание */}
+                  <div className="space-y-2 mb-3">
+                    <input type="text" value={achForm.title} onChange={e => setAchForm({...achForm, title: e.target.value})}
+                      placeholder="Название достижения *"
+                      className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm font-semibold focus:border-amber-400 focus:outline-none" />
+                    <input type="text" value={achForm.desc} onChange={e => setAchForm({...achForm, desc: e.target.value})}
+                      placeholder="Описание (подсказка для сотрудника)"
+                      className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-amber-400 focus:outline-none" />
+                  </div>
+
+                  {/* Условие получения */}
+                  <div className="mb-4">
+                    <label className="text-xs text-gray-500 font-semibold block mb-2">Условие получения</label>
+                    <div className="grid grid-cols-1 gap-2 mb-2">
+                      {COND_TYPES.map(ct => (
+                        <button key={ct.id} onClick={() => setAchForm({...achForm, condType: ct.id, condValue: ''})}
+                          className={`py-2.5 px-3 rounded-xl text-sm font-semibold border-2 text-left transition-all ${achForm.condType === ct.id ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                          {ct.label}
+                        </button>
+                      ))}
+                    </div>
+                    {achForm.condType !== 'manual' && (
+                      <input type="number" value={achForm.condValue} onChange={e => setAchForm({...achForm, condValue: e.target.value})}
+                        placeholder={achForm.condType === 'sales_count' ? 'Кол-во продаж, например 25' : achForm.condType === 'revenue' ? 'Сумма выручки, например 100000' : achForm.condType === 'big_sale' ? 'Минимальная сумма продажи, например 2000' : 'Количество раз'}
+                        className="w-full p-2.5 border-2 border-amber-200 rounded-xl text-sm focus:border-amber-400 focus:outline-none" />
+                    )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={handleSaveAch}
+                      className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded-xl font-bold hover:shadow-lg transition-all">
+                      {editingAch ? '💾 Сохранить' : '✅ Создать достижение'}
+                    </button>
+                    {editingAch && (
+                      <button onClick={() => { setEditingAch(null); setAchForm({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '' }); }}
+                        className="px-4 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200">
+                        Отмена
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Список созданных достижений */}
+                <div className="space-y-3">
+                  <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                    <span>Созданные достижения</span>
+                    <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full">{customAchievements.length}</span>
+                  </h3>
+                  {customAchievements.length === 0 && (
+                    <div className="bg-white rounded-xl p-8 text-center shadow">
+                      <p className="text-4xl mb-2">🏅</p>
+                      <p className="text-gray-400">Нет кастомных достижений</p>
+                      <p className="text-gray-400 text-sm mt-1">Создайте первое выше</p>
+                    </div>
+                  )}
+                  {customAchievements.map(ach => {
+                    const grantedTo = achievementsGranted[ach.id] || [];
+                    const condLabel = COND_TYPES.find(c => c.id === ach.condType)?.label || ach.condType;
+                    return (
+                      <div key={ach.id} className="bg-white rounded-2xl shadow overflow-hidden">
+                        <div className="p-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center text-3xl flex-shrink-0">
+                              {ach.icon}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-gray-800">{ach.title}</p>
+                              {ach.desc && <p className="text-xs text-gray-400 mt-0.5">{ach.desc}</p>}
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
+                                  {condLabel}{ach.condValue ? `: ${Number(ach.condValue).toLocaleString()}` : ''}
+                                </span>
+                                {grantedTo.length > 0 && (
+                                  <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
+                                    ✅ Выдано: {grantedTo.length}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex gap-1 flex-shrink-0">
+                              <button onClick={() => { setEditingAch(ach.id); setAchForm({ icon: ach.icon, title: ach.title, desc: ach.desc || '', condType: ach.condType, condValue: String(ach.condValue || '') }); }}
+                                className="p-2 text-blue-400 hover:bg-blue-50 rounded-lg">
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => handleDeleteAch(ach.id)}
+                                className="p-2 text-red-400 hover:bg-red-50 rounded-lg">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Ручная выдача */}
+                          {ach.condType === 'manual' && users.length > 0 && (
+                            <div className="mt-3 pt-3 border-t">
+                              <p className="text-xs text-gray-500 font-semibold mb-2">Выдать сотрудникам:</p>
+                              <div className="flex flex-wrap gap-2">
+                                {users.map(u => {
+                                  const granted = grantedTo.includes(u.login);
+                                  const profile = profilesData[u.login] || {};
+                                  return (
+                                    <button key={u.login} onClick={() => handleGrantToggle(ach.id, u.login)}
+                                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-semibold border-2 transition-all ${granted ? 'bg-green-50 border-green-400 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                                      <span>{granted ? '✅' : '○'}</span>
+                                      <span>{profile.displayName || u.name || u.login}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
         </div>
       </div>
     );
@@ -5941,7 +6149,8 @@ export default function LikeBirdApp() {
     const myGoals = myEmpId ? Object.values(employeeKPI).filter(g => g.employeeId === myEmpId) : [];
 
     // Достижения
-    const achievements = [
+    // Встроенные достижения
+    const builtinAchievements = [
       { id: 'first_sale', icon: '🐣', title: 'Первая продажа', desc: 'Совершить первую продажу', done: allMyReports.length >= 1 },
       { id: 'sales_10', icon: '🌱', title: 'Начинающий', desc: '10 продаж', done: allMyReports.length >= 10 },
       { id: 'sales_50', icon: '🐦', title: 'Продавец птиц', desc: '50 продаж', done: allMyReports.length >= 50 },
@@ -5951,13 +6160,33 @@ export default function LikeBirdApp() {
       { id: 'revenue_50k', icon: '💰', title: '50 000 ₽', desc: 'Выручка за всё время', done: totalRevenue >= 50000 },
       { id: 'revenue_200k', icon: '💎', title: '200 000 ₽', desc: 'Выручка за всё время', done: totalRevenue >= 200000 },
       { id: 'tips', icon: '⭐', title: 'Любимчик', desc: 'Получить чаевые', done: allMyReports.some(r => r.tips > 0) },
-      { id: 'streak_week', icon: '🔥', title: 'Активная неделя', desc: '5+ продаж за 7 дней', done: myReports.length >= 5 && period === 'week' || (() => {
+      { id: 'streak_week', icon: '🔥', title: 'Активная неделя', desc: '5+ продаж за 7 дней', done: (() => {
         const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
         return allMyReports.filter(r => parseReportDate(r.date) >= weekAgo).length >= 5;
       })() },
       { id: 'big_sale', icon: '🎯', title: 'Большая продажа', desc: 'Продажа от 1500 ₽', done: allMyReports.some(r => r.salePrice >= 1500) },
       { id: 'no_penalty', icon: '😇', title: 'Чистая репутация', desc: 'Ни одного штрафа', done: myEmpId ? penalties.filter(p => p.employeeId === myEmpId).length === 0 : true },
     ];
+
+    // Кастомные достижения от администратора
+    const customAchievementsEvaluated = customAchievements.map(ach => {
+      let done = false;
+      const val = Number(ach.condValue) || 0;
+      if (ach.condType === 'manual') {
+        done = (achievementsGranted[ach.id] || []).includes(currentLogin);
+      } else if (ach.condType === 'sales_count') {
+        done = allMyReports.length >= val;
+      } else if (ach.condType === 'revenue') {
+        done = totalRevenue >= val;
+      } else if (ach.condType === 'big_sale') {
+        done = allMyReports.some(r => r.salePrice >= val);
+      } else if (ach.condType === 'tips_count') {
+        done = allMyReports.filter(r => r.tips > 0).length >= val;
+      }
+      return { ...ach, done, isCustom: true };
+    });
+
+    const achievements = [...builtinAchievements, ...customAchievementsEvaluated];
     const doneCount = achievements.filter(a => a.done).length;
 
     const handleSavePassword = async () => {
@@ -6421,29 +6650,41 @@ export default function LikeBirdApp() {
       if (password !== confirmPassword) { setError('Пароли не совпадают'); return; }
       if (!inviteCode.trim()) { setError('Введите код приглашения от администратора'); return; }
 
-      // Проверяем код приглашения — всегда читаем свежие данные из localStorage
-      // (Firebase subscription обновляет localStorage автоматически)
-      let codes = [];
-      try { codes = JSON.parse(localStorage.getItem('likebird-invite-codes') || '[]'); } catch {}
+      setError('Проверяем код...');
+
+      // Читаем коды НАПРЯМУЮ из Firebase — без кэша localStorage
       const normalizedCode = inviteCode.trim().toUpperCase();
+      let codes = (await fbGet('likebird-invite-codes')) || [];
+      if (!Array.isArray(codes)) codes = [];
+
+      // Дополняем из localStorage на случай если Firebase недоступен
+      if (codes.length === 0) {
+        try { codes = JSON.parse(localStorage.getItem('likebird-invite-codes') || '[]'); } catch {}
+      }
+
       const validCode = codes.find(c => c.code === normalizedCode && !c.used);
       if (!validCode) { setError('Неверный или использованный код приглашения'); return; }
 
-      // Проверяем что логин не занят
-      let users = [];
-      try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+      // Проверяем что логин не занят — тоже читаем из Firebase напрямую
+      let users = (await fbGet('likebird-users')) || [];
+      if (!Array.isArray(users)) users = [];
+      if (users.length === 0) {
+        try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+      }
+
       if (users.find(u => u.login.toLowerCase() === login.trim().toLowerCase())) { setError('Этот логин уже занят'); return; }
 
+      setError('');
       const hashedPass = await hashPassword(password);
-      const newUser = { login: login.trim(), name: login.trim(), passwordHash: hashedPass, createdAt: Date.now(), inviteCode: validCode.code };
-      users.push(newUser);
-      localStorage.setItem('likebird-users', JSON.stringify(users));
-      fbSave('likebird-users', users);
+      const newUser = { login: login.trim(), name: login.trim(), passwordHash: hashedPass, createdAt: Date.now(), role: 'seller', inviteCode: validCode.code };
+      const updatedUsers = [...users, newUser];
+      localStorage.setItem('likebird-users', JSON.stringify(updatedUsers));
+      await fbSave('likebird-users', updatedUsers);
 
-      // Помечаем код как использованный — синхронизируем на все устройства
+      // Помечаем код как использованный — сразу в Firebase
       const updatedCodes = codes.map(c => c.code === validCode.code ? {...c, used: true, usedBy: login.trim(), usedAt: Date.now()} : c);
       localStorage.setItem('likebird-invite-codes', JSON.stringify(updatedCodes));
-      fbSave('likebird-invite-codes', updatedCodes);
+      await fbSave('likebird-invite-codes', updatedCodes);
 
       // Авторизуем
       const authData = { authenticated: true, name: login.trim(), login: login.trim(), expiry: Date.now() + (30*24*60*60*1000), createdAt: Date.now() };
@@ -6459,8 +6700,15 @@ export default function LikeBirdApp() {
       if (!login.trim()) { setError('Введите логин'); return; }
       if (!password) { setError('Введите пароль'); return; }
 
-      let users = [];
-      try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+      setError('Входим...');
+      // Читаем пользователей напрямую из Firebase для актуальности
+      let users = (await fbGet('likebird-users')) || [];
+      if (!Array.isArray(users) || users.length === 0) {
+        try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+      }
+      // Кэшируем локально
+      if (users.length > 0) localStorage.setItem('likebird-users', JSON.stringify(users));
+
       const user = users.find(u => u.login.toLowerCase() === login.trim().toLowerCase());
       if (!user) { setError('Пользователь не найден'); return; }
 
