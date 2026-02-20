@@ -46,6 +46,7 @@ export const SYNC_KEYS = new Set([
   'likebird-autoorder',
   'likebird-kpi',
   'likebird-profiles',
+  'likebird-users',
 ]);
 
 // likebird-reports → data/likebird-reports

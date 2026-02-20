@@ -355,6 +355,7 @@ const parseYear = (y) => {
 export default function LikeBirdApp() {
   // ===== АВТОРИЗАЦИЯ =====
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null); // полный объект user из likebird-users
   const [authLoading, setAuthLoading] = useState(true);
   const [authScreen, setAuthScreen] = useState('login'); // 'login', 'register', 'forgot'
   const [authPin, setAuthPin] = useState('');
@@ -648,6 +649,12 @@ export default function LikeBirdApp() {
         if (parsed.authenticated && parsed.expiry > Date.now()) {
           setIsAuthenticated(true);
           setAuthName(parsed.name || '');
+          // Загружаем полный объект пользователя
+          try {
+            const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+            const foundUser = users.find(u => u.login === parsed.login);
+            if (foundUser) setCurrentUser(foundUser);
+          } catch {}
         }
       }
     } catch {}
@@ -801,6 +808,19 @@ export default function LikeBirdApp() {
       fbSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
       fbSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
       fbSubscribe('likebird-profiles', (val) => { setProfilesData(val); localStorage.setItem('likebird-profiles', JSON.stringify(val)); }),
+      fbSubscribe('likebird-users', (val) => {
+        if (!Array.isArray(val)) return;
+        localStorage.setItem('likebird-users', JSON.stringify(val));
+        // Обновляем currentUser если его данные изменились (например роль)
+        try {
+          const authRaw = localStorage.getItem('likebird-auth');
+          if (authRaw) {
+            const auth = JSON.parse(authRaw);
+            const me = val.find(u => u.login === auth.login);
+            if (me) setCurrentUser(me);
+          }
+        } catch {}
+      }),
     ];
 
     // Отписываемся при размонтировании компонента
@@ -1509,7 +1529,7 @@ export default function LikeBirdApp() {
             <button onClick={() => setCurrentView('reports')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-amber-100 p-3 rounded-lg"><FileText className="w-6 h-6 text-amber-600" /></div><div className="text-left"><h3 className="font-bold">История</h3><p className="text-xs text-gray-400">Все продажи по дням</p></div></button>
             <button onClick={() => { setSelectedDate(formatDate(new Date())); setCurrentView('day-report'); }} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-orange-100 p-3 rounded-lg"><BarChart3 className="w-6 h-6 text-orange-600" /></div><div className="text-left"><h3 className="font-bold">Итог дня</h3><p className="text-xs text-gray-400">Сводка по сотрудникам</p></div></button>
             <button onClick={() => setCurrentView('team')} className="w-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Users className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Команда</h3><p className="text-xs text-white/80">График, результаты, события</p></div>{upcomingEventsCount > 0 && <span className="absolute top-2 right-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{upcomingEventsCount}</span>}</button>
-            <button onClick={() => setCurrentView('admin')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Shield className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Админ-панель</h3><p className="text-xs text-white/80">Управление и аналитика</p></div>{lowStock.length > 0 && <span className="absolute top-2 right-2 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{lowStock.length}</span>}</button>
+            {(currentUser?.isAdmin || currentUser?.role === 'admin') && <button onClick={() => setCurrentView('admin')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Shield className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Админ-панель</h3><p className="text-xs text-white/80">Управление и аналитика</p></div>{lowStock.length > 0 && <span className="absolute top-2 right-2 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{lowStock.length}</span>}</button>}
             <button onClick={() => setCurrentView('settings')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-gray-100 p-3 rounded-lg"><Settings className="w-6 h-6 text-gray-600" /></div><div className="text-left"><h3 className="font-bold">Настройки</h3><p className="text-xs text-gray-400">Экспорт, очистка данных</p></div></button>
             <button onClick={() => setCurrentView('profile')} className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">{(profilesData[(() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })()]?.avatar) ? '🖼️' : '👤'}</span></div><div className="text-left flex-1"><h3 className="font-bold">Мой профиль</h3><p className="text-xs text-white/80">Зарплата, достижения, аккаунт</p></div><div className="text-right"><p className="text-white/80 text-sm font-semibold">{employeeName}</p></div></button>
           </div>
@@ -3618,77 +3638,295 @@ export default function LikeBirdApp() {
           )}
 
           {/* ВКЛАДКА: Сотрудники */}
-          {adminTab === 'employees' && (
-            <div className="space-y-4">
-              {/* Добавление сотрудника */}
-              <div className="bg-white rounded-xl p-4 shadow">
-                <h3 className="font-bold mb-3 flex items-center gap-2"><Plus className="w-5 h-5 text-purple-600" />Добавить сотрудника</h3>
-                <div className="flex gap-2">
-                  <input type="text" value={newEmployee} onChange={(e) => setNewEmployee(e.target.value)} placeholder="Имя" className="flex-1 p-2 border rounded" />
-                  <button onClick={() => { if (newEmployee.trim()) { addEmployee(newEmployee.trim()); setNewEmployee(''); showNotification('Сотрудник добавлен'); } }} className="bg-purple-500 text-white px-4 rounded hover:bg-purple-600">Добавить</button>
-                </div>
-              </div>
+          {adminTab === 'employees' && (() => {
+            // Читаем зарегистрированных пользователей из localStorage (синхронизируется Firebase)
+            const [regUsers, setRegUsers] = React.useState(() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } });
+            const [editingUser, setEditingUser] = React.useState(null); // login редактируемого
+            const [editForm, setEditForm] = React.useState({});
+            const [addForm, setAddForm] = React.useState({ login: '', name: '', password: '', role: 'seller', isAdmin: false });
+            const [addMode, setAddMode] = React.useState(false);
+            const [addError, setAddError] = React.useState('');
 
-              {/* Список сотрудников */}
-              <div className="bg-white rounded-xl p-4 shadow">
-                <h3 className="font-bold mb-3 flex items-center gap-2"><Users className="w-5 h-5 text-purple-600" />Сотрудники ({employees.length})</h3>
-                <div className="space-y-2">
-                  {employees.map(emp => {
-                    const stats = employeeStats[emp.name] || { sales: 0, revenue: 0, count: 0 };
+            // Перечитывать при изменениях Firebase
+            React.useEffect(() => {
+              const interval = setInterval(() => {
+                try {
+                  const fresh = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+                  setRegUsers(fresh);
+                } catch {}
+              }, 2000);
+              return () => clearInterval(interval);
+            }, []);
+
+            const saveUsers = (updated) => {
+              setRegUsers(updated);
+              localStorage.setItem('likebird-users', JSON.stringify(updated));
+              fbSave('likebird-users', updated);
+            };
+
+            const isMasterAdmin = currentUser?.isAdmin === true;
+
+            const ROLE_LABELS = {
+              seller: { label: 'Продавец', color: 'bg-purple-100 text-purple-700', icon: '🐦' },
+              senior: { label: 'Старший продавец', color: 'bg-amber-100 text-amber-700', icon: '⭐' },
+              admin: { label: 'Администратор', color: 'bg-red-100 text-red-700', icon: '🛡️' },
+            };
+
+            const handleStartEdit = (user) => {
+              setEditingUser(user.login);
+              setEditForm({ name: user.name, role: user.role || 'seller', isAdmin: !!user.isAdmin });
+            };
+
+            const handleSaveEdit = () => {
+              const updated = regUsers.map(u => u.login === editingUser
+                ? { ...u, name: editForm.name, role: editForm.role, isAdmin: editForm.isAdmin || editForm.role === 'admin' }
+                : u
+              );
+              saveUsers(updated);
+              // Если редактируем самого себя — обновить currentUser
+              if (editingUser === currentUser?.login) {
+                const me = updated.find(u => u.login === editingUser);
+                if (me) setCurrentUser(me);
+              }
+              setEditingUser(null);
+              showNotification('Сохранено');
+            };
+
+            const handleDeleteUser = (login) => {
+              if (login === currentUser?.login) { showNotification('Нельзя удалить себя', 'error'); return; }
+              showConfirm(`Удалить аккаунт ${login}?`, () => {
+                const updated = regUsers.filter(u => u.login !== login);
+                saveUsers(updated);
+                showNotification('Аккаунт удалён');
+              });
+            };
+
+            const handleAddUser = async () => {
+              setAddError('');
+              if (!addForm.login.trim()) { setAddError('Введите логин'); return; }
+              if (addForm.login.trim().length < 2) { setAddError('Логин минимум 2 символа'); return; }
+              if (!addForm.password || addForm.password.length < 4) { setAddError('Пароль минимум 4 символа'); return; }
+              if (regUsers.find(u => u.login.toLowerCase() === addForm.login.trim().toLowerCase())) { setAddError('Логин уже занят'); return; }
+              const hashed = await hashPassword(addForm.password);
+              const newU = {
+                login: addForm.login.trim(),
+                name: addForm.name.trim() || addForm.login.trim(),
+                passwordHash: hashed,
+                createdAt: Date.now(),
+                role: addForm.role,
+                isAdmin: addForm.role === 'admin',
+              };
+              saveUsers([...regUsers, newU]);
+              // Добавляем в employees если нет
+              if (!employees.find(e => e.name === newU.name)) {
+                addEmployee(newU.name, newU.role);
+              }
+              setAddForm({ login: '', name: '', password: '', role: 'seller', isAdmin: false });
+              setAddMode(false);
+              showNotification(`Аккаунт ${newU.login} создан`);
+            };
+
+            return (
+              <div className="space-y-4">
+
+                {/* Заголовок */}
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-purple-600" />
+                    Пользователи ({regUsers.length})
+                  </h3>
+                  {isMasterAdmin && (
+                    <button onClick={() => { setAddMode(!addMode); setAddError(''); }}
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all ${addMode ? 'bg-gray-100 text-gray-600' : 'bg-purple-500 text-white hover:bg-purple-600'}`}>
+                      {addMode ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                      {addMode ? 'Отмена' : 'Добавить'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Форма добавления */}
+                {addMode && isMasterAdmin && (
+                  <div className="bg-purple-50 border-2 border-purple-200 rounded-2xl p-4 space-y-3">
+                    <h4 className="font-bold text-purple-700">➕ Новый пользователь</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-gray-500 font-semibold block mb-1">Логин *</label>
+                        <input type="text" value={addForm.login} onChange={e => setAddForm({...addForm, login: e.target.value})}
+                          placeholder="login" className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-purple-400 focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500 font-semibold block mb-1">Имя</label>
+                        <input type="text" value={addForm.name} onChange={e => setAddForm({...addForm, name: e.target.value})}
+                          placeholder="Отображаемое" className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-purple-400 focus:outline-none" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 font-semibold block mb-1">Пароль *</label>
+                      <input type="password" value={addForm.password} onChange={e => setAddForm({...addForm, password: e.target.value})}
+                        placeholder="Минимум 4 символа" className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-purple-400 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 font-semibold block mb-1">Роль</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {Object.entries(ROLE_LABELS).map(([val, info]) => (
+                          <button key={val} onClick={() => setAddForm({...addForm, role: val})}
+                            className={`py-2 rounded-xl text-xs font-semibold border-2 transition-all ${addForm.role === val ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                            {info.icon} {info.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {addError && <p className="text-red-500 text-sm">{addError}</p>}
+                    <button onClick={handleAddUser}
+                      className="w-full py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold hover:shadow-lg transition-all">
+                      ✅ Создать аккаунт
+                    </button>
+                  </div>
+                )}
+
+                {/* Список пользователей */}
+                <div className="space-y-3">
+                  {regUsers.length === 0 ? (
+                    <div className="bg-white rounded-xl p-8 text-center shadow">
+                      <p className="text-4xl mb-2">👥</p>
+                      <p className="text-gray-400">Нет зарегистрированных пользователей</p>
+                    </div>
+                  ) : regUsers.map(user => {
+                    const isEditing = editingUser === user.login;
+                    const roleInfo = ROLE_LABELS[user.role] || ROLE_LABELS.seller;
+                    const stats = employeeStats[user.name] || { count: 0, revenue: 0, sales: 0 };
+                    const userProfile = profilesData[user.login] || {};
+                    const isMe = user.login === currentUser?.login;
+
                     return (
-                      <div key={emp.id} className={`p-3 rounded-lg border ${emp.active ? 'bg-white border-gray-200' : 'bg-gray-100 border-gray-300 opacity-60'}`}>
-                        <div className="flex items-center justify-between">
+                      <div key={user.login} className={`bg-white rounded-2xl shadow overflow-hidden ${isMe ? 'ring-2 ring-purple-300' : ''}`}>
+                        {/* Шапка карточки */}
+                        <div className="p-4">
                           <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${emp.role === 'senior' ? 'bg-amber-500' : 'bg-purple-500'}`}>
-                              {emp.name.charAt(0)}
+                            {/* Аватар */}
+                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-400 to-indigo-500 flex items-center justify-center text-white font-black text-lg overflow-hidden flex-shrink-0">
+                              {userProfile.avatar
+                                ? <img src={userProfile.avatar} alt="" className="w-full h-full object-cover" />
+                                : (userProfile.displayName || user.name || '?')[0].toUpperCase()
+                              }
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-bold text-gray-800">{userProfile.displayName || user.name}</p>
+                                {isMe && <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">это вы</span>}
+                                {user.isAdmin && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">👑 Мастер-админ</span>}
+                              </div>
+                              <p className="text-xs text-gray-400">@{user.login}</p>
+                              <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded-full font-semibold ${roleInfo.color}`}>
+                                {roleInfo.icon} {roleInfo.label}
+                              </span>
+                            </div>
+                            {/* Кнопки действий */}
+                            {isMasterAdmin && !isEditing && (
+                              <div className="flex gap-1 flex-shrink-0">
+                                <button onClick={() => handleStartEdit(user)}
+                                  className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-all">
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                {!isMe && (
+                                  <button onClick={() => handleDeleteUser(user.login)}
+                                    className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-all">
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Статистика */}
+                          {stats.count > 0 && (
+                            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                              <div className="bg-gray-50 rounded-lg py-1.5">
+                                <p className="text-xs text-gray-400">Продаж</p>
+                                <p className="font-bold text-sm">{stats.count}</p>
+                              </div>
+                              <div className="bg-gray-50 rounded-lg py-1.5">
+                                <p className="text-xs text-gray-400">Товаров</p>
+                                <p className="font-bold text-sm">{stats.sales}</p>
+                              </div>
+                              <div className="bg-gray-50 rounded-lg py-1.5">
+                                <p className="text-xs text-gray-400">Выручка</p>
+                                <p className="font-bold text-sm">{stats.revenue >= 1000 ? (stats.revenue/1000).toFixed(1)+'к' : stats.revenue}₽</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Форма редактирования */}
+                        {isEditing && isMasterAdmin && (
+                          <div className="border-t bg-gray-50 p-4 space-y-3">
+                            <h4 className="font-bold text-gray-700 text-sm">✏️ Редактирование</h4>
+                            <div>
+                              <label className="text-xs text-gray-500 font-semibold block mb-1">Отображаемое имя</label>
+                              <input type="text" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})}
+                                className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-purple-400 focus:outline-none" />
                             </div>
                             <div>
-                              <p className="font-bold">{emp.name}</p>
-                              <p className="text-xs text-gray-500">{emp.role === 'senior' ? '⭐ Старший' : 'Продавец'} • x{emp.salaryMultiplier}</p>
+                              <label className="text-xs text-gray-500 font-semibold block mb-1">Роль</label>
+                              <div className="grid grid-cols-3 gap-2">
+                                {Object.entries(ROLE_LABELS).map(([val, info]) => (
+                                  <button key={val} onClick={() => setEditForm({...editForm, role: val, isAdmin: val === 'admin' ? true : editForm.isAdmin})}
+                                    className={`py-2 rounded-xl text-xs font-semibold border-2 transition-all ${editForm.role === val ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                                    {info.icon} {info.label}
+                                  </button>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => toggleEmployeeActive(emp.id)} className={`p-2 rounded ${emp.active ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-200'}`}>
-                              {emp.active ? <CheckCircle className="w-5 h-5" /> : <X className="w-5 h-5" />}
-                            </button>
-                            <button onClick={() => showConfirm(`Удалить ${emp.name}?`, () => removeEmployee(emp.id))} className="p-2 text-red-500 hover:bg-red-50 rounded">
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          </div>
-                        </div>
-                        {stats.count > 0 && (
-                          <div className="mt-2 pt-2 border-t grid grid-cols-3 gap-2 text-center text-xs">
-                            <div><p className="text-gray-500">Продаж</p><p className="font-bold">{stats.count}</p></div>
-                            <div><p className="text-gray-500">Товаров</p><p className="font-bold">{stats.sales}</p></div>
-                            <div><p className="text-gray-500">Выручка</p><p className="font-bold">{stats.revenue.toLocaleString()}₽</p></div>
+                            <div className="flex items-center gap-3 p-3 bg-white rounded-xl border">
+                              <input type="checkbox" id={`admin-${user.login}`}
+                                checked={editForm.isAdmin || editForm.role === 'admin'}
+                                onChange={e => setEditForm({...editForm, isAdmin: e.target.checked})}
+                                className="w-5 h-5 accent-purple-600" />
+                              <label htmlFor={`admin-${user.login}`} className="text-sm font-semibold text-gray-700 cursor-pointer">
+                                🛡️ Доступ к Админ-панели
+                              </label>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={handleSaveEdit}
+                                className="flex-1 py-2.5 bg-purple-500 text-white rounded-xl font-bold hover:bg-purple-600 transition-all">
+                                ✅ Сохранить
+                              </button>
+                              <button onClick={() => setEditingUser(null)}
+                                className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition-all">
+                                Отмена
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
                     );
                   })}
                 </div>
-              </div>
 
-              {/* Рейтинг продавцов */}
-              <div className="bg-white rounded-xl p-4 shadow">
-                <h3 className="font-bold mb-3 flex items-center gap-2">🏆 Рейтинг (неделя)</h3>
-                <div className="space-y-2">
-                  {Object.entries(employeeStats)
-                    .sort((a, b) => b[1].revenue - a[1].revenue)
-                    .map(([name, data], i) => (
-                      <div key={name} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
-                        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${i === 0 ? 'bg-yellow-400 text-white' : 'bg-gray-200'}`}>{i + 1}</span>
-                        <span className="flex-1 font-medium">{name}</span>
-                        <div className="text-right">
-                          <p className="font-bold text-purple-600">{data.revenue.toLocaleString()}₽</p>
-                          <p className="text-xs text-gray-500">{data.count} продаж</p>
-                        </div>
-                      </div>
-                    ))}
-                </div>
+                {/* Рейтинг */}
+                {Object.keys(employeeStats).length > 0 && (
+                  <div className="bg-white rounded-xl p-4 shadow">
+                    <h3 className="font-bold mb-3 flex items-center gap-2">🏆 Топ по выручке (всё время)</h3>
+                    <div className="space-y-2">
+                      {Object.entries(employeeStats)
+                        .sort((a, b) => b[1].revenue - a[1].revenue)
+                        .slice(0, 5)
+                        .map(([name, data], i) => (
+                          <div key={name} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
+                            <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold text-white ${i === 0 ? 'bg-yellow-400' : i === 1 ? 'bg-gray-400' : i === 2 ? 'bg-amber-600' : 'bg-gray-300'}`}>{i + 1}</span>
+                            <span className="flex-1 font-medium">{name}</span>
+                            <div className="text-right">
+                              <p className="font-bold text-purple-600">{data.revenue.toLocaleString()}₽</p>
+                              <p className="text-xs text-gray-400">{data.count} продаж</p>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ВКЛАДКА: Персонал+ (штрафы, бонусы, рейтинг, отпуска) */}
           {adminTab === 'personnel' && (() => {
@@ -6192,6 +6430,7 @@ export default function LikeBirdApp() {
       const newUser = { login: login.trim(), name: login.trim(), passwordHash: hashedPass, createdAt: Date.now(), inviteCode: validCode.code };
       users.push(newUser);
       localStorage.setItem('likebird-users', JSON.stringify(users));
+      fbSave('likebird-users', users);
 
       // Помечаем код как использованный
       const updatedCodes = codes.map(c => c.code === validCode.code ? {...c, used: true, usedBy: login.trim(), usedAt: Date.now()} : c);
@@ -6203,6 +6442,7 @@ export default function LikeBirdApp() {
       localStorage.setItem('likebird-employee', login.trim());
       setEmployeeName(login.trim());
       setAuthName(login.trim());
+      setCurrentUser(newUser);
       setIsAuthenticated(true);
     };
 
@@ -6223,6 +6463,7 @@ export default function LikeBirdApp() {
       localStorage.setItem('likebird-employee', user.name);
       setEmployeeName(user.name);
       setAuthName(user.name);
+      setCurrentUser(user);
       setIsAuthenticated(true);
     };
 
@@ -6238,12 +6479,14 @@ export default function LikeBirdApp() {
       const hashedPass = await hashPassword(password);
       const newUser = { login: login.trim(), name: login.trim(), passwordHash: hashedPass, createdAt: Date.now(), isAdmin: true };
       localStorage.setItem('likebird-users', JSON.stringify([newUser]));
+      fbSave('likebird-users', [newUser]);
       
       const authData = { authenticated: true, name: login.trim(), login: login.trim(), expiry: Date.now() + (30*24*60*60*1000), createdAt: Date.now() };
       localStorage.setItem('likebird-auth', JSON.stringify(authData));
       localStorage.setItem('likebird-employee', login.trim());
       setEmployeeName(login.trim());
       setAuthName(login.trim());
+      setCurrentUser(newUser);
       setIsAuthenticated(true);
     };
 
