@@ -70,3 +70,8 @@ details > summary::-webkit-details-marker {
   .safe-top { padding-top: env(safe-area-inset-top); }
   .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
 }
+
+/* Safe area top for sticky headers */
+.safe-area-top {
+  padding-top: max(16px, env(safe-area-inset-top, 16px));
+}

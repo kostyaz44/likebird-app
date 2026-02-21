@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐦 LikeBird — Восстановление данных</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: linear-gradient(135deg, #fbbf24, #f97316); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: white; border-radius: 24px; padding: 32px; max-width: 480px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+  h1 { font-size: 24px; font-weight: 900; margin-bottom: 8px; }
+  .sub { color: #6b7280; font-size: 14px; margin-bottom: 24px; line-height: 1.5; }
+  .btn { width: 100%; padding: 16px; border: none; border-radius: 16px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.2s; margin-bottom: 12px; }
+  .btn-primary { background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(239,68,68,0.4); }
+  .btn-secondary { background: #f3f4f6; color: #374151; }
+  .btn-secondary:hover { background: #e5e7eb; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+  .log { background: #1f2937; color: #34d399; border-radius: 12px; padding: 16px; font-family: monospace; font-size: 13px; height: 220px; overflow-y: auto; margin: 16px 0; white-space: pre-wrap; display: none; }
+  .log.show { display: block; }
+  .status { padding: 12px 16px; border-radius: 12px; font-weight: 600; font-size: 14px; margin-bottom: 16px; display: none; }
+  .status.show { display: block; }
+  .status.ok { background: #d1fae5; color: #065f46; }
+  .status.error { background: #fee2e2; color: #991b1b; }
+  .status.info { background: #dbeafe; color: #1e40af; }
+  input[type=file] { width: 100%; padding: 12px; border: 2px dashed #d1d5db; border-radius: 12px; margin-bottom: 12px; cursor: pointer; font-size: 14px; }
+  .warning { background: #fef3c7; border: 2px solid #f59e0b; border-radius: 12px; padding: 12px; font-size: 13px; color: #92400e; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🐦 LikeBird</h1>
+  <p class="sub">Восстановление данных из бэкапа в Firebase.<br>Используйте этот инструмент при необходимости восстановить данные.</p>
+  
+  <div class="warning">
+    ⚠️ <strong>Внимание!</strong> Восстановление перезапишет текущие данные в Firebase. Убедитесь, что выбрали правильный файл бэкапа.
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <label><strong style="font-size:14px; color:#374151; display:block; margin-bottom:6px;">Выберите файл бэкапа (JSON)</strong>
+    <input type="file" id="fileInput" accept=".json" />
+  </label>
+
+  <div id="preview" style="display:none; background:#f9fafb; border-radius:12px; padding:12px; margin-bottom:12px; font-size:13px; color:#374151;"></div>
+
+  <button class="btn btn-primary" id="restoreBtn" onclick="startRestore()" disabled>
+    🔄 Восстановить данные в Firebase
+  </button>
+  <button class="btn btn-secondary" onclick="window.location.href='/'">← Вернуться в приложение</button>
+
+  <div id="log" class="log"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import { getDatabase, ref, set } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAoZOo5LYtUKYiFhntbr0O5LfCKQEHn3jo",
+  authDomain: "likebird-928e2.firebaseapp.com",
+  databaseURL: "https://likebird-928e2-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "likebird-928e2",
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const SKIP_KEYS = new Set(['likebird-auth', 'likebird-sync-id', 'likebird-employee', '_version', '_exportDate', '_syncId']);
+
+const ALLOWED_KEYS = new Set([
+  'likebird-reports', 'likebird-expenses', 'likebird-stock', 'likebird-given',
+  'likebird-salary-decisions', 'likebird-owncard', 'likebird-partners',
+  'likebird-totalbirds', 'likebird-schedule', 'likebird-events', 'likebird-manuals',
+  'likebird-salary-settings', 'likebird-admin-password', 'likebird-employees',
+  'likebird-sales-plan', 'likebird-audit-log', 'likebird-custom-products',
+  'likebird-locations', 'likebird-cost-prices', 'likebird-penalties',
+  'likebird-bonuses', 'likebird-timeoff', 'likebird-ratings', 'likebird-chat',
+  'likebird-stock-history', 'likebird-writeoffs', 'likebird-autoorder',
+  'likebird-kpi', 'likebird-profiles', 'likebird-users', 'likebird-invite-codes',
+  'likebird-custom-achievements', 'likebird-achievements-granted', 'likebird-shifts',
+]);
+
+let backupData = null;
+
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    backupData = JSON.parse(text);
+    const keys = Object.keys(backupData).filter(k => !SKIP_KEYS.has(k) && ALLOWED_KEYS.has(k));
+    const reports = backupData['likebird-reports'];
+    document.getElementById('preview').style.display = 'block';
+    document.getElementById('preview').innerHTML = `
+      <strong>Найдено ключей для восстановления: ${keys.length}</strong><br>
+      ${reports ? `📋 Отчётов: <strong>${Array.isArray(reports) ? reports.length : '?'}</strong><br>` : ''}
+      Ключи: ${keys.join(', ')}
+    `;
+    document.getElementById('restoreBtn').disabled = false;
+    showStatus('Файл загружен. Нажмите кнопку для восстановления.', 'info');
+  } catch(err) {
+    showStatus('Ошибка: неверный формат файла. ' + err.message, 'error');
+  }
+});
+
+window.startRestore = async function() {
+  if (!backupData) return;
+  const btn = document.getElementById('restoreBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Восстанавливаем...';
+  const log = document.getElementById('log');
+  log.classList.add('show');
+  log.textContent = '';
+
+  const addLog = (msg) => { log.textContent += msg + '\n'; log.scrollTop = log.scrollHeight; };
+
+  addLog('🚀 Начинаем восстановление...');
+  let ok = 0, skip = 0, errors = 0;
+
+  for (const [key, value] of Object.entries(backupData)) {
+    if (SKIP_KEYS.has(key)) { addLog(`⏭ Пропущен (служебный): ${key}`); skip++; continue; }
+    if (!ALLOWED_KEYS.has(key)) { addLog(`⏭ Пропущен (неизвестный): ${key}`); skip++; continue; }
+    try {
+      await set(ref(db, `data/${key}`), value);
+      const count = Array.isArray(value) ? value.length : (typeof value === 'object' ? Object.keys(value).length : 1);
+      addLog(`✅ Восстановлен: ${key} (${count} записей)`);
+      ok++;
+    } catch(err) {
+      addLog(`❌ Ошибка: ${key} — ${err.message}`);
+      errors++;
+    }
+    await new Promise(r => setTimeout(r, 100)); // небольшая пауза
+  }
+
+  addLog(`\n🏁 Готово! Успешно: ${ok}, Пропущено: ${skip}, Ошибок: ${errors}`);
+  btn.textContent = errors === 0 ? '✅ Восстановление завершено!' : `⚠️ Завершено с ${errors} ошибками`;
+  showStatus(errors === 0 ? `Успешно восстановлено ${ok} ключей! Перезагрузите приложение.` : `Восстановлено ${ok}, ошибок: ${errors}`, errors === 0 ? 'ok' : 'error');
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = `status show ${type}`;
+}
+</script>
+</body>
+</html>

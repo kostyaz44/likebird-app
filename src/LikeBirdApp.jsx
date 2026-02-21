@@ -627,6 +627,8 @@ export default function LikeBirdApp() {
   const [employeeKPI, setEmployeeKPI] = useState({});
   // Кастомные достижения (созданные администратором)
   const [customAchievements, setCustomAchievements] = useState([]);
+  // Смены сотрудников: { 'login_date': { openTime, closeTime, status, confirmedAt } }
+  const [shiftsData, setShiftsData] = useState({});
   // Выданные вручную достижения { achievementId: [login1, login2, ...] }
   const [achievementsGranted, setAchievementsGranted] = useState({});
   
@@ -761,6 +763,7 @@ export default function LikeBirdApp() {
     loadJson('likebird-autoorder', setAutoOrderList, []);
     loadJson('likebird-kpi', setEmployeeKPI, {});
     loadJson('likebird-custom-achievements', setCustomAchievements, []);
+    loadJson('likebird-shifts', setShiftsData, {});
     loadJson('likebird-achievements-granted', setAchievementsGranted, {});
     
     // ===== Cleanup =====
@@ -828,6 +831,9 @@ export default function LikeBirdApp() {
             if (me) setCurrentUser(me);
           }
         } catch {}
+      }),
+      fbSubscribe('likebird-shifts', (val) => {
+        if (val && typeof val === 'object') { setShiftsData(val); localStorage.setItem('likebird-shifts', JSON.stringify(val)); }
       }),
       fbSubscribe('likebird-invite-codes', (val) => {
         if (!Array.isArray(val)) return;
@@ -1072,6 +1078,7 @@ export default function LikeBirdApp() {
   
   // KPI и цели
   const updateEmployeeKPI = (kpi) => { setEmployeeKPI(kpi); save('likebird-kpi', kpi); };
+  const updateShiftsData = (s) => { setShiftsData(s); save('likebird-shifts', s); };
   const updateCustomAchievements = (a) => { setCustomAchievements(a); save('likebird-custom-achievements', a); };
   const updateAchievementsGranted = (g) => { setAchievementsGranted(g); save('likebird-achievements-granted', g); };
   const updateProfilesData = (p) => { setProfilesData(p); save('likebird-profiles', p); };
@@ -1223,38 +1230,50 @@ export default function LikeBirdApp() {
     const photo = params.photo !== undefined ? params.photo : salePhotoGlobal;
     const location = params.location !== undefined ? params.location : saleLocationGlobal;
     const discountNote = params.discountReason || '';
+    // paymentType и qty берём из params (localPaymentType/localQuantity из NewReportView)
+    const pType = params.paymentType || 'cash';
+    const qty = params.quantity ? parseInt(params.quantity) : 1;
     
     if (!product || !price || !empName) { showNotification('Заполните все поля', 'error'); return; }
-    const priceNum = parseInt(price), qty = parseInt(quantity), tipsNum = parseInt(tips) || 0;
+    const priceNum = parseInt(price), tipsNum = parseInt(tips) || 0;
     const salary = calculateSalary(product.price, priceNum, category, tipsNum, 'normal', salarySettings);
-    let cashAmt = 0, cashlessAmt = 0;
-    if (paymentType === 'cash') { cashAmt = priceNum * qty; }
-    else if (paymentType === 'cashless') { cashlessAmt = priceNum * qty; }
-    else if (paymentType === 'mixed') { cashAmt = (parseInt(mixCash) || 0) * qty; cashlessAmt = (parseInt(mixCashless) || 0) * qty; }
-    const newReport = {
-      id: Date.now(), date: new Date().toLocaleString('ru-RU'), product: product.name, category: category,
-      basePrice: product.price, salePrice: priceNum, quantity: qty, employee: empName, total: priceNum * qty, tips: tipsNum * qty, salary: salary * qty,
-      paymentType, cashAmount: cashAmt, cashlessAmount: cashlessAmt, isUnrecognized: false,
-      createdAt: Date.now(), reviewStatus: 'pending',
-      photo: photo || null,
-      location: location || null,
-      discountReason: discountNote || null, // Причина скидки
-      isBelowBase: priceNum < product.price, // Флаг продажи ниже базы
-    };
-    updateReports([newReport, ...reports]);
-    // Добавляем запись в историю склада
-    addStockHistoryEntry(product.name, 'sale', -qty, `Продажа ${empName}${discountNote ? ' (скидка: ' + discountNote + ')' : ''}`);
+    const now = Date.now();
+    const dateStr = new Date().toLocaleString('ru-RU');
+    // Каждая единица — отдельная запись
+    const newReports = Array.from({ length: qty }, (_, i) => {
+      let cashAmt = 0, cashlessAmt = 0;
+      if (pType === 'cash') { cashAmt = priceNum; }
+      else if (pType === 'cashless') { cashlessAmt = priceNum; }
+      else if (pType === 'mixed') {
+        // При смешанной и qty>1 делим пропорционально
+        cashAmt = Math.round((parseInt(mixCash) || 0) / qty);
+        cashlessAmt = Math.round((parseInt(mixCashless) || 0) / qty);
+      }
+      return {
+        id: now + i, date: dateStr, product: product.name, category: category,
+        basePrice: product.price, salePrice: priceNum, quantity: 1, employee: empName,
+        total: priceNum, tips: tipsNum, salary: salary,
+        paymentType: pType, cashAmount: cashAmt, cashlessAmount: cashlessAmt, isUnrecognized: false,
+        createdAt: now + i, reviewStatus: 'pending',
+        photo: photo || null,
+        location: location || null,
+        discountReason: discountNote || null,
+        isBelowBase: priceNum < product.price,
+      };
+    });
+    updateReports([...newReports, ...reports]);
+    addStockHistoryEntry(product.name, 'sale', -qty, `Продажа ${empName} x${qty}${discountNote ? ' (скидка: ' + discountNote + ')' : ''}`);
     if (stock[product.name]) {
       const newStock = {...stock};
       newStock[product.name] = {...newStock[product.name], count: Math.max(0, newStock[product.name].count - qty)};
       updateStock(newStock);
     }
     localStorage.setItem('likebird-employee', empName);
-    setEmployeeName(empName); // Сохраняем в глобальное состояние
+    setEmployeeName(empName);
     setSalePrice(''); setQuantity(1); setPaymentType('cash'); setTipsAmount(''); setSelectedProduct(null); setSelectedCategory(null); setMixedCash(''); setMixedCashless('');
     setSalePhotoGlobal(null); setSaleLocationGlobal('');
-    showNotification(`Продажа сохранена: ${product.name}`);
-    setCurrentView('menu');
+    showNotification(`Продажа сохранена: ${product.name}${qty > 1 ? ' x' + qty : ''}`);
+    setCurrentView('shift');
   };
 
   const saveParsedReports = (empNameParam) => {
@@ -1411,12 +1430,33 @@ export default function LikeBirdApp() {
 
   const importData = (file) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = JSON.parse(e.target.result);
+        // 1. Записываем в localStorage
         const imported = SyncManager.importAll(data);
-        showNotification(`Импортировано ${imported} записей. Перезагрузите страницу.`);
-        setTimeout(() => window.location.reload(), 2000);
+        // 2. Синхронизируем каждый ключ с Firebase
+        let fbPushed = 0;
+        const FIREBASE_KEYS = [
+          'likebird-reports','likebird-expenses','likebird-stock','likebird-employees',
+          'likebird-salary-settings','likebird-custom-products','likebird-locations',
+          'likebird-chat','likebird-stock-history','likebird-audit-log',
+          'likebird-penalties','likebird-bonuses','likebird-timeoff','likebird-ratings',
+          'likebird-kpi','likebird-manuals','likebird-events','likebird-schedule',
+          'likebird-sales-plan','likebird-cost-prices','likebird-profiles',
+          'likebird-users','likebird-invite-codes','likebird-custom-achievements',
+          'likebird-achievements-granted','likebird-admin-password','likebird-locations',
+        ];
+        for (const key of FIREBASE_KEYS) {
+          if (data[key] !== undefined) {
+            try {
+              await fbSave(key, data[key]);
+              fbPushed++;
+            } catch {}
+          }
+        }
+        showNotification(`✅ Импортировано ${imported} записей → Firebase (${fbPushed}). Перезагрузка...`);
+        setTimeout(() => window.location.reload(), 2500);
       } catch (err) {
         showNotification('Ошибка импорта: ' + err.message, 'error');
       }
@@ -1511,11 +1551,16 @@ export default function LikeBirdApp() {
   const Notification = () => { if (!notification) return null; return (<div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white`}>{notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}{notification.message}</div>); };
 
   const MenuView = () => {
-    const todayReports = getReportsByDate(formatDate(new Date()));
+    const todayAllReports = getReportsByDate(formatDate(new Date()));
+    // Показываем только МОИ продажи
+    const todayReports = todayAllReports.filter(r => r.employee === employeeName);
     const todayTotal = todayReports.reduce((s, r) => s + r.total, 0);
     const todayTips = todayReports.reduce((s, r) => s + (r.tips || 0), 0);
+    const todayCash = todayReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
+    const todayCashless = todayReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
     const hasUnrecognized = todayReports.some(r => r.isUnrecognized);
     const lowStock = getLowStockItems();
+    const isAdmin = currentUser?.isAdmin || currentUser?.role === 'admin';
     
     // Подсчёт предстоящих событий
     const today = new Date();
@@ -1533,13 +1578,22 @@ export default function LikeBirdApp() {
             <h1 className="text-3xl font-bold text-amber-600 mb-1">🐦 LikeBird</h1>
             <p className="text-gray-500 text-sm">Учёт продаж v2.5</p>
             {!isOnline && <p className="text-xs text-orange-500 mt-1 flex items-center justify-center gap-1"><WifiOff className="w-3 h-3" /> Оффлайн режим</p>}
-            {todayReports.length > 0 && (<div className="mt-3 bg-white rounded-lg p-3 shadow"><p className="text-xs text-gray-500">Сегодня: {todayReports.length} продаж</p><p className="text-xl font-bold text-green-600">{todayTotal.toLocaleString()}{todayTips > 0 && <span className="text-amber-500"> (+{todayTips})</span>}₽</p>{hasUnrecognized && <p className="text-red-500 text-xs mt-1"><AlertTriangle className="w-3 h-3 inline" /> Есть нераспознанные</p>}</div>)}
-            {lowStock.length > 0 && (<div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-2"><p className="text-orange-600 text-xs font-semibold"><Bell className="w-3 h-3 inline" /> Дозаказать: {lowStock.length} позиций</p></div>)}
+            {todayReports.length > 0 && (
+                <div className="mt-3 bg-white rounded-xl p-3 shadow">
+                  <p className="text-xs text-gray-500 mb-1">Мои продажи сегодня: {todayReports.length}</p>
+                  <p className="text-2xl font-bold text-green-600">{todayTotal.toLocaleString()} ₽{todayTips > 0 && <span className="text-amber-500 text-base"> +{todayTips}₽ ⭐</span>}</p>
+                  <div className="flex gap-3 mt-1 text-sm font-semibold">
+                    {todayCash > 0 && <span className="text-gray-700">💵 {todayCash.toLocaleString()}₽</span>}
+                    {todayCashless > 0 && <span className="text-gray-700">💳 {todayCashless.toLocaleString()}₽</span>}
+                  </div>
+                  {hasUnrecognized && <p className="text-red-500 text-xs mt-1"><AlertTriangle className="w-3 h-3 inline" /> Есть нераспознанные</p>}
+                </div>
+              )}
+            {isAdmin && lowStock.length > 0 && (<div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-2"><p className="text-orange-600 text-xs font-semibold"><Bell className="w-3 h-3 inline" /> Дозаказать: {lowStock.length} позиций</p></div>)}
           </div>
           <div className="space-y-3">
             <button onClick={() => setCurrentView('catalog')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-amber-100 p-3 rounded-lg"><ShoppingBag className="w-6 h-6 text-amber-600" /></div><div className="text-left"><h3 className="font-bold">Каталог</h3><p className="text-xs text-gray-400">Просмотр товаров и цен</p></div></button>
-            <button onClick={() => setCurrentView('new-report')} className="w-full bg-gradient-to-r from-amber-400 to-orange-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><Plus className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Новая продажа</h3><p className="text-xs text-white/80">Добавить продажу вручную</p></div></button>
-            <button onClick={() => setCurrentView('text-import')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-orange-100 p-3 rounded-lg"><FileInput className="w-6 h-6 text-orange-600" /></div><div className="text-left"><h3 className="font-bold">Импорт отчёта</h3><p className="text-xs text-gray-400">Загрузить текстовый отчёт</p></div></button>
+            <button onClick={() => setCurrentView('shift')} className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Clock className="w-6 h-6" /></div><div className="text-left flex-1"><h3 className="font-bold">Смена</h3><p className="text-xs text-white/80">Продажи, импорт, отчёт</p></div>{(() => { try { const login = JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; const key = login + '_' + formatDate(new Date()); const sh = shiftsData[key]; return sh?.status === 'open' ? <span className="bg-green-400 text-white text-xs px-2 py-0.5 rounded-full font-bold animate-pulse">● Открыта</span> : null; } catch { return null; } })()}</button>
             <button onClick={() => setCurrentView('reports')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-amber-100 p-3 rounded-lg"><FileText className="w-6 h-6 text-amber-600" /></div><div className="text-left"><h3 className="font-bold">История</h3><p className="text-xs text-gray-400">Все продажи по дням</p></div></button>
             <button onClick={() => { setSelectedDate(formatDate(new Date())); setCurrentView('day-report'); }} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-orange-100 p-3 rounded-lg"><BarChart3 className="w-6 h-6 text-orange-600" /></div><div className="text-left"><h3 className="font-bold">Итог дня</h3><p className="text-xs text-gray-400">Сводка по сотрудникам</p></div></button>
             <button onClick={() => setCurrentView('team')} className="w-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Users className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Команда</h3><p className="text-xs text-white/80">График, результаты, события</p></div>{upcomingEventsCount > 0 && <span className="absolute top-2 right-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{upcomingEventsCount}</span>}</button>
@@ -1554,7 +1608,7 @@ export default function LikeBirdApp() {
 
   const SettingsView = () => (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-      <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
+      <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
         <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
         <h2 className="text-xl font-bold">⚙️ Настройки</h2>
       </div>
@@ -1615,13 +1669,15 @@ export default function LikeBirdApp() {
           <button onClick={exportData} className="w-full py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600">📥 Скачать полный бэкап</button>
         </div>
 
-        <div className="bg-white rounded-xl p-4 shadow">
-          <h3 className="font-bold mb-3 flex items-center gap-2"><Upload className="w-5 h-5 text-blue-500" />Импорт данных</h3>
-          <p className="text-sm text-gray-500 mb-3">Восстановить данные из файла бэкапа</p>
-          <label className="w-full py-3 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 flex items-center justify-center cursor-pointer">
-            📤 Загрузить бэкап
+        <div className="bg-white rounded-xl p-4 shadow border-2 border-blue-100">
+          <h3 className="font-bold mb-1 flex items-center gap-2"><Upload className="w-5 h-5 text-blue-500" />Восстановление из бэкапа</h3>
+          <p className="text-xs text-gray-500 mb-1">Загрузите файл <code className="bg-gray-100 px-1 rounded">.json</code> — данные запишутся и в Firebase, и в локальное хранилище.</p>
+          <p className="text-xs text-amber-600 mb-3">⚠️ Существующие данные в Firebase будут перезаписаны ключами из файла!</p>
+          <label className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 flex items-center justify-center gap-2 cursor-pointer shadow">
+            📤 Загрузить бэкап (JSON)
             <input type="file" accept=".json" onChange={(e) => { if (e.target.files[0]) importData(e.target.files[0]); }} className="hidden" />
           </label>
+          <p className="text-xs text-gray-400 mt-2 text-center">После загрузки страница перезагрузится автоматически</p>
         </div>
 
         {/* Аккаунт */}
@@ -1729,7 +1785,7 @@ export default function LikeBirdApp() {
     
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => { clearImport(); setCurrentView('menu'); }} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📝 Импорт отчёта</h2>
         </div>
@@ -1818,11 +1874,17 @@ export default function LikeBirdApp() {
     const [productSearch, setProductSearch] = useState('');
     const [localMixedCash, setLocalMixedCash] = useState(() => mixedCash || '');
     const [localMixedCashless, setLocalMixedCashless] = useState(() => mixedCashless || '');
+    // localPaymentType — локальный, не сбрасывает price при изменении
+    const [localPaymentType, setLocalPaymentType] = useState('cash');
+    const [localQuantity, setLocalQuantity] = useState(1);
     const [quickMode, setQuickMode] = useState(false);
     const [quickText, setQuickText] = useState('');
     const [quickParsed, setQuickParsed] = useState([]);
     const [salePhoto, setSalePhoto] = useState(null);
-    const [saleLocation, setSaleLocation] = useState(selectedLocation || '');
+    // Точка: берём из профиля сотрудника
+    const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+    const myProfile = profilesData[myLogin] || {};
+    const [saleLocation, setSaleLocation] = useState(myProfile.defaultLocation || '');
     const [discountReason, setDiscountReason] = useState(''); // Причина скидки
     const [showDiscountNote, setShowDiscountNote] = useState(false); // Показать поле пояснения
     
@@ -1997,26 +2059,40 @@ export default function LikeBirdApp() {
         showNotification('Чаевые при продаже ниже базы невозможны', 'error');
         return;
       }
-      
+      // Сохраняем точку в профиль пользователя
+      if (saleLocation) {
+        const login = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+        if (login) {
+          const updatedProfiles = { ...profilesData, [login]: { ...(profilesData[login] || {}), defaultLocation: saleLocation } };
+          updateProfilesData(updatedProfiles);
+        }
+      }
       // Передаём параметры напрямую в saveReport вместо использования setState
+      // Используем localPaymentType и localQuantity чтобы не сбрасывать данные
+      const prevPayment = paymentType;
+      const prevQty = quantity;
+      setPaymentType(localPaymentType);
+      setQuantity(localQuantity);
       saveReport({
         employeeName: localName,
         salePrice: localPrice,
-        tipsAmount: isBelowBase ? '0' : localTips, // При скидке чаевые = 0
+        tipsAmount: isBelowBase ? '0' : localTips,
         mixedCash: localMixedCash,
         mixedCashless: localMixedCashless,
         selectedProduct: selectedProduct,
         selectedCategory: selectedCategory,
         photo: salePhoto,
         location: saleLocation,
-        discountReason: isBelowBase ? discountReason : '', // Причина скидки
+        discountReason: isBelowBase ? discountReason : '',
+        paymentType: localPaymentType,
+        quantity: localQuantity,
       });
     };
     
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
+          <button onClick={() => setCurrentView('shift')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">➕ Новая продажа</h2>
         </div>
         <div className="max-w-md mx-auto px-4 mt-4 space-y-4">
@@ -2058,7 +2134,15 @@ export default function LikeBirdApp() {
               {locations.filter(l => l.active).length > 0 && (
                 <div className="bg-white rounded-xl p-4 shadow">
                   <label className="text-sm font-semibold flex items-center gap-2"><MapPin className="w-4 h-4" /> Точка продаж</label>
-                  <select value={saleLocation} onChange={(e) => setSaleLocation(e.target.value)} className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none">
+                  <select value={saleLocation} onChange={(e) => {
+                      setSaleLocation(e.target.value);
+                      // Сразу сохраняем выбор в профиль
+                      const _login = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+                      if (_login && e.target.value) {
+                        const _upd = { ...profilesData, [_login]: { ...(profilesData[_login] || {}), defaultLocation: e.target.value } };
+                        updateProfilesData(_upd);
+                      }
+                    }} className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none">
                     <option value="">Не указана</option>
                     {getCities().map(city => (
                       <optgroup key={city} label={city}>
@@ -2173,18 +2257,18 @@ export default function LikeBirdApp() {
                   )}
                 </div>
                 
-                <div className="bg-white rounded-xl p-4 shadow"><label className="text-sm font-semibold">Количество</label><div className="flex items-center justify-center gap-4 mt-2"><button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">-</button><span className="text-3xl font-bold w-16 text-center">{quantity}</span><button onClick={() => setQuantity(quantity + 1)} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">+</button></div></div>
+                <div className="bg-white rounded-xl p-4 shadow"><label className="text-sm font-semibold">Количество</label><div className="flex items-center justify-center gap-4 mt-2"><button onClick={() => setLocalQuantity(Math.max(1, localQuantity - 1))} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">-</button><span className="text-3xl font-bold w-16 text-center">{localQuantity}</span><button onClick={() => setLocalQuantity(localQuantity + 1)} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">+</button></div></div>
                 <div className="bg-white rounded-xl p-4 shadow">
                   <label className="text-sm font-semibold">Способ оплаты</label>
                   <div className="mt-2 space-y-2">
                     {[{v: 'cash', l: '💵 Наличные'}, {v: 'cashless', l: '💳 Безналичный'}, {v: 'mixed', l: '💵💳 Смешанная'}].map(o => (
-                      <label key={o.v} className={`flex items-center gap-3 p-3 border-2 rounded-lg cursor-pointer ${paymentType === o.v ? 'border-amber-500 bg-amber-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                        <input type="radio" name="payment" value={o.v} checked={paymentType === o.v} onChange={(e) => setPaymentType(e.target.value)} className="w-5 h-5 accent-amber-500" />
+                      <label key={o.v} className={`flex items-center gap-3 p-3 border-2 rounded-lg cursor-pointer ${localPaymentType === o.v ? 'border-amber-500 bg-amber-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                        <input type="radio" name="payment" value={o.v} checked={localPaymentType === o.v} onChange={(e) => setLocalPaymentType(e.target.value)} className="w-5 h-5 accent-amber-500" />
                         <span className="font-medium">{o.l}</span>
                       </label>
                     ))}
                   </div>
-                  {paymentType === 'mixed' && (
+                  {localPaymentType === 'mixed' && (
                     <div className="mt-3 space-y-2 p-3 bg-gray-50 rounded-lg">
                       <div className="flex items-center gap-2">
                         <span className="text-sm w-24">💵 Наличные:</span>
@@ -2198,13 +2282,19 @@ export default function LikeBirdApp() {
                     </div>
                   )}
                 </div>
-                {localPrice && (<div className="bg-green-50 rounded-xl p-4 border-2 border-green-200"><div className="flex justify-between items-center mb-2"><span className="text-gray-600">Итого:</span><span className="text-2xl font-bold text-green-600">{(parseInt(localPrice || 0) * quantity).toLocaleString()}₽</span></div><div className="flex justify-between items-center"><span className="text-gray-600">ЗП:</span><span className="text-lg font-bold text-amber-600">{(calculateSalary(selectedProduct.price, parseInt(localPrice || 0), selectedCategory, parseInt(localTips) || 0, 'normal', salarySettings) * quantity).toLocaleString()}₽</span></div></div>)}
+                {localPrice && (<div className="bg-green-50 rounded-xl p-4 border-2 border-green-200"><div className="flex justify-between items-center mb-2"><span className="text-gray-600">Итого:</span><span className="text-2xl font-bold text-green-600">{(parseInt(localPrice || 0) * localQuantity).toLocaleString()}₽</span></div><div className="flex justify-between items-center"><span className="text-gray-600">ЗП:</span><span className="text-lg font-bold text-amber-600">{(calculateSalary(selectedProduct.price, parseInt(localPrice || 0), selectedCategory, parseInt(localTips) || 0, 'normal', salarySettings) * localQuantity).toLocaleString()}₽</span></div></div>)}
                 
                 {/* Локация */}
                 {locations.filter(l => l.active).length > 0 && (
                   <div className="bg-white rounded-xl p-4 shadow">
                     <label className="text-sm font-semibold flex items-center gap-2"><MapPin className="w-4 h-4" /> Точка продаж</label>
-                    <select value={saleLocation} onChange={(e) => setSaleLocation(e.target.value)} className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none">
+                    <select value={saleLocation} onChange={(e) => {
+                      setSaleLocation(e.target.value);
+                      if (myLogin && e.target.value) {
+                        const upd = { ...profilesData, [myLogin]: { ...(profilesData[myLogin] || {}), defaultLocation: e.target.value } };
+                        updateProfilesData(upd);
+                      }
+                    }} className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none">
                       <option value="">Не указана</option>
                       {getCities().map(city => (
                         <optgroup key={city} label={city}>
@@ -2236,7 +2326,7 @@ export default function LikeBirdApp() {
                   </div>
                 </div>
                 
-                <div className="flex gap-2"><button onClick={() => { setSelectedProduct(null); setLocalPrice(''); setQuantity(1); setPaymentType('cash'); setLocalTips('0'); setLocalMixedCash(''); setLocalMixedCashless(''); setSalePhoto(null); setSaleLocation(''); setDiscountReason(''); setShowDiscountNote(false); }} className="flex-1 bg-gray-200 py-3 rounded-xl font-bold hover:bg-gray-300">Отмена</button><button onClick={handleSave} className="flex-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white py-3 rounded-xl font-bold hover:shadow-lg">Сохранить</button></div>
+                <div className="flex gap-2"><button onClick={() => { setSelectedProduct(null); setLocalPrice(''); setLocalQuantity(1); setLocalPaymentType('cash'); setLocalTips('0'); setLocalMixedCash(''); setLocalMixedCashless(''); setSalePhoto(null); setDiscountReason(''); setShowDiscountNote(false); }} className="flex-1 bg-gray-200 py-3 rounded-xl font-bold hover:bg-gray-300">Отмена</button><button onClick={handleSave} className="flex-1 bg-gradient-to-r from-amber-400 to-orange-500 text-white py-3 rounded-xl font-bold hover:shadow-lg">Сохранить</button></div>
               </div>
             )}
           </>)}
@@ -2250,7 +2340,7 @@ export default function LikeBirdApp() {
     const [localSearch, setLocalSearch] = useState('');
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold mb-3">📋 Каталог</h2>
           <div className="relative"><Search className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" /><input type="text" placeholder="Поиск товара..." value={localSearch} onChange={(e) => setLocalSearch(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl text-gray-800 focus:outline-none" />{localSearch && <button onClick={() => setLocalSearch('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>}</div>
@@ -2603,7 +2693,7 @@ export default function LikeBirdApp() {
     
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📦 Ревизия</h2>
         </div>
@@ -2777,7 +2867,7 @@ export default function LikeBirdApp() {
     
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📜 История продаж</h2>
           {/* Поиск */}
@@ -2881,11 +2971,11 @@ export default function LikeBirdApp() {
     
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 pt-safe sticky top-0 z-10" style={{paddingTop: "max(1rem, env(safe-area-inset-top))"}}>
+          <button onClick={() => setCurrentView('menu')} className="mb-2 mt-1 block"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📊 Итог дня</h2>
         </div>
-        <div className="max-w-md mx-auto px-4 mt-4">
+        <div className="max-w-md mx-auto px-4 mt-4 pb-8" style={{scrollMarginTop:"80px"}}>
           <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between mb-4">
             <button onClick={() => navigateDate('prev')} disabled={idx >= dates.length - 1} className={`p-2 rounded-lg ${idx >= dates.length - 1 ? 'text-gray-300' : 'text-amber-600 hover:bg-amber-50'}`}><ChevronLeft className="w-6 h-6" /></button>
             <div className="text-center"><p className="font-bold">{selectedDate}</p><p className="text-xs text-gray-400">{dateReports.length} продаж</p></div>
@@ -2893,7 +2983,7 @@ export default function LikeBirdApp() {
           </div>
           {dateReports.length > 0 && (<div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl p-4 mb-4 shadow-lg"><h3 className="font-bold mb-2">📈 Общий итог</h3><div className="grid grid-cols-2 gap-2 text-sm"><div><span className="opacity-75">Выручка:</span> <span className="font-bold">{dayTotal.toLocaleString()}₽</span></div><div><span className="opacity-75">Наличные:</span> <span className="font-bold">{dayCash.toLocaleString()}₽</span></div><div><span className="opacity-75">Безнал:</span> <span className="font-bold">{dayCashless.toLocaleString()}₽</span></div><div><span className="opacity-75">Чаевые:</span> <span className="font-bold">{dayTips.toLocaleString()}₽</span></div><div><span className="opacity-75">ЗП:</span> <span className="font-bold">{daySalary.toLocaleString()}₽</span></div><div><span className="opacity-75">Расходы:</span> <span className="font-bold">{dayExpenses.toLocaleString()}₽</span></div></div></div>)}
         </div>
-        <div className="max-w-md mx-auto px-4 space-y-4">
+        <div className="max-w-md mx-auto px-4 pb-6 space-y-4">
           {Object.entries(byEmployee).map(([emp, empReports]) => {
             const unrec = empReports.filter(r => r.isUnrecognized);
             const belowPrice = empReports.filter(r => !r.isUnrecognized && isBelowBasePrice(r.basePrice, r.salePrice));
@@ -3332,7 +3422,7 @@ export default function LikeBirdApp() {
 
     return (
       <div className="min-h-screen bg-gradient-to-b from-purple-50 to-indigo-50 pb-6">
-        <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => { setCurrentView('menu'); setIsAdminUnlocked(false); }} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold flex items-center gap-2"><Shield className="w-6 h-6" />Админ-панель</h2>
         </div>
@@ -3581,15 +3671,85 @@ export default function LikeBirdApp() {
                               </div>
                             </div>
                             
-                            {/* Продажи */}
-                            <div className="space-y-1 mb-3 max-h-32 overflow-y-auto">
-                              {empReports.map((r, idx) => (
-                                <div key={idx} className={`text-xs p-2 rounded flex justify-between ${r.isUnrecognized ? 'bg-red-50' : 'bg-gray-50'}`}>
-                                  <span>{r.isUnrecognized ? '❓' : '✓'} {getProductName(r.product)}</span>
-                                  <span>{r.total}₽ {r.paymentType === 'cashless' ? '💳' : '💵'}</span>
+                            {/* Продажи — с редактированием */}
+                            {(() => {
+                              const [expandedEdit, setExpandedEdit] = React.useState(null);
+                              const [adminEditForm, setAdminEditForm] = React.useState({});
+                              return (
+                                <div className="space-y-1 mb-3 max-h-64 overflow-y-auto">
+                                  {empReports.map((r, idx) => (
+                                    <div key={r.id || idx} className={`text-sm rounded-lg overflow-hidden border ${r.isUnrecognized ? 'border-red-200' : 'border-gray-200'}`}>
+                                      {expandedEdit === r.id ? (
+                                        <div className="p-3 bg-blue-50 space-y-2">
+                                          <p className="text-xs font-bold text-blue-700 mb-1">✏️ Редактирование</p>
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                              <label className="text-xs text-gray-500">Цена ₽</label>
+                                              <input type="number" value={adminEditForm.salePrice || ''} onChange={e => setAdminEditForm({...adminEditForm, salePrice: e.target.value})}
+                                                className="w-full p-2 border-2 border-blue-300 rounded-lg text-sm focus:border-blue-500 focus:outline-none mt-0.5" />
+                                            </div>
+                                            <div>
+                                              <label className="text-xs text-gray-500">Тип оплаты</label>
+                                              <select value={adminEditForm.paymentType || 'cash'} onChange={e => setAdminEditForm({...adminEditForm, paymentType: e.target.value})}
+                                                className="w-full p-2 border-2 border-blue-300 rounded-lg text-sm focus:border-blue-500 focus:outline-none mt-0.5">
+                                                <option value="cash">💵 Нал</option>
+                                                <option value="cashless">💳 Безнал</option>
+                                                <option value="mixed">💵💳 Смеш</option>
+                                              </select>
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <label className="text-xs text-gray-500">Товар</label>
+                                            <input type="text" value={adminEditForm.product || ''} onChange={e => setAdminEditForm({...adminEditForm, product: e.target.value})}
+                                              className="w-full p-2 border-2 border-blue-300 rounded-lg text-sm focus:border-blue-500 focus:outline-none mt-0.5" />
+                                          </div>
+                                          <div className="flex gap-2">
+                                            <button onClick={() => {
+                                              const priceNum = parseInt(adminEditForm.salePrice) || r.salePrice;
+                                              const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === adminEditForm.product) || { price: r.basePrice };
+                                              const newSal = calculateSalary(r.basePrice, priceNum, r.category, r.tips || 0, 'normal', salarySettings);
+                                              let ca = 0, cla = 0;
+                                              if (adminEditForm.paymentType === 'cash') ca = priceNum;
+                                              else if (adminEditForm.paymentType === 'cashless') cla = priceNum;
+                                              else { ca = r.cashAmount; cla = r.cashlessAmount; }
+                                              const updatedR = reports.map(rep => rep.id === r.id
+                                                ? { ...rep, product: adminEditForm.product, salePrice: priceNum, total: priceNum, salary: newSal, paymentType: adminEditForm.paymentType, cashAmount: ca, cashlessAmount: cla, isBelowBase: priceNum < r.basePrice }
+                                                : rep
+                                              );
+                                              updateReports(updatedR);
+                                              logAction('Отчёт исправлен администратором', `${empName}: ${r.product} → ${adminEditForm.product} ${priceNum}₽`);
+                                              setExpandedEdit(null);
+                                              showNotification('Продажа исправлена');
+                                            }} className="flex-1 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-bold">✅ Сохранить</button>
+                                            <button onClick={() => {
+                                              showConfirm('Удалить эту продажу?', () => {
+                                                updateReports(reports.filter(rep => rep.id !== r.id));
+                                                setExpandedEdit(null);
+                                                showNotification('Удалено');
+                                              });
+                                            }} className="px-3 py-1.5 bg-red-100 text-red-600 rounded-lg text-xs font-bold">🗑️</button>
+                                            <button onClick={() => setExpandedEdit(null)} className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-xs font-bold">✕</button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <div className={`p-2 flex justify-between items-center cursor-pointer hover:bg-gray-50 ${r.isUnrecognized ? 'bg-red-50' : 'bg-white'}`}
+                                          onClick={() => { setExpandedEdit(r.id); setAdminEditForm({ product: r.product, salePrice: String(r.salePrice), paymentType: r.paymentType }); }}>
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <span className="text-base flex-shrink-0">{r.isUnrecognized ? '❓' : ([...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦')}</span>
+                                            <span className="truncate text-sm">{getProductName(r.product)}</span>
+                                          </div>
+                                          <div className="flex items-center gap-2 flex-shrink-0">
+                                            <span className="font-bold text-sm">{r.total}₽</span>
+                                            <span>{r.paymentType === 'cashless' ? '💳' : '💵'}</span>
+                                            <Edit3 className="w-3 h-3 text-gray-400" />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
                                 </div>
-                              ))}
-                            </div>
+                              );
+                            })()}
                             
                             {/* Исходный текст отчёта */}
                             {hasOriginalText && empReports[0].originalReportText && (
@@ -3604,7 +3764,7 @@ export default function LikeBirdApp() {
                               <button 
                                 onClick={() => {
                                   const ids = empReports.map(r => r.id);
-                                  setReports(prev => prev.map(r => ids.includes(r.id) ? {...r, reviewStatus: 'approved'} : r));
+                                  updateReports(reports.map(r => ids.includes(r.id) ? {...r, reviewStatus: 'approved'} : r));
                                   logAction('Отчёт подтверждён', `${empName} ${dateKey}`);
                                   showNotification('Отчёт подтверждён ✓');
                                 }}
@@ -3615,7 +3775,7 @@ export default function LikeBirdApp() {
                               <button 
                                 onClick={() => {
                                   const ids = empReports.map(r => r.id);
-                                  setReports(prev => prev.map(r => ids.includes(r.id) ? {...r, reviewStatus: 'revision'} : r));
+                                  updateReports(reports.map(r => ids.includes(r.id) ? {...r, reviewStatus: 'revision'} : r));
                                   logAction('Отчёт на доработку', `${empName} ${dateKey}`);
                                   showNotification('Отправлено на доработку');
                                 }}
@@ -3626,7 +3786,7 @@ export default function LikeBirdApp() {
                               <button 
                                 onClick={() => {
                                   const ids = empReports.map(r => r.id);
-                                  setReports(prev => prev.map(r => ids.includes(r.id) ? {...r, reviewStatus: 'rejected'} : r));
+                                  updateReports(reports.map(r => ids.includes(r.id) ? {...r, reviewStatus: 'rejected'} : r));
                                   logAction('Отчёт отклонён', `${empName} ${dateKey}`);
                                   showNotification('Отчёт отклонён');
                                 }}
@@ -5299,7 +5459,7 @@ export default function LikeBirdApp() {
 
     return (
       <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6">
-        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-bold flex items-center gap-2"><Calendar className="w-6 h-6" />График работы</h2>
@@ -5444,7 +5604,7 @@ export default function LikeBirdApp() {
 
     return (
       <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-amber-50 pb-6">
-        <div className="bg-gradient-to-r from-yellow-400 to-amber-500 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-yellow-400 to-amber-500 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold flex items-center gap-2">
             <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Ctext x='2' y='20' font-size='18'%3E🐦%3C/text%3E%3C/svg%3E" alt="🐦" className="w-6 h-6" />
@@ -5536,7 +5696,7 @@ export default function LikeBirdApp() {
 
     return (
       <div className="min-h-screen bg-gradient-to-b from-red-50 to-pink-50 pb-6">
-        <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Calendar className="w-6 h-6" />
@@ -5669,7 +5829,7 @@ export default function LikeBirdApp() {
 
     return (
       <div className="min-h-screen bg-gradient-to-b from-red-50 to-pink-50 pb-6">
-        <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('admin')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Edit3 className="w-6 h-6" />
@@ -5820,7 +5980,7 @@ export default function LikeBirdApp() {
 
     return (
       <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6">
-        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10">
+        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
           <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold flex items-center gap-2"><Users className="w-6 h-6" />Команда</h2>
         </div>
@@ -6073,6 +6233,424 @@ export default function LikeBirdApp() {
     );
   };
 
+
+
+  // ===== РАЗДЕЛ: СМЕНА =====
+  const ShiftView = () => {
+    const [shiftTab, setShiftTab] = useState('main'); // main | history | report
+    const [timeInput, setTimeInput] = useState('');
+    const [showTimeModal, setShowTimeModal] = useState(null); // 'open' | 'close'
+    const [editingReport, setEditingReport] = useState(null); // id редактируемой продажи
+    const [editForm, setEditForm] = useState({});
+    const [reportConfirmed, setReportConfirmed] = useState(false);
+
+    const login = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+    const todayStr = formatDate(new Date());
+    const shiftKey = `${login}_${todayStr}`;
+    const myShift = shiftsData[shiftKey] || {};
+
+    // Мои продажи сегодня (только pending + approved своего отчёта)
+    const myTodayReports = reports.filter(r =>
+      r.employee === employeeName &&
+      r.date.split(',')[0].trim() === todayStr
+    ).sort((a, b) => b.createdAt - a.createdAt);
+
+    // Продажи в статусе "черновик" (ещё не подтверждены мной)
+    const draftReports = myTodayReports.filter(r => r.reviewStatus === 'pending' || r.reviewStatus === 'draft');
+    const confirmedReports = myTodayReports.filter(r => r.reviewStatus === 'approved' || r.reviewStatus === 'submitted');
+
+    const myTotal = myTodayReports.reduce((s, r) => s + r.total, 0);
+    const myCash = myTodayReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
+    const myCashless = myTodayReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
+    const mySalary = myTodayReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+
+    const openShift = (time) => {
+      const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const updated = { ...shiftsData, [shiftKey]: { ...myShift, openTime: t, status: 'open', openedAt: Date.now() } };
+      updateShiftsData(updated);
+      setShowTimeModal(null);
+      showNotification(`Смена открыта в ${t}`);
+    };
+
+    const closeShift = (time) => {
+      const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const updated = { ...shiftsData, [shiftKey]: { ...myShift, closeTime: t, status: 'closed', closedAt: Date.now() } };
+      updateShiftsData(updated);
+      setShowTimeModal(null);
+      showNotification(`Смена закрыта в ${t}`);
+    };
+
+    const submitMyReport = () => {
+      if (draftReports.length === 0) { showNotification('Нет продаж для подтверждения', 'error'); return; }
+      showConfirm(`Подтвердить отчёт за ${todayStr}? После этого он уйдёт на проверку администратору.`, () => {
+        const ids = draftReports.map(r => r.id);
+        const updated = reports.map(r => ids.includes(r.id) ? { ...r, reviewStatus: 'submitted', submittedAt: Date.now() } : r);
+        updateReports(updated);
+        const shiftUpd = { ...shiftsData, [shiftKey]: { ...myShift, reportSubmittedAt: Date.now() } };
+        updateShiftsData(shiftUpd);
+        showNotification('Отчёт отправлен на проверку ✓');
+        setShiftTab('main');
+      });
+    };
+
+    const startEditReport = (r) => {
+      setEditingReport(r.id);
+      setEditForm({ product: r.product, salePrice: String(r.salePrice), tips: String(r.tips || 0), paymentType: r.paymentType });
+    };
+
+    const saveEditReport = (r) => {
+      const priceNum = parseInt(editForm.salePrice) || r.salePrice;
+      const tipsNum = parseInt(editForm.tips) || 0;
+      const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === editForm.product) || { name: editForm.product, price: r.basePrice };
+      const newSalary = calculateSalary(r.basePrice, priceNum, r.category, tipsNum, 'normal', salarySettings);
+      let cashAmt = 0, cashlessAmt = 0;
+      if (editForm.paymentType === 'cash') cashAmt = priceNum;
+      else if (editForm.paymentType === 'cashless') cashlessAmt = priceNum;
+      else { cashAmt = r.cashAmount; cashlessAmt = r.cashlessAmount; }
+      const updated = reports.map(rep => rep.id === r.id
+        ? { ...rep, product: editForm.product, salePrice: priceNum, total: priceNum, tips: tipsNum, salary: newSalary, paymentType: editForm.paymentType, cashAmount: cashAmt, cashlessAmount: cashlessAmt, isBelowBase: priceNum < r.basePrice }
+        : rep
+      );
+      updateReports(updated);
+      setEditingReport(null);
+      showNotification('Продажа обновлена');
+    };
+
+    const deleteMyReport = (id) => {
+      showConfirm('Удалить эту продажу?', () => {
+        updateReports(reports.filter(r => r.id !== id));
+        showNotification('Удалено');
+      });
+    };
+
+    const TABS = [
+      { id: 'main', label: '📋 Смена' },
+      { id: 'report', label: '✏️ Мой отчёт' },
+      { id: 'history', label: '📜 История' },
+    ];
+
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-8">
+        {/* Шапка */}
+        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
+          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold">🔄 Смена</h2>
+              <p className="text-white/70 text-sm">{todayStr} · {employeeName}</p>
+            </div>
+            {myShift.status === 'open' && (
+              <span className="bg-green-400 text-white text-xs px-3 py-1 rounded-full font-bold animate-pulse">● Открыта</span>
+            )}
+            {myShift.status === 'closed' && (
+              <span className="bg-gray-400 text-white text-xs px-3 py-1 rounded-full font-bold">■ Закрыта</span>
+            )}
+          </div>
+        </div>
+
+        {/* Табы */}
+        <div className="flex bg-white shadow-sm sticky top-[76px] z-10">
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setShiftTab(t.id)}
+              className={`flex-1 py-3 text-sm font-semibold border-b-2 transition-all ${shiftTab === t.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="max-w-md mx-auto px-4 pt-4 space-y-4">
+
+          {/* ── ВКЛАДКА: СМЕНА (главная) ── */}
+          {shiftTab === 'main' && (
+            <>
+              {/* Статус смены */}
+              <div className={`rounded-2xl p-5 shadow-lg ${myShift.status === 'open' ? 'bg-gradient-to-r from-green-400 to-emerald-500' : myShift.status === 'closed' ? 'bg-gradient-to-r from-gray-400 to-gray-500' : 'bg-gradient-to-r from-blue-400 to-indigo-500'} text-white`}>
+                {!myShift.status && (
+                  <div className="text-center py-2">
+                    <p className="text-3xl mb-2">🌅</p>
+                    <p className="text-xl font-black">Смена не открыта</p>
+                    <p className="text-white/70 text-sm mt-1">Нажмите кнопку чтобы начать работу</p>
+                  </div>
+                )}
+                {myShift.status === 'open' && (
+                  <div>
+                    <p className="text-white/70 text-sm">Смена открыта</p>
+                    <p className="text-3xl font-black">{myShift.openTime}</p>
+                    <div className="grid grid-cols-3 gap-3 mt-3 text-center">
+                      <div><p className="text-white/60 text-xs">Продаж</p><p className="font-bold text-lg">{myTodayReports.length}</p></div>
+                      <div><p className="text-white/60 text-xs">Выручка</p><p className="font-bold text-lg">{myTotal.toLocaleString()}₽</p></div>
+                      <div><p className="text-white/60 text-xs">Моя ЗП</p><p className="font-bold text-lg">{mySalary.toLocaleString()}₽</p></div>
+                    </div>
+                    {(myCash > 0 || myCashless > 0) && (
+                      <div className="flex gap-4 mt-2 text-sm text-white/80">
+                        {myCash > 0 && <span>💵 {myCash.toLocaleString()}₽</span>}
+                        {myCashless > 0 && <span>💳 {myCashless.toLocaleString()}₽</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {myShift.status === 'closed' && (
+                  <div>
+                    <p className="text-white/70 text-sm">Смена закрыта</p>
+                    <p className="text-2xl font-black">{myShift.openTime} → {myShift.closeTime}</p>
+                    <div className="grid grid-cols-3 gap-3 mt-3 text-center">
+                      <div><p className="text-white/60 text-xs">Продаж</p><p className="font-bold">{myTodayReports.length}</p></div>
+                      <div><p className="text-white/60 text-xs">Выручка</p><p className="font-bold">{myTotal.toLocaleString()}₽</p></div>
+                      <div><p className="text-white/60 text-xs">ЗП</p><p className="font-bold">{mySalary.toLocaleString()}₽</p></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Кнопки смены */}
+              <div className="grid grid-cols-2 gap-3">
+                {!myShift.status && (
+                  <button onClick={() => setShowTimeModal('open')}
+                    className="col-span-2 py-4 bg-gradient-to-r from-green-400 to-emerald-500 text-white rounded-2xl font-black text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2">
+                    🟢 Открыть смену
+                  </button>
+                )}
+                {myShift.status === 'open' && (
+                  <>
+                    <button onClick={() => setCurrentView('new-report')}
+                      className="py-4 bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2">
+                      <Plus className="w-5 h-5" /> Новая продажа
+                    </button>
+                    <button onClick={() => setCurrentView('text-import')}
+                      className="py-4 bg-white text-blue-600 border-2 border-blue-300 rounded-2xl font-bold shadow hover:shadow-md transition-all flex items-center justify-center gap-2">
+                      <FileInput className="w-5 h-5" /> Импорт
+                    </button>
+                    <button onClick={() => setShiftTab('report')}
+                      className="py-3 bg-white text-indigo-600 border-2 border-indigo-300 rounded-xl font-bold shadow hover:shadow-md transition-all flex items-center justify-center gap-2">
+                      <Edit3 className="w-4 h-4" /> Мой отчёт
+                    </button>
+                    <button onClick={() => setShowTimeModal('close')}
+                      className="py-3 bg-white text-red-500 border-2 border-red-300 rounded-xl font-bold shadow hover:shadow-md transition-all flex items-center justify-center gap-2">
+                      🔴 Закрыть смену
+                    </button>
+                  </>
+                )}
+                {myShift.status === 'closed' && (
+                  <>
+                    <button onClick={() => setShiftTab('report')}
+                      className="py-3 bg-indigo-500 text-white rounded-xl font-bold shadow hover:shadow-md transition-all flex items-center justify-center gap-2">
+                      <Edit3 className="w-4 h-4" /> Отчёт
+                    </button>
+                    <button onClick={() => setShowTimeModal('open')}
+                      className="py-3 bg-white text-green-600 border-2 border-green-300 rounded-xl font-bold shadow hover:shadow-md transition-all">
+                      Переоткрыть
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Последние продажи */}
+              {myTodayReports.length > 0 && (
+                <div>
+                  <h3 className="font-bold text-gray-700 mb-2 text-sm">Последние продажи ({myTodayReports.length})</h3>
+                  <div className="space-y-2">
+                    {myTodayReports.slice(0, 5).map(r => (
+                      <div key={r.id} className="bg-white rounded-xl p-3 shadow flex items-center gap-3">
+                        <div className="text-2xl">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦'}</div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-sm truncate">{r.product}</p>
+                          <p className="text-xs text-gray-400">{r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-blue-600">{r.total.toLocaleString()}₽</p>
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${r.reviewStatus === 'submitted' ? 'bg-blue-100 text-blue-600' : r.reviewStatus === 'approved' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+                            {r.reviewStatus === 'submitted' ? '📤' : r.reviewStatus === 'approved' ? '✅' : '📝'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {myTodayReports.length > 5 && (
+                      <button onClick={() => setShiftTab('history')} className="w-full text-center text-blue-500 text-sm py-2 font-semibold">
+                        Показать все ({myTodayReports.length}) →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── ВКЛАДКА: МОЙ ОТЧЁТ (редактирование перед отправкой) ── */}
+          {shiftTab === 'report' && (
+            <>
+              {/* Сводка */}
+              <div className="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl p-4 text-white shadow-lg">
+                <p className="text-white/70 text-sm">Итог за {todayStr}</p>
+                <p className="text-3xl font-black">{myTotal.toLocaleString()} ₽</p>
+                <div className="flex gap-4 mt-1 text-sm text-white/80">
+                  <span>{myTodayReports.length} продаж</span>
+                  {myCash > 0 && <span>💵 {myCash.toLocaleString()}₽</span>}
+                  {myCashless > 0 && <span>💳 {myCashless.toLocaleString()}₽</span>}
+                  <span>ЗП: {mySalary.toLocaleString()}₽</span>
+                </div>
+              </div>
+
+              {/* Статус отчёта */}
+              {myTodayReports.some(r => r.reviewStatus === 'submitted') && (
+                <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-3 text-center">
+                  <p className="text-blue-700 font-bold">📤 Отчёт отправлен на проверку</p>
+                  <p className="text-blue-500 text-sm mt-0.5">Ожидайте проверки администратора</p>
+                </div>
+              )}
+              {myTodayReports.some(r => r.reviewStatus === 'approved') && !myTodayReports.some(r => r.reviewStatus === 'submitted') && (
+                <div className="bg-green-50 border-2 border-green-300 rounded-xl p-3 text-center">
+                  <p className="text-green-700 font-bold">✅ Отчёт подтверждён администратором</p>
+                </div>
+              )}
+
+              {/* Список для редактирования */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-gray-700 text-sm">Продажи сегодня</h3>
+                  <button onClick={() => setCurrentView('new-report')}
+                    className="flex items-center gap-1 bg-amber-500 text-white px-3 py-1.5 rounded-lg text-sm font-bold hover:bg-amber-600">
+                    <Plus className="w-4 h-4" /> Добавить
+                  </button>
+                </div>
+                {myTodayReports.length === 0 && (
+                  <div className="bg-white rounded-xl p-8 text-center shadow">
+                    <p className="text-4xl mb-2">📋</p>
+                    <p className="text-gray-400">Нет продаж за сегодня</p>
+                  </div>
+                )}
+                {myTodayReports.map(r => (
+                  <div key={r.id} className={`bg-white rounded-xl shadow overflow-hidden ${editingReport === r.id ? 'ring-2 ring-blue-400' : ''}`}>
+                    {editingReport === r.id ? (
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="text-2xl">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === editForm.product)?.emoji || '🐦'}</div>
+                          <p className="font-bold text-gray-700">{r.product}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-xs text-gray-500 font-semibold">Цена ₽</label>
+                            <input type="number" value={editForm.salePrice} onChange={e => setEditForm({...editForm, salePrice: e.target.value})}
+                              className="w-full p-2.5 border-2 border-blue-200 rounded-xl text-sm focus:border-blue-400 focus:outline-none mt-1" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 font-semibold">Чаевые ₽</label>
+                            <input type="number" value={editForm.tips} onChange={e => setEditForm({...editForm, tips: e.target.value})}
+                              className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-blue-400 focus:outline-none mt-1" />
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          {['cash', 'cashless', 'mixed'].map(pt => (
+                            <button key={pt} onClick={() => setEditForm({...editForm, paymentType: pt})}
+                              className={`flex-1 py-2 rounded-lg text-xs font-semibold border-2 transition-all ${editForm.paymentType === pt ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-500'}`}>
+                              {pt === 'cash' ? '💵 Нал' : pt === 'cashless' ? '💳 Безнал' : '💵💳 Смеш'}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => saveEditReport(r)} className="flex-1 py-2.5 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 text-sm">✅ Сохранить</button>
+                          <button onClick={() => setEditingReport(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm">Отмена</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 flex items-center gap-3">
+                        <div className="text-2xl flex-shrink-0">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦'}</div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-sm truncate">{r.product}</p>
+                          <p className="text-xs text-gray-400">{r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
+                        </div>
+                        <p className="font-bold text-gray-800">{r.total.toLocaleString()}₽</p>
+                        {(r.reviewStatus === 'pending' || r.reviewStatus === 'draft') && (
+                          <div className="flex gap-1">
+                            <button onClick={() => startEditReport(r)} className="p-1.5 text-blue-400 hover:bg-blue-50 rounded-lg"><Edit3 className="w-4 h-4" /></button>
+                            <button onClick={() => deleteMyReport(r.id)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                          </div>
+                        )}
+                        {r.reviewStatus === 'submitted' && <span className="text-xs text-blue-500 font-semibold">📤</span>}
+                        {r.reviewStatus === 'approved' && <span className="text-xs text-green-500 font-semibold">✅</span>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Кнопка отправить отчёт */}
+              {draftReports.length > 0 && (
+                <button onClick={submitMyReport}
+                  className="w-full py-4 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-2xl font-black text-lg shadow-lg hover:shadow-xl transition-all">
+                  📤 Отправить отчёт на проверку ({draftReports.length} продаж)
+                </button>
+              )}
+            </>
+          )}
+
+          {/* ── ВКЛАДКА: ИСТОРИЯ ── */}
+          {shiftTab === 'history' && (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-gray-700">Все мои продажи сегодня</h3>
+                <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold">{myTodayReports.length}</span>
+              </div>
+              {myTodayReports.length === 0 ? (
+                <div className="bg-white rounded-xl p-8 text-center shadow">
+                  <p className="text-4xl mb-2">📜</p>
+                  <p className="text-gray-400">Нет продаж за сегодня</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {myTodayReports.map(r => (
+                    <div key={r.id} className="bg-white rounded-xl p-3 shadow flex items-center gap-3">
+                      <div className="text-2xl flex-shrink-0">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦'}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm truncate">{r.product}</p>
+                        <p className="text-xs text-gray-400">
+                          {r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳 Безнал' : '💵 Нал'}
+                          {r.location && ` · 📍 ${r.location.split(' - ').pop()}`}
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="font-bold">{r.total.toLocaleString()}₽</p>
+                        <p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p>
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                          r.reviewStatus === 'approved' ? 'bg-green-100 text-green-600' :
+                          r.reviewStatus === 'submitted' ? 'bg-blue-100 text-blue-600' :
+                          'bg-gray-100 text-gray-500'
+                        }`}>
+                          {r.reviewStatus === 'approved' ? '✅ Принято' : r.reviewStatus === 'submitted' ? '📤 Отправлено' : '📝 Черновик'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+        </div>
+
+        {/* Модал выбора времени */}
+        {showTimeModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-end z-50 p-4">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-sm mx-auto shadow-2xl">
+              <h3 className="text-xl font-black mb-4">
+                {showTimeModal === 'open' ? '🟢 Открыть смену' : '🔴 Закрыть смену'}
+              </h3>
+              <p className="text-gray-500 text-sm mb-4">Укажите время или нажмите «Сейчас»</p>
+              <input type="time" value={timeInput}
+                onChange={e => setTimeInput(e.target.value)}
+                className="w-full p-4 border-2 border-blue-200 rounded-xl text-2xl text-center font-bold focus:border-blue-500 focus:outline-none mb-4" />
+              <div className="flex gap-3">
+                <button onClick={() => setShowTimeModal(null)} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold">Отмена</button>
+                <button onClick={() => showTimeModal === 'open' ? openShift(timeInput || null) : closeShift(timeInput || null)}
+                  className={`flex-1 py-3 text-white rounded-xl font-bold ${showTimeModal === 'open' ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'}`}>
+                  {timeInput ? `В ${timeInput}` : 'Сейчас'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ===== ЛИЧНЫЙ КАБИНЕТ СОТРУДНИКА =====
   const ProfileView = () => {
@@ -6886,6 +7464,7 @@ export default function LikeBirdApp() {
       {currentView === 'team' && <TeamView />}
       {currentView === 'events-admin' && <EventsAdminView />}
       {currentView === 'profile' && <ProfileView />}
+      {currentView === 'shift' && <ShiftView />}
     </>
   );
 }
