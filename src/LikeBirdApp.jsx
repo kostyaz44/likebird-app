@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ShoppingBag, FileText, BarChart3, Plus, Search, ArrowLeft, Trash2, X, FileInput, AlertTriangle, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Clock, Package, Bell, RefreshCw, Download, Upload, Copy, Settings, Calendar, RotateCcw, Info, CheckCircle, Shield, DollarSign, Users, Lock, TrendingUp, Award, MapPin, Archive, MessageCircle, Star, Camera, Image, LogOut, Key, Wifi, WifiOff, Eye, EyeOff, Smartphone } from 'lucide-react';
-import { fbSave, fbSubscribe, fbGet, SYNC_KEYS } from './firebase.js';
+import { fbSave, fbSubscribe, fbGet, fbSetPresence, fbSubscribePresence, SYNC_KEYS } from './firebase.js';
 
 // ===== УТИЛИТЫ: Хэширование пароля =====
 const hashPassword = async (password) => {
@@ -569,7 +569,7 @@ export default function LikeBirdApp() {
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
   const [adminTab, setAdminTab] = useState('analytics');
-  const [teamTab, setTeamTab] = useState('schedule');
+  const [teamTab, setTeamTab] = useState('online');
   const [employees, setEmployees] = useState([
     { id: 1, name: 'Лена', role: 'seller', salaryMultiplier: 1.0, active: true },
     { id: 2, name: 'Лиза', role: 'seller', salaryMultiplier: 1.0, active: true },
@@ -625,6 +625,12 @@ export default function LikeBirdApp() {
   
   // KPI и цели сотрудников
   const [employeeKPI, setEmployeeKPI] = useState({});
+  // Онлайн-присутствие сотрудников { login: { displayName, lastSeen, online } }
+  const [presenceData, setPresenceData] = useState({});
+
+  // Системные уведомления для пользователей (Firebase-synced)
+  const [userNotifications, setUserNotifications] = useState([]);
+
   // Кастомные достижения (созданные администратором)
   const [customAchievements, setCustomAchievements] = useState([]);
   // Смены сотрудников: { 'login_date': { openTime, closeTime, status, confirmedAt } }
@@ -762,6 +768,7 @@ export default function LikeBirdApp() {
     loadJson('likebird-writeoffs', setWriteOffs, []);
     loadJson('likebird-autoorder', setAutoOrderList, []);
     loadJson('likebird-kpi', setEmployeeKPI, {});
+    loadJson('likebird-notifications', setUserNotifications, []);
     loadJson('likebird-custom-achievements', setCustomAchievements, []);
     loadJson('likebird-shifts', setShiftsData, {});
     loadJson('likebird-achievements-granted', setAchievementsGranted, {});
@@ -801,7 +808,20 @@ export default function LikeBirdApp() {
       fbSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); localStorage.setItem('likebird-manuals', JSON.stringify(val)); } }),
       fbSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); }),
       fbSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); localStorage.setItem('likebird-admin-password', JSON.stringify(val)); }),
-      fbSubscribe('likebird-employees', (val) => { setEmployees(val); localStorage.setItem('likebird-employees', JSON.stringify(val)); }),
+      fbSubscribe('likebird-employees', (val) => {
+        if (!Array.isArray(val)) return;
+        // Синхронизируем employees с registered users: добавляем недостающих
+        const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+        let merged = [...val];
+        regUsers.forEach(u => {
+          const name = u.name || u.login;
+          if (!merged.find(e => e.name === name)) {
+            merged.push({ id: Date.now() + Math.random(), name, role: u.role || 'seller', salaryMultiplier: 1.0, active: true });
+          }
+        });
+        setEmployees(merged);
+        localStorage.setItem('likebird-employees', JSON.stringify(merged));
+      }),
       fbSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); }),
       fbSubscribe('likebird-audit-log', (val) => { setAuditLog(val); localStorage.setItem('likebird-audit-log', JSON.stringify(val)); }),
       fbSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); localStorage.setItem('likebird-custom-products', JSON.stringify(val)); }),
@@ -817,6 +837,47 @@ export default function LikeBirdApp() {
       fbSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
       fbSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
       fbSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } }),
+      fbSubscribe('likebird-notifications', (val) => {
+        if (!Array.isArray(val)) return;
+        localStorage.setItem('likebird-notifications', JSON.stringify(val));
+        setUserNotifications(val);
+        // Показать уведомления адресованные текущему пользователю
+        try {
+          const authRaw = localStorage.getItem('likebird-auth');
+          if (!authRaw) return;
+          const auth = JSON.parse(authRaw);
+          const myUnread = val.filter(n => n.targetLogin === auth.login && !n.read);
+          myUnread.forEach(n => {
+            // Показать toast
+            setNotification({ message: n.body || n.title, type: 'achievement' });
+            setTimeout(() => setNotification(null), 5000);
+            // Web Notification API
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              new Notification(n.title || 'LikeBird', { body: n.body, icon: '/favicon.ico', badge: '/favicon.ico' });
+            }
+            // Звук
+            try {
+              const ctx = new (window.AudioContext || window.webkitAudioContext)();
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.connect(gain); gain.connect(ctx.destination);
+              osc.frequency.setValueAtTime(880, ctx.currentTime);
+              osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1);
+              osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.2);
+              gain.gain.setValueAtTime(0.3, ctx.currentTime);
+              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+              osc.start(ctx.currentTime);
+              osc.stop(ctx.currentTime + 0.5);
+            } catch {}
+          });
+          // Пометить прочитанными
+          if (myUnread.length > 0) {
+            const updatedVal = val.map(n => n.targetLogin === auth.login ? { ...n, read: true } : n);
+            localStorage.setItem('likebird-notifications', JSON.stringify(updatedVal));
+            fbSave('likebird-notifications', updatedVal);
+          }
+        } catch {}
+      }),
       fbSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } }),
       fbSubscribe('likebird-profiles', (val) => { setProfilesData(val); localStorage.setItem('likebird-profiles', JSON.stringify(val)); }),
       fbSubscribe('likebird-users', (val) => {
@@ -841,9 +902,34 @@ export default function LikeBirdApp() {
       }),
     ];
 
+    // Подписка на онлайн-присутствие всех пользователей
+    const unsubPresence = fbSubscribePresence(setPresenceData);
+
     // Отписываемся при размонтировании компонента
-    return () => { subscriptions.forEach(unsub => { if (typeof unsub === 'function') unsub(); }); };
+    return () => {
+      subscriptions.forEach(unsub => { if (typeof unsub === 'function') unsub(); });
+      if (unsubPresence) unsubPresence();
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Запросить разрешение на уведомления
+  useEffect(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Heartbeat presence — отдельный useEffect зависящий от currentUser
+  useEffect(() => {
+    if (!currentUser?.login) return;
+    const sendPresence = () => {
+      const dispName = profilesData[currentUser.login]?.displayName || currentUser.name || currentUser.login;
+      fbSetPresence(currentUser.login, dispName);
+    };
+    sendPresence(); // сразу при входе
+    const interval = setInterval(sendPresence, 60000); // каждую минуту
+    return () => clearInterval(interval);
+  }, [currentUser?.login]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ===== Интеграция кастомных товаров в поиск =====
   useEffect(() => {
@@ -1868,6 +1954,16 @@ export default function LikeBirdApp() {
   };
 
   const NewReportView = () => {
+    // Принудительно загружаем актуальные локации из Firebase при открытии
+    useEffect(() => {
+      fbGet('likebird-locations').then(val => {
+        if (Array.isArray(val) && val.length > 0) {
+          setLocations(val);
+          localStorage.setItem('likebird-locations', JSON.stringify(val));
+        }
+      }).catch(() => {});
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     const [localPrice, setLocalPrice] = useState(() => salePrice || '');
     const [localTips, setLocalTips] = useState(() => tipsAmount || '');
     const [localName, setLocalName] = useState(() => employeeName || '');
@@ -2910,7 +3006,15 @@ export default function LikeBirdApp() {
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <p className="font-semibold text-sm">{getProductName(r.product)}</p>
-                    <p className="text-xs text-gray-400">{r.employee} • {r.paymentType === 'cashless' ? '💳' : '💵'}{r.quantity > 1 && ` • ${r.quantity} шт`}</p>
+                    <div className="flex items-center gap-1 text-xs text-gray-400">
+                      <span>{r.employee}</span>
+                      <span>•</span>
+                      <span>{r.paymentType === 'cashless' ? '💳' : '💵'}</span>
+                      {r.quantity > 1 && <><span>•</span><span>{r.quantity} шт</span></>}
+                      {r.date && r.date.includes(',') && (
+                        <><span>•</span><span className="font-mono">🕐 {r.date.split(',')[1]?.trim()?.slice(0,5)}</span></>
+                      )}
+                    </div>
                     {r.tips > 0 && <p className="text-xs text-amber-600">+{r.tips}₽ чаевые</p>}
                     {r.location && <p className="text-xs text-blue-500">📍 {r.location}</p>}
                     {r.photo && <span className="text-xs text-green-500">📷</span>}
@@ -3429,9 +3533,17 @@ export default function LikeBirdApp() {
 
         {/* Вкладки */}
         <div className="sticky top-16 z-10 bg-white shadow-md">
-          <div className="flex overflow-x-auto px-2 py-2 gap-1">
+          <div className="flex overflow-x-auto px-2 py-2 gap-1 scroll-smooth" ref={el => {
+            if (el && adminTab) {
+              // Скроллим к активной вкладке без сброса позиции
+              const active = el.querySelector('[data-active="true"]');
+              if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+            }
+          }} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}>
             {tabs.map(tab => (
-              <button key={tab.id} onClick={() => setAdminTab(tab.id)} className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${adminTab === tab.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              <button key={tab.id} data-active={adminTab === tab.id}
+                onClick={() => setAdminTab(tab.id)}
+                className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all flex-shrink-0 ${adminTab === tab.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                 {tab.label}
               </button>
             ))}
@@ -4630,14 +4742,7 @@ export default function LikeBirdApp() {
                 </div>
               ))}
 
-              {/* Календарь событий */}
-              <div className="bg-white rounded-xl p-4 shadow">
-                <div className="flex justify-between items-center mb-3">
-                  <h3 className="font-bold flex items-center gap-2"><Calendar className="w-5 h-5 text-red-600" />Календарь событий</h3>
-                  <button onClick={() => setCurrentView('events-admin')} className="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600">Редактировать</button>
-                </div>
-                <p className="text-sm text-gray-600">📅 Событий: {Object.keys(eventsCalendar).length}</p>
-              </div>
+
             </div>
           )}
 
@@ -4932,9 +5037,113 @@ export default function LikeBirdApp() {
           )}
 
           {/* ВКЛАДКА: График работы */}
-          {adminTab === 'schedule' && (
-            <ScheduleEditor />
-          )}
+          {adminTab === 'schedule' && (() => {
+            const [showEventForm, setShowEventForm] = React.useState(false);
+            const [newDate, setNewDate] = React.useState('');
+            const [newEvent, setNewEvent] = React.useState({ title: '', description: '', type: 'info', emoji: '📅' });
+            const EVENT_TYPES = [
+              { id: 'sale', label: '🎁 Акция', emoji: '🎁' },
+              { id: 'holiday', label: '🎉 Праздник', emoji: '🎉' },
+              { id: 'training', label: '📚 Обучение', emoji: '📚' },
+              { id: 'shift', label: '🔄 Смена', emoji: '🔄' },
+              { id: 'info', label: '📌 Инфо', emoji: '📌' },
+            ];
+
+            const saveEvent = () => {
+              if (!newDate || !newEvent.title) { showNotification('Заполните дату и название', 'error'); return; }
+              const updated = { ...eventsCalendar, [newDate]: { ...newEvent, createdAt: Date.now() } };
+              setEventsCalendar(updated);
+              save('likebird-events', updated);
+              setNewDate(''); setNewEvent({ title: '', description: '', type: 'info', emoji: '📅' });
+              setShowEventForm(false);
+              showNotification('Событие добавлено');
+            };
+            const deleteEvent = (date) => {
+              showConfirm('Удалить событие?', () => {
+                const updated = { ...eventsCalendar };
+                delete updated[date];
+                setEventsCalendar(updated);
+                save('likebird-events', updated);
+              });
+            };
+
+            const sortedEvents = Object.entries(eventsCalendar).sort((a, b) => {
+              const parse = ([d, m, y]) => new Date(parseInt('20'+y), m-1, d);
+              return parse(a[0].split('.')) - parse(b[0].split('.'));
+            });
+
+            return (
+              <div className="space-y-4">
+                <ScheduleEditor />
+
+                {/* Календарь событий */}
+                <div className="bg-white rounded-2xl p-4 shadow">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold flex items-center gap-2">
+                      <Calendar className="w-5 h-5 text-red-500" />
+                      События и даты ({Object.keys(eventsCalendar).length})
+                    </h3>
+                    <button onClick={() => setShowEventForm(!showEventForm)}
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-semibold ${showEventForm ? 'bg-gray-100 text-gray-600' : 'bg-red-500 text-white hover:bg-red-600'}`}>
+                      {showEventForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                      {showEventForm ? 'Отмена' : 'Добавить'}
+                    </button>
+                  </div>
+
+                  {showEventForm && (
+                    <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 mb-4 space-y-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-xs text-gray-500 font-semibold block mb-1">Дата *</label>
+                          <input type="date" value={newDate} onChange={e => {
+                            const d = new Date(e.target.value);
+                            const fmt = d.toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'2-digit'}).replace(/\//g,'.');
+                            setNewDate(fmt);
+                          }} className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-red-400 focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 font-semibold block mb-1">Тип</label>
+                          <select value={newEvent.type} onChange={e => {
+                            const t = EVENT_TYPES.find(et => et.id === e.target.value);
+                            setNewEvent({...newEvent, type: e.target.value, emoji: t?.emoji || '📅'});
+                          }} className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-red-400 focus:outline-none">
+                            {EVENT_TYPES.map(et => <option key={et.id} value={et.id}>{et.label}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})}
+                        placeholder="Название события *"
+                        className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm focus:border-red-400 focus:outline-none" />
+                      <textarea value={newEvent.description} onChange={e => setNewEvent({...newEvent, description: e.target.value})}
+                        placeholder="Описание (необязательно)"
+                        rows={2} className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm focus:border-red-400 focus:outline-none resize-none" />
+                      <button onClick={saveEvent}
+                        className="w-full py-2.5 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-all">
+                        ✅ Сохранить событие
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {sortedEvents.length === 0 ? (
+                      <p className="text-gray-400 text-center py-6">Нет событий</p>
+                    ) : sortedEvents.map(([date, ev]) => (
+                      <div key={date} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border">
+                        <span className="text-2xl flex-shrink-0">{ev.emoji || '📅'}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-sm truncate">{ev.title}</p>
+                          <p className="text-xs text-gray-400">{date}{ev.description && ` • ${ev.description}`}</p>
+                        </div>
+                        <button onClick={() => deleteEvent(date)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg flex-shrink-0">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ВКЛАДКА: Настройки */}
           {adminTab === 'settings' && (
@@ -4974,18 +5183,20 @@ export default function LikeBirdApp() {
                 </div>
               </div>
 
-              {/* Очистка данных */}
-              <div className="bg-white rounded-xl p-4 shadow border-2 border-red-200">
-                <h3 className="font-bold mb-3 flex items-center gap-2 text-red-600"><AlertTriangle className="w-5 h-5" />Опасная зона</h3>
-                <div className="space-y-2">
-                  <button onClick={() => showConfirm('Удалить ВСЕ отчёты? Это действие необратимо!', () => { updateReports([]); logAction('Удалены все отчёты', ''); showNotification('Отчёты удалены'); })} className="w-full bg-red-100 text-red-600 py-2 rounded hover:bg-red-200">
-                    Удалить все отчёты
-                  </button>
-                  <button onClick={() => showConfirm('Удалить ВСЕ расходы? Это действие необратимо!', () => { setExpenses([]); save('likebird-expenses', []); logAction('Удалены все расходы', ''); showNotification('Расходы удалены'); })} className="w-full bg-red-100 text-red-600 py-2 rounded hover:bg-red-200">
-                    Удалить все расходы
-                  </button>
+              {/* Очистка данных — только мастер-администратор */}
+              {currentUser?.isAdmin && (
+                <div className="bg-white rounded-xl p-4 shadow border-2 border-red-200">
+                  <h3 className="font-bold mb-3 flex items-center gap-2 text-red-600"><AlertTriangle className="w-5 h-5" />Опасная зона</h3>
+                  <div className="space-y-2">
+                    <button onClick={() => showConfirm('Удалить ВСЕ отчёты? Это действие необратимо!', () => { updateReports([]); logAction('Удалены все отчёты', ''); showNotification('Отчёты удалены'); })} className="w-full bg-red-100 text-red-600 py-2 rounded hover:bg-red-200">
+                      Удалить все отчёты
+                    </button>
+                    <button onClick={() => showConfirm('Удалить ВСЕ расходы? Это действие необратимо!', () => { setExpenses([]); save('likebird-expenses', []); logAction('Удалены все расходы', ''); showNotification('Расходы удалены'); })} className="w-full bg-red-100 text-red-600 py-2 rounded hover:bg-red-200">
+                      Удалить все расходы
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -5222,7 +5433,7 @@ export default function LikeBirdApp() {
 
           {/* ===== ВКЛАДКА: ДОСТИЖЕНИЯ ===== */}
           {adminTab === 'achievements-admin' && (() => {
-            const [achForm, setAchForm] = React.useState({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '' });
+            const [achForm, setAchForm] = React.useState({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '', bonusAmount: '' });
             const [editingAch, setEditingAch] = React.useState(null);
             const COND_TYPES = [
               { id: 'manual', label: '🎖️ Выдать вручную' },
@@ -5240,7 +5451,7 @@ export default function LikeBirdApp() {
                 updateCustomAchievements(customAchievements.map(a => a.id === editingAch ? { ...a, ...achForm } : a));
                 setEditingAch(null);
               } else {
-                const newA = { ...achForm, id: 'custom_' + Date.now(), condValue: Number(achForm.condValue) || 0, createdAt: Date.now() };
+                const newA = { ...achForm, id: 'custom_' + Date.now(), condValue: Number(achForm.condValue) || 0, bonusAmount: Number(achForm.bonusAmount) || 0, createdAt: Date.now() };
                 updateCustomAchievements([...customAchievements, newA]);
               }
               setAchForm({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '' });
@@ -5260,10 +5471,48 @@ export default function LikeBirdApp() {
 
             const handleGrantToggle = (achId, userLogin) => {
               const current = achievementsGranted[achId] || [];
-              const updated = current.includes(userLogin)
+              const isRevoking = current.includes(userLogin);
+              const updated = isRevoking
                 ? current.filter(l => l !== userLogin)
                 : [...current, userLogin];
               updateAchievementsGranted({ ...achievementsGranted, [achId]: updated });
+
+              // Если выдаём впервые — начислить бонус и отправить уведомление
+              if (!isRevoking) {
+                const ach = customAchievements.find(a => a.id === achId);
+                if (!ach) return;
+                // Уведомление в Firebase
+                const notifKey = 'likebird-notifications';
+                const existingNotifs = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
+                const newNotif = {
+                  id: Date.now(),
+                  type: 'achievement',
+                  targetLogin: userLogin,
+                  title: '🏆 Новое достижение!',
+                  body: `Вы получили достижение: «${ach.title}»${ach.bonusAmount > 0 ? ` + бонус ${Number(ach.bonusAmount).toLocaleString()}₽` : ''}`,
+                  bonusAmount: ach.bonusAmount || 0,
+                  achievementId: achId,
+                  createdAt: Date.now(),
+                  read: false,
+                };
+                const updatedNotifs = [newNotif, ...existingNotifs].slice(0, 100);
+                localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+                fbSave(notifKey, updatedNotifs);
+
+                // Если бонус — добавить в bonuses
+                if (ach.bonusAmount > 0) {
+                  const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+                  const user = regUsers.find(u => u.login === userLogin);
+                  const emp = employees.find(e => e.name === (user?.name || userLogin));
+                  if (emp) {
+                    const newBonus = { id: Date.now(), employeeId: emp.id, employeeName: emp.name, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
+                    const updatedBonuses = [newBonus, ...bonuses];
+                    setBonuses(updatedBonuses);
+                    save('likebird-bonuses', updatedBonuses);
+                  }
+                }
+                showNotification(`Достижение выдано${ach.bonusAmount > 0 ? ` + бонус ${ach.bonusAmount}₽` : ''}`);
+              }
             };
 
             const users = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
@@ -5305,6 +5554,13 @@ export default function LikeBirdApp() {
                     <input type="text" value={achForm.desc} onChange={e => setAchForm({...achForm, desc: e.target.value})}
                       placeholder="Описание (подсказка для сотрудника)"
                       className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm focus:border-amber-400 focus:outline-none" />
+                    <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-xl border-2 border-amber-200">
+                      <span className="text-amber-600 font-semibold text-sm flex-shrink-0">🎁 Бонус:</span>
+                      <input type="number" value={achForm.bonusAmount || ''} onChange={e => setAchForm({...achForm, bonusAmount: e.target.value})}
+                        placeholder="0 ₽ (оставьте пустым без бонуса)"
+                        className="flex-1 p-2 border-2 border-amber-200 rounded-lg text-sm focus:border-amber-400 focus:outline-none" />
+                      <span className="text-gray-400 text-sm">₽</span>
+                    </div>
                   </div>
 
                   {/* Условие получения */}
@@ -5369,6 +5625,9 @@ export default function LikeBirdApp() {
                                 <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
                                   {condLabel}{ach.condValue ? `: ${Number(ach.condValue).toLocaleString()}` : ''}
                                 </span>
+                                {ach.bonusAmount > 0 && (
+                                  <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">🎁 +{Number(ach.bonusAmount).toLocaleString()}₽</span>
+                                )}
                                 {grantedTo.length > 0 && (
                                   <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full">
                                     ✅ Выдано: {grantedTo.length}
@@ -5377,7 +5636,7 @@ export default function LikeBirdApp() {
                               </div>
                             </div>
                             <div className="flex gap-1 flex-shrink-0">
-                              <button onClick={() => { setEditingAch(ach.id); setAchForm({ icon: ach.icon, title: ach.title, desc: ach.desc || '', condType: ach.condType, condValue: String(ach.condValue || '') }); }}
+                              <button onClick={() => { setEditingAch(ach.id); setAchForm({ icon: ach.icon, title: ach.title, desc: ach.desc || '', condType: ach.condType, condValue: String(ach.condValue || ''), bonusAmount: String(ach.bonusAmount || '') }); }}
                                 className="p-2 text-blue-400 hover:bg-blue-50 rounded-lg">
                                 <Edit3 className="w-4 h-4" />
                               </button>
@@ -5923,6 +6182,17 @@ export default function LikeBirdApp() {
     const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
     const [manualFilter, setManualFilter] = useState('all');
 
+    // Онлайн-статус: онлайн если lastSeen < 5 минут назад
+    const ONLINE_THRESHOLD = 5 * 60 * 1000;
+    const now = Date.now();
+    const getOnlineStatus = (login) => {
+      const p = presenceData[login];
+      if (!p) return 'offline';
+      return (now - p.lastSeen) < ONLINE_THRESHOLD ? 'online' : 'offline';
+    };
+    // Список всех пользователей с их онлайн-статусом
+    const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+
     // Данные для результатов недели
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
@@ -5972,6 +6242,7 @@ export default function LikeBirdApp() {
     });
 
     const tabs = [
+      { id: 'online', label: '🟢 Онлайн', color: 'green' },
       { id: 'schedule', label: '📅 График', color: 'blue' },
       { id: 'results', label: '📊 Результаты', color: 'yellow' },
       { id: 'events', label: '🎉 События', color: 'red' },
@@ -5997,6 +6268,91 @@ export default function LikeBirdApp() {
         </div>
 
         <div className="max-w-4xl mx-auto px-4 mt-4">
+          {/* ВКЛАДКА: Онлайн — список сотрудников с присутствием */}
+          {teamTab === 'online' && (
+            <div className="space-y-4">
+              <div className="bg-white rounded-2xl shadow p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-700 flex items-center gap-2">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                    Сотрудники
+                  </h3>
+                  <span className="text-xs text-gray-400">
+                    онлайн: {regUsers.filter(u => getOnlineStatus(u.login) === 'online').length} / {regUsers.length}
+                  </span>
+                </div>
+                {regUsers.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-4xl mb-2">👥</p>
+                    <p className="text-gray-400">Нет зарегистрированных пользователей</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {[...regUsers].sort((a, b) => {
+                      const aOnline = getOnlineStatus(a.login) === 'online';
+                      const bOnline = getOnlineStatus(b.login) === 'online';
+                      return bOnline - aOnline;
+                    }).map(u => {
+                      const isOnline = getOnlineStatus(u.login) === 'online';
+                      const p = presenceData[u.login];
+                      const lastSeenMin = p ? Math.round((now - p.lastSeen) / 60000) : null;
+                      const userProfile = profilesData[u.login] || {};
+                      const displayName = userProfile.displayName || u.name || u.login;
+                      const isMe = u.login === currentUser?.login;
+                      const roleLabel = u.role === 'admin' ? '🛡️ Администратор' : u.role === 'senior' ? '⭐ Старший' : '🐦 Продавец';
+                      // Продажи сегодня
+                      const todayStr = formatDate(new Date());
+                      const todaySales = reports.filter(r =>
+                        r.employee === (userProfile.displayName || u.name) &&
+                        r.date.split(',')[0].trim() === todayStr
+                      ).length;
+
+                      return (
+                        <div key={u.login} className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all ${isOnline ? 'border-green-100 bg-green-50' : 'border-gray-100 bg-gray-50'}`}>
+                          {/* Аватар + индикатор */}
+                          <div className="relative flex-shrink-0">
+                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold text-lg overflow-hidden">
+                              {userProfile.avatar
+                                ? <img src={userProfile.avatar} alt="" className="w-full h-full object-cover" />
+                                : displayName[0]?.toUpperCase()
+                              }
+                            </div>
+                            <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white shadow ${isOnline ? 'bg-green-500' : 'bg-gray-300'}`} />
+                          </div>
+                          {/* Имя и статус */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="font-bold text-gray-800 truncate">{displayName}</p>
+                              {isMe && <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full flex-shrink-0">вы</span>}
+                            </div>
+                            <p className="text-xs text-gray-400">{roleLabel}</p>
+                            <p className={`text-xs font-semibold mt-0.5 ${isOnline ? 'text-green-600' : 'text-gray-400'}`}>
+                              {isOnline
+                                ? '● онлайн сейчас'
+                                : lastSeenMin !== null
+                                  ? lastSeenMin < 60 ? `был(а) ${lastSeenMin} мин назад` : `был(а) ${Math.round(lastSeenMin/60)} ч назад`
+                                  : '● не в сети'}
+                            </p>
+                          </div>
+                          {/* Продажи сегодня */}
+                          {todaySales > 0 && (
+                            <div className="text-right flex-shrink-0">
+                              <p className="text-lg font-black text-amber-500">{todaySales}</p>
+                              <p className="text-xs text-gray-400">сегодня</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ВКЛАДКА: График работы (только просмотр) */}
           {teamTab === 'schedule' && (
             <div className="space-y-4">
@@ -6058,22 +6414,41 @@ export default function LikeBirdApp() {
                 </div>
               </div>
 
-              {weekResults.map((emp, idx) => (
-                <div key={emp.name} className={`${idx % 2 === 0 ? 'bg-yellow-50' : 'bg-white'} border-2 border-yellow-300 rounded-xl p-4`}>
-                  <div className="grid grid-cols-4 gap-2 text-center items-center">
-                    <div>
-                      <p className="font-bold">{emp.name}</p>
-                      <p className="text-xs text-gray-500">{emp.shifts} смен</p>
+              {weekResults.map((emp, idx) => {
+                // Найти смены этого сотрудника за неделю по логину
+                const regUser = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]').find(u => (u.name || u.login) === emp.name); } catch { return null; } })();
+                const login = regUser?.login || emp.name;
+                const weekShiftKeys = Object.keys(shiftsData).filter(k => k.startsWith(login + '_'));
+                const weekShifts = weekShiftKeys.map(k => shiftsData[k]).filter(s => s.openTime || s.closeTime);
+                const lastShift = weekShifts[weekShifts.length - 1];
+
+                return (
+                  <div key={emp.name} className={`${idx % 2 === 0 ? 'bg-yellow-50' : 'bg-white'} border-2 border-yellow-300 rounded-xl p-4`}>
+                    <div className="grid grid-cols-4 gap-2 text-center items-center">
+                      <div>
+                        <p className="font-bold">{emp.name}</p>
+                        <p className="text-xs text-gray-500">{emp.shifts} смен</p>
+                      </div>
+                      <div className="font-bold text-lg">{emp.totalHours || '0'}ч</div>
+                      <div className="font-bold text-lg">{emp.sales}</div>
+                      <div className="font-bold text-lg flex items-center justify-center gap-1">
+                        {emp.speed > 2 && <span className="text-yellow-500">⚡</span>}
+                        {emp.speed.toFixed(1)}
+                      </div>
                     </div>
-                    <div className="font-bold text-lg">{emp.totalHours || '0'}ч</div>
-                    <div className="font-bold text-lg">{emp.sales}</div>
-                    <div className="font-bold text-lg flex items-center justify-center gap-1">
-                      {emp.speed > 2 && <span className="text-yellow-500">⚡</span>}
-                      {emp.speed.toFixed(1)}
-                    </div>
+                    {lastShift && (lastShift.openTime || lastShift.closeTime) && (
+                      <div className="mt-2 pt-2 border-t flex items-center justify-center gap-3 text-xs text-gray-500">
+                        {lastShift.openTime && <span>🟢 {lastShift.openTime}</span>}
+                        {lastShift.openTime && lastShift.closeTime && <span>→</span>}
+                        {lastShift.closeTime && <span>🔴 {lastShift.closeTime}</span>}
+                        {!lastShift.closeTime && lastShift.status === 'open' && (
+                          <span className="text-green-600 font-semibold animate-pulse">● сейчас работает</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {weekResults.length === 0 && (
                 <div className="bg-white rounded-xl p-10 text-center shadow">
@@ -6382,9 +6757,9 @@ export default function LikeBirdApp() {
                       <div><p className="text-white/60 text-xs">Моя ЗП</p><p className="font-bold text-lg">{mySalary.toLocaleString()}₽</p></div>
                     </div>
                     {(myCash > 0 || myCashless > 0) && (
-                      <div className="flex gap-4 mt-2 text-sm text-white/80">
-                        {myCash > 0 && <span>💵 {myCash.toLocaleString()}₽</span>}
-                        {myCashless > 0 && <span>💳 {myCashless.toLocaleString()}₽</span>}
+                      <div className="flex gap-4 mt-2 text-sm text-white/80 justify-center">
+                        {myCash > 0 && <span className="bg-white/20 rounded-lg px-3 py-1">💵 {myCash.toLocaleString()}₽</span>}
+                        {myCashless > 0 && <span className="bg-white/20 rounded-lg px-3 py-1">💳 {myCashless.toLocaleString()}₽</span>}
                       </div>
                     )}
                   </div>
@@ -7258,6 +7633,15 @@ export default function LikeBirdApp() {
       const updatedUsers = [...users, newUser];
       localStorage.setItem('likebird-users', JSON.stringify(updatedUsers));
       await fbSave('likebird-users', updatedUsers);
+
+      // Добавляем в employees если ещё нет
+      const currentEmps = (() => { try { return JSON.parse(localStorage.getItem('likebird-employees') || '[]'); } catch { return []; } })();
+      if (!currentEmps.find(e => e.name === newUser.name)) {
+        const newEmp = { id: Date.now(), name: newUser.name, role: newUser.role || 'seller', salaryMultiplier: 1.0, active: true };
+        const updatedEmps = [...currentEmps, newEmp];
+        localStorage.setItem('likebird-employees', JSON.stringify(updatedEmps));
+        await fbSave('likebird-employees', updatedEmps);
+      }
 
       // Помечаем код как использованный — сразу в Firebase
       const updatedCodes = codes.map(c => c.code === validCode.code ? {...c, used: true, usedBy: login.trim(), usedAt: Date.now()} : c);

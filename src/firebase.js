@@ -76,6 +76,25 @@ export const fbGet = async (key) => {
   }
 };
 
+// Presence: записать что пользователь онлайн
+export const fbSetPresence = (login, displayName) => {
+  if (!login) return;
+  set(ref(db, `presence/${login}`), {
+    login,
+    displayName,
+    lastSeen: Date.now(),
+    online: true,
+  }).catch(() => {});
+};
+
+// Presence: подписаться на все онлайн-данные
+export const fbSubscribePresence = (callback) => {
+  const unsubscribe = onValue(ref(db, 'presence'), (snapshot) => {
+    callback(snapshot.exists() ? snapshot.val() : {});
+  });
+  return unsubscribe;
+};
+
 // Подписаться на изменения ключа в Firebase
 // callback(data) вызывается при каждом изменении (включая первую загрузку)
 export const fbSubscribe = (key, callback) => {
