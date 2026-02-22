@@ -352,6 +352,117 @@ const parseYear = (y) => {
   return `20${y}`;
 };
 
+// ════════════════════════════════════════════════════════════════════════
+// KpiGoalsPanel — стабильный компонент для целей сотрудников
+// Определён вне LikeBirdApp чтобы React не пересоздавал его при каждом рендере
+// ════════════════════════════════════════════════════════════════════════
+const KpiGoalRow = ({ label, progress, goalType, empId, setEmployeeGoal, showNotification }) => {
+  const [editing, setEditing] = React.useState(false);
+  const [val, setVal] = React.useState('');
+  return (
+    <div>
+      <div className="flex justify-between items-center text-sm mb-1">
+        <span className="font-medium">{label}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-500 text-xs">
+            {progress
+              ? (goalType === 'revenue'
+                  ? `${progress.current.toLocaleString()}₽ / ${progress.goal.toLocaleString()}₽`
+                  : `${progress.current} / ${progress.goal} шт`)
+              : 'Цель не задана'}
+          </span>
+          <button
+            onClick={() => { setEditing(e => !e); setVal(progress?.goal?.toString() || ''); }}
+            className="text-xs text-purple-600 hover:text-purple-800 px-2 py-1 bg-purple-50 rounded-lg font-semibold border border-purple-200"
+          >
+            {progress ? '✏️ Изменить' : '+ Задать'}
+          </button>
+        </div>
+      </div>
+      {editing && (
+        <div className="flex gap-2 mt-2 mb-3 items-center">
+          <input
+            type="number"
+            value={val}
+            onChange={e => setVal(e.target.value)}
+            placeholder={goalType === 'sales' ? 'Кол-во продаж' : 'Сумма в ₽'}
+            className="flex-1 p-2 border-2 border-purple-300 rounded-lg text-sm focus:border-purple-500 focus:outline-none"
+            autoFocus
+          />
+          <span className="text-gray-400 text-sm">{goalType === 'sales' ? 'шт' : '₽'}</span>
+          <button
+            onClick={() => {
+              const v = parseInt(val);
+              if (v > 0) {
+                setEmployeeGoal(empId, goalType, v, 'month');
+                showNotification('Цель сохранена ✓');
+                setEditing(false);
+              } else {
+                showNotification('Введите значение > 0', 'error');
+              }
+            }}
+            className="px-3 py-2 bg-purple-500 text-white rounded-lg text-sm font-bold hover:bg-purple-600"
+          >✓</button>
+          <button onClick={() => setEditing(false)} className="px-2 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">✕</button>
+        </div>
+      )}
+      {progress && (
+        <div className="mt-1">
+          <div className="h-2.5 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${progress.percentage >= 100 ? 'bg-green-500' : progress.percentage >= 50 ? 'bg-yellow-400' : 'bg-red-400'}`}
+              style={{ width: `${Math.min(100, progress.percentage)}%` }}
+            />
+          </div>
+          <p className="text-xs text-right mt-0.5 text-gray-400">{progress.percentage}%</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const KpiGoalsPanel = ({ employees, employeeKPI, setEmployeeGoal, showNotification, getEmployeeProgress }) => {
+  const activeEmps = employees.filter(e => e.active);
+  if (activeEmps.length === 0) {
+    return (
+      <div className="text-center py-10 bg-white rounded-xl shadow">
+        <p className="text-4xl mb-3">👥</p>
+        <p className="text-gray-500">Нет активных сотрудников</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      {activeEmps.map(emp => (
+        <div key={emp.id} className="bg-white rounded-xl p-4 shadow">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="font-bold text-gray-800">{emp.name}</h4>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Месяц</span>
+          </div>
+          <div className="space-y-4">
+            <KpiGoalRow
+              label="🎯 Продажи"
+              progress={getEmployeeProgress(emp.id, 'sales', 'month')}
+              goalType="sales"
+              empId={emp.id}
+              setEmployeeGoal={setEmployeeGoal}
+              showNotification={showNotification}
+            />
+            <KpiGoalRow
+              label="💰 Выручка"
+              progress={getEmployeeProgress(emp.id, 'revenue', 'month')}
+              goalType="revenue"
+              empId={emp.id}
+              setEmployeeGoal={setEmployeeGoal}
+              showNotification={showNotification}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export default function LikeBirdApp() {
   // ===== АВТОРИЗАЦИЯ =====
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -918,6 +1029,8 @@ export default function LikeBirdApp() {
       Notification.requestPermission();
     }
   }, []);
+
+
 
   // Heartbeat presence — отдельный useEffect зависящий от currentUser
   useEffect(() => {
@@ -1954,15 +2067,8 @@ export default function LikeBirdApp() {
   };
 
   const NewReportView = () => {
-    // Принудительно загружаем актуальные локации из Firebase при открытии
-    useEffect(() => {
-      fbGet('likebird-locations').then(val => {
-        if (Array.isArray(val) && val.length > 0) {
-          setLocations(val);
-          localStorage.setItem('likebird-locations', JSON.stringify(val));
-        }
-      }).catch(() => {});
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Берём locations прямо из состояния родителя (обновляется через Firebase subscription)
+    const activeLocations = locations.filter(l => l.active);
 
     const [localPrice, setLocalPrice] = useState(() => salePrice || '');
     const [localTips, setLocalTips] = useState(() => tipsAmount || '');
@@ -2227,22 +2333,20 @@ export default function LikeBirdApp() {
               </div>
               
               {/* Локация и фото для быстрого режима */}
-              {locations.filter(l => l.active).length > 0 && (
+              {activeLocations.length > 0 && (
                 <div className="bg-white rounded-xl p-4 shadow">
                   <label className="text-sm font-semibold flex items-center gap-2"><MapPin className="w-4 h-4" /> Точка продаж</label>
                   <select value={saleLocation} onChange={(e) => {
                       setSaleLocation(e.target.value);
-                      // Сразу сохраняем выбор в профиль
-                      const _login = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
-                      if (_login && e.target.value) {
-                        const _upd = { ...profilesData, [_login]: { ...(profilesData[_login] || {}), defaultLocation: e.target.value } };
-                        updateProfilesData(_upd);
+                      if (myLogin && e.target.value) {
+                        const upd = { ...profilesData, [myLogin]: { ...(profilesData[myLogin] || {}), defaultLocation: e.target.value } };
+                        updateProfilesData(upd);
                       }
                     }} className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none">
                     <option value="">Не указана</option>
-                    {getCities().map(city => (
+                    {[...new Set(activeLocations.map(l => l.city))].map(city => (
                       <optgroup key={city} label={city}>
-                        {getLocationsByCity(city).filter(l => l.active).map(loc => (
+                        {activeLocations.filter(l => l.city === city).map(loc => (
                           <option key={loc.id} value={`${loc.city} - ${loc.name}`}>{loc.name}</option>
                         ))}
                       </optgroup>
@@ -2381,7 +2485,7 @@ export default function LikeBirdApp() {
                 {localPrice && (<div className="bg-green-50 rounded-xl p-4 border-2 border-green-200"><div className="flex justify-between items-center mb-2"><span className="text-gray-600">Итого:</span><span className="text-2xl font-bold text-green-600">{(parseInt(localPrice || 0) * localQuantity).toLocaleString()}₽</span></div><div className="flex justify-between items-center"><span className="text-gray-600">ЗП:</span><span className="text-lg font-bold text-amber-600">{(calculateSalary(selectedProduct.price, parseInt(localPrice || 0), selectedCategory, parseInt(localTips) || 0, 'normal', salarySettings) * localQuantity).toLocaleString()}₽</span></div></div>)}
                 
                 {/* Локация */}
-                {locations.filter(l => l.active).length > 0 && (
+                {activeLocations.length > 0 && (
                   <div className="bg-white rounded-xl p-4 shadow">
                     <label className="text-sm font-semibold flex items-center gap-2"><MapPin className="w-4 h-4" /> Точка продаж</label>
                     <select value={saleLocation} onChange={(e) => {
@@ -2392,9 +2496,9 @@ export default function LikeBirdApp() {
                       }
                     }} className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none">
                       <option value="">Не указана</option>
-                      {getCities().map(city => (
+                      {[...new Set(activeLocations.map(l => l.city))].map(city => (
                         <optgroup key={city} label={city}>
-                          {getLocationsByCity(city).filter(l => l.active).map(loc => (
+                          {activeLocations.filter(l => l.city === city).map(loc => (
                             <option key={loc.id} value={`${loc.city} - ${loc.name}`}>{loc.name}</option>
                           ))}
                         </optgroup>
@@ -3015,11 +3119,11 @@ export default function LikeBirdApp() {
                         <><span>•</span><span className="font-mono">🕐 {r.date.split(',')[1]?.trim()?.slice(0,5)}</span></>
                       )}
                     </div>
-                    {r.tips > 0 && <p className="text-xs text-amber-600">+{r.tips}₽ чаевые</p>}
+
                     {r.location && <p className="text-xs text-blue-500">📍 {r.location}</p>}
                     {r.photo && <span className="text-xs text-green-500">📷</span>}
                   </div>
-                  <div className="flex items-center gap-2"><div className="text-right"><p className="font-bold text-green-600 text-sm">{r.total}₽</p><p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p></div><button onClick={() => deleteReport(r.id)} className="text-red-400 p-1 hover:text-red-600"><Trash2 className="w-4 h-4" /></button></div>
+                  <div className="flex items-center gap-2"><div className="text-right"><p className="font-bold text-green-600 text-sm">{r.total}₽{r.tips > 0 && <span className="text-amber-500 font-normal"> ({r.tips})</span>}</p><p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p></div><button onClick={() => deleteReport(r.id)} className="text-red-400 p-1 hover:text-red-600"><Trash2 className="w-4 h-4" /></button></div>
                 </div>
                 <FixUnrecognizedButton report={r} />
                 {isBelowBasePrice(r.basePrice, r.salePrice) && r.discountReason && (
@@ -3533,13 +3637,27 @@ export default function LikeBirdApp() {
 
         {/* Вкладки */}
         <div className="sticky top-16 z-10 bg-white shadow-md">
-          <div className="flex overflow-x-auto px-2 py-2 gap-1 scroll-smooth" ref={el => {
-            if (el && adminTab) {
-              // Скроллим к активной вкладке без сброса позиции
-              const active = el.querySelector('[data-active="true"]');
-              if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-            }
-          }} style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}>
+          <div className="relative flex items-center">
+            {/* Кнопка влево */}
+            <button
+              onClick={() => { const el = document.getElementById('admin-tabs-scroll'); if (el) el.scrollBy({ left: -200, behavior: 'smooth' }); }}
+              className="flex-shrink-0 px-2 py-3 text-gray-400 hover:text-purple-600 hover:bg-purple-50 transition-all border-r border-gray-100 z-10 bg-white"
+              style={{minWidth: 32}}>
+              ‹
+            </button>
+            <div id="admin-tabs-scroll"
+              className="flex overflow-x-auto px-1 py-2 gap-1 flex-1"
+              style={{scrollbarWidth: 'thin', scrollbarColor: '#9333ea #f3f4f6', WebkitOverflowScrolling: 'touch'}}
+              ref={el => {
+                if (el && adminTab) {
+                  const active = el.querySelector('[data-active="true"]');
+                  if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+                }
+              }}
+              onWheel={e => {
+                e.preventDefault();
+                e.currentTarget.scrollLeft += e.deltaY || e.deltaX;
+              }}>
             {tabs.map(tab => (
               <button key={tab.id} data-active={adminTab === tab.id}
                 onClick={() => setAdminTab(tab.id)}
@@ -3547,6 +3665,14 @@ export default function LikeBirdApp() {
                 {tab.label}
               </button>
             ))}
+            </div>
+            {/* Кнопка вправо */}
+            <button
+              onClick={() => { const el = document.getElementById('admin-tabs-scroll'); if (el) el.scrollBy({ left: 200, behavior: 'smooth' }); }}
+              className="flex-shrink-0 px-2 py-3 text-gray-400 hover:text-purple-600 hover:bg-purple-50 transition-all border-l border-gray-100 z-10 bg-white"
+              style={{minWidth: 32}}>
+              ›
+            </button>
           </div>
         </div>
 
@@ -4405,125 +4531,14 @@ export default function LikeBirdApp() {
 
                 {/* KPI */}
                 {personnelTab === 'kpi' && (
-                  <div className="space-y-4">
-                    {/* Форма редактирования KPI */}
-                    {kpiEditMode && (
-                      <div className="bg-purple-50 rounded-xl p-4 border-2 border-purple-300">
-                        <h4 className="font-bold mb-3 text-purple-800">
-                          🎯 {kpiEditMode.goalType === 'sales' ? 'Цель по продажам' : 'Цель по выручке'} — {employees.find(e => e.id === kpiEditMode.employeeId)?.name}
-                        </h4>
-                        <div className="flex gap-2">
-                          <input 
-                            type="number" 
-                            value={kpiEditValue} 
-                            onChange={(e) => setKpiEditValue(e.target.value)}
-                            placeholder={kpiEditMode.goalType === 'sales' ? 'Количество продаж' : 'Сумма выручки'}
-                            className="flex-1 p-3 border-2 rounded-lg focus:border-purple-500 focus:outline-none"
-                          />
-                          <span className="flex items-center text-gray-500">{kpiEditMode.goalType === 'revenue' ? '₽' : 'шт'}</span>
-                        </div>
-                        <div className="flex gap-2 mt-3">
-                          <button 
-                            onClick={() => {
-                              if (kpiEditValue && parseInt(kpiEditValue) > 0) {
-                                setEmployeeGoal(kpiEditMode.employeeId, kpiEditMode.goalType, parseInt(kpiEditValue), 'month');
-                                showNotification('Цель установлена ✓');
-                                setKpiEditMode(null);
-                                setKpiEditValue('');
-                              } else {
-                                showNotification('Введите значение больше 0', 'error');
-                              }
-                            }}
-                            className="flex-1 bg-purple-500 text-white py-2 rounded-lg font-medium hover:bg-purple-600"
-                          >
-                            💾 Сохранить
-                          </button>
-                          <button 
-                            onClick={() => { setKpiEditMode(null); setKpiEditValue(''); }}
-                            className="px-4 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300"
-                          >
-                            Отмена
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {employees.filter(e => e.active).map(emp => {
-                      const salesProgress = getEmployeeProgress(emp.id, 'sales', 'month');
-                      const revenueProgress = getEmployeeProgress(emp.id, 'revenue', 'month');
-                      return (
-                        <div key={emp.id} className="bg-white rounded-xl p-4 shadow">
-                          <h4 className="font-bold mb-3">{emp.name}</h4>
-                          <div className="space-y-4">
-                            {/* Продажи */}
-                            <div>
-                              <div className="flex justify-between items-center text-sm mb-1">
-                                <span>🎯 Продажи (месяц)</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{salesProgress ? `${salesProgress.current}/${salesProgress.goal}` : 'Нет цели'}</span>
-                                  <button 
-                                    onClick={() => { 
-                                      setKpiEditMode({ employeeId: emp.id, goalType: 'sales' }); 
-                                      setKpiEditValue(salesProgress?.goal?.toString() || ''); 
-                                    }}
-                                    className="text-xs text-purple-600 hover:text-purple-800 px-2 py-1 bg-purple-50 rounded"
-                                  >
-                                    {salesProgress ? '✏️' : '+ Установить'}
-                                  </button>
-                                </div>
-                              </div>
-                              {salesProgress && (
-                                <>
-                                  <div className="h-4 bg-gray-200 rounded-full overflow-hidden">
-                                    <div className={`h-full rounded-full transition-all ${salesProgress.percentage >= 100 ? 'bg-green-500' : salesProgress.percentage >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                                      style={{ width: `${Math.min(100, salesProgress.percentage)}%` }}>
-                                    </div>
-                                  </div>
-                                  <p className="text-xs text-gray-500 mt-1 text-right">{salesProgress.percentage}% выполнено</p>
-                                </>
-                              )}
-                            </div>
-                            
-                            {/* Выручка */}
-                            <div>
-                              <div className="flex justify-between items-center text-sm mb-1">
-                                <span>💰 Выручка (месяц)</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{revenueProgress ? `${revenueProgress.current.toLocaleString()}/${revenueProgress.goal.toLocaleString()}₽` : 'Нет цели'}</span>
-                                  <button 
-                                    onClick={() => { 
-                                      setKpiEditMode({ employeeId: emp.id, goalType: 'revenue' }); 
-                                      setKpiEditValue(revenueProgress?.goal?.toString() || ''); 
-                                    }}
-                                    className="text-xs text-purple-600 hover:text-purple-800 px-2 py-1 bg-purple-50 rounded"
-                                  >
-                                    {revenueProgress ? '✏️' : '+ Установить'}
-                                  </button>
-                                </div>
-                              </div>
-                              {revenueProgress && (
-                                <>
-                                  <div className="h-4 bg-gray-200 rounded-full overflow-hidden">
-                                    <div className={`h-full rounded-full transition-all ${revenueProgress.percentage >= 100 ? 'bg-green-500' : revenueProgress.percentage >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                                      style={{ width: `${Math.min(100, revenueProgress.percentage)}%` }}>
-                                    </div>
-                                  </div>
-                                  <p className="text-xs text-gray-500 mt-1 text-right">{revenueProgress.percentage}% выполнено</p>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {employees.filter(e => e.active).length === 0 && (
-                      <div className="text-center py-10 bg-white rounded-xl shadow">
-                        <Users className="w-16 h-16 mx-auto text-gray-300 mb-3" />
-                        <p className="text-gray-500">Нет активных сотрудников</p>
-                      </div>
-                    )}
-                  </div>
+                  // KPI: inline-форма без вложенных компонентов (чтобы state не сбрасывался)
+                  <KpiGoalsPanel
+                    employees={employees}
+                    employeeKPI={employeeKPI}
+                    setEmployeeGoal={setEmployeeGoal}
+                    showNotification={showNotification}
+                    getEmployeeProgress={getEmployeeProgress}
+                  />
                 )}
               </div>
             );
@@ -6415,12 +6430,35 @@ export default function LikeBirdApp() {
               </div>
 
               {weekResults.map((emp, idx) => {
-                // Найти смены этого сотрудника за неделю по логину
+                // Суммируем реальные часы из shiftsData за неделю
                 const regUser = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]').find(u => (u.name || u.login) === emp.name); } catch { return null; } })();
                 const login = regUser?.login || emp.name;
-                const weekShiftKeys = Object.keys(shiftsData).filter(k => k.startsWith(login + '_'));
-                const weekShifts = weekShiftKeys.map(k => shiftsData[k]).filter(s => s.openTime || s.closeTime);
-                const lastShift = weekShifts[weekShifts.length - 1];
+                const weekAgoTs = weekAgo.getTime();
+                let totalMinutes = 0;
+                let isCurrentlyOpen = false;
+                Object.entries(shiftsData).forEach(([key, shift]) => {
+                  if (!key.startsWith(login + '_')) return;
+                  if (!shift.openTime) return;
+                  // Проверяем что смена за последнюю неделю
+                  const dateStr = key.replace(login + '_', ''); // DD.MM.YYYY
+                  const [d, m, y] = dateStr.split('.');
+                  const shiftDate = y ? new Date(parseInt('20'+y), parseInt(m)-1, parseInt(d)) : new Date(0);
+                  if (shiftDate.getTime() < weekAgoTs) return;
+                  // Считаем часы
+                  if (shift.openTime && shift.closeTime) {
+                    const [oh, om] = shift.openTime.split(':').map(Number);
+                    const [ch, cm] = shift.closeTime.split(':').map(Number);
+                    const mins = (ch * 60 + cm) - (oh * 60 + om);
+                    if (mins > 0) totalMinutes += mins;
+                  } else if (shift.status === 'open') {
+                    isCurrentlyOpen = true;
+                  }
+                });
+                const hours = Math.floor(totalMinutes / 60);
+                const mins = totalMinutes % 60;
+                const timeLabel = totalMinutes > 0
+                  ? (mins > 0 ? `${hours}ч ${mins}м` : `${hours}ч`)
+                  : (isCurrentlyOpen ? '...' : '—');
 
                 return (
                   <div key={emp.name} className={`${idx % 2 === 0 ? 'bg-yellow-50' : 'bg-white'} border-2 border-yellow-300 rounded-xl p-4`}>
@@ -6429,23 +6467,16 @@ export default function LikeBirdApp() {
                         <p className="font-bold">{emp.name}</p>
                         <p className="text-xs text-gray-500">{emp.shifts} смен</p>
                       </div>
-                      <div className="font-bold text-lg">{emp.totalHours || '0'}ч</div>
+                      <div className="font-bold text-lg flex flex-col items-center">
+                        {timeLabel}
+                        {isCurrentlyOpen && <span className="text-xs text-green-500 animate-pulse font-normal">● работает</span>}
+                      </div>
                       <div className="font-bold text-lg">{emp.sales}</div>
                       <div className="font-bold text-lg flex items-center justify-center gap-1">
                         {emp.speed > 2 && <span className="text-yellow-500">⚡</span>}
                         {emp.speed.toFixed(1)}
                       </div>
                     </div>
-                    {lastShift && (lastShift.openTime || lastShift.closeTime) && (
-                      <div className="mt-2 pt-2 border-t flex items-center justify-center gap-3 text-xs text-gray-500">
-                        {lastShift.openTime && <span>🟢 {lastShift.openTime}</span>}
-                        {lastShift.openTime && lastShift.closeTime && <span>→</span>}
-                        {lastShift.closeTime && <span>🔴 {lastShift.closeTime}</span>}
-                        {!lastShift.closeTime && lastShift.status === 'open' && (
-                          <span className="text-green-600 font-semibold animate-pulse">● сейчас работает</span>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}
