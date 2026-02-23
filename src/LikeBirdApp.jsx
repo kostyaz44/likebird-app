@@ -205,10 +205,9 @@ const calculateSalary = (basePrice, salePrice, category, tips = 0, adj = 'normal
     }
   }
   
-  // Бонус за птичек (если включен)
+  // Бонус за птичек (если включен) — фиксированные 50₽ за каждую продажу птички
   if (bonusForBirds && category === 'Птички-свистульки') {
-    const diff = salePrice - basePrice;
-    if (diff > 0) base += diff;
+    base += 50;
   }
   
   // Вычет при продаже ниже базовой цены
@@ -247,8 +246,8 @@ const findProductByPrice = (text, price) => {
   const l = text.toLowerCase().trim();
   for (const [keyword, rule] of Object.entries(AMBIGUOUS_PRODUCTS)) {
     if (l.includes(keyword)) {
-      if (price >= rule.above) return ALL_PRODUCTS.find(p => p.name === rule.nameAbove);
-      return ALL_PRODUCTS.find(p => p.name === rule.name);
+      if (price >= rule.above) return DYNAMIC_ALL_PRODUCTS.find(p => p.name === rule.nameAbove);
+      return DYNAMIC_ALL_PRODUCTS.find(p => p.name === rule.name);
     }
   }
   let found = null, best = 0;
@@ -480,9 +479,7 @@ export default function LikeBirdApp() {
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   
   // ===== SYNC =====
-  const [syncUrl, setSyncUrl] = useState('');
-  const [syncStatus, setSyncStatus] = useState('idle'); // idle, syncing, success, error
-  const [lastSyncTime, setLastSyncTime] = useState(null);
+
   
   // ===== Состояния перенесённые на уровень компонента (FIX: useState в IIFE) =====
   const [analyticsPeriod, setAnalyticsPeriod] = useState(7);
@@ -518,6 +515,8 @@ export default function LikeBirdApp() {
   const [saleLocationGlobal, setSaleLocationGlobal] = useState('');
   const [notification, setNotification] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
+  // FIX: React-стейт для модала расходов (заменяет DOM-манипуляцию)
+  const [expenseModal, setExpenseModal] = useState(null); // { employee: string }
   const [partnerStock, setPartnerStock] = useState({});
   const [totalBirds, setTotalBirds] = useState(0);
   const [scheduleData, setScheduleData] = useState({});
@@ -627,12 +626,12 @@ export default function LikeBirdApp() {
 
 🎁 Чаевые — 100% ваши!
 
-🐦 Бонус за птичек-свистулек — +50₽ за каждую!
+🐦 Бонус за птичек-свистулек — +50₽ за каждую продажу!
 
-💡 Формула: Базовая ставка + Чаевые + Бонус за птичек
+💡 Формула: Базовая ставка + Чаевые + Бонус за птичек (50₽)
 
 Пример:
-Снегирь 600₽ + чаевые 100₽ = 100₽ (база) + 100₽ (чаевые) + 50₽ (птичка) = 250₽`,
+Снегирь продан за 600₽ + чаевые от клиента 100₽ = 100₽ (база) + 100₽ (чаевые) + 50₽ (птичка) = 250₽`,
       isPinned: false
     },
     {
@@ -742,6 +741,9 @@ export default function LikeBirdApp() {
   // Системные уведомления для пользователей (Firebase-synced)
   const [userNotifications, setUserNotifications] = useState([]);
 
+  // FIX: Коды приглашения — перенесено из AdminView в глобальное состояние для Firebase-синхронизации
+  const [inviteCodes, setInviteCodes] = useState([]);
+
   // Кастомные достижения (созданные администратором)
   const [customAchievements, setCustomAchievements] = useState([]);
   // Смены сотрудников: { 'login_date': { openTime, closeTime, status, confirmedAt } }
@@ -792,11 +794,6 @@ export default function LikeBirdApp() {
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    
-    // ===== SYNC: загружаем URL и время последней синхронизации =====
-    const savedSyncUrl = localStorage.getItem('likebird-sync-url');
-    if (savedSyncUrl) setSyncUrl(savedSyncUrl);
-    setLastSyncTime(SyncManager.getLastSync());
     
     // Загрузка reports с миграцией старых данных
     try {
@@ -879,6 +876,7 @@ export default function LikeBirdApp() {
     loadJson('likebird-writeoffs', setWriteOffs, []);
     loadJson('likebird-autoorder', setAutoOrderList, []);
     loadJson('likebird-kpi', setEmployeeKPI, {});
+    loadJson('likebird-invite-codes', setInviteCodes, []);
     loadJson('likebird-notifications', setUserNotifications, []);
     loadJson('likebird-custom-achievements', setCustomAchievements, []);
     loadJson('likebird-shifts', setShiftsData, {});
@@ -897,9 +895,15 @@ export default function LikeBirdApp() {
   useEffect(() => {
     // Маппинг: ключ localStorage → React-setter
     // Firebase уведомляет нас об изменениях от ДРУГИХ устройств
+    // FIX: Обёртка для подписок — игнорирует обновления для ключей, которые мы сейчас сами записываем
+    const guardedSubscribe = (key, callback) => fbSubscribe(key, (val) => {
+      if (fbWriteKeys.current.has(key)) return; // Игнорируем echo от нашей же записи
+      callback(val);
+    });
+
     const subscriptions = [
       // Отчёты (с миграцией старого формата)
-      fbSubscribe('likebird-reports', (val) => {
+      guardedSubscribe('likebird-reports', (val) => {
         const migrated = Array.isArray(val) ? val.map(r => {
           if (r.product && typeof r.product === 'object' && r.product.name) return { ...r, product: r.product.name };
           return r;
@@ -907,19 +911,19 @@ export default function LikeBirdApp() {
         setReports(migrated);
         localStorage.setItem('likebird-reports', JSON.stringify(migrated));
       }),
-      fbSubscribe('likebird-expenses', (val) => { setExpenses(val); localStorage.setItem('likebird-expenses', JSON.stringify(val)); }),
-      fbSubscribe('likebird-stock', (val) => { setStock(val); localStorage.setItem('likebird-stock', JSON.stringify(val)); }),
-      fbSubscribe('likebird-given', (val) => { setGivenToAdmin(val); localStorage.setItem('likebird-given', JSON.stringify(val)); }),
-      fbSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); }),
-      fbSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); localStorage.setItem('likebird-owncard', JSON.stringify(val)); }),
-      fbSubscribe('likebird-partners', (val) => { setPartnerStock(val); localStorage.setItem('likebird-partners', JSON.stringify(val)); }),
-      fbSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); }),
-      fbSubscribe('likebird-schedule', (val) => { setScheduleData(val); localStorage.setItem('likebird-schedule', JSON.stringify(val)); }),
-      fbSubscribe('likebird-events', (val) => { setEventsCalendar(val); localStorage.setItem('likebird-events', JSON.stringify(val)); }),
-      fbSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); localStorage.setItem('likebird-manuals', JSON.stringify(val)); } }),
-      fbSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); }),
-      fbSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); localStorage.setItem('likebird-admin-password', JSON.stringify(val)); }),
-      fbSubscribe('likebird-employees', (val) => {
+      guardedSubscribe('likebird-expenses', (val) => { setExpenses(val); localStorage.setItem('likebird-expenses', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-stock', (val) => { setStock(val); localStorage.setItem('likebird-stock', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-given', (val) => { setGivenToAdmin(val); localStorage.setItem('likebird-given', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); localStorage.setItem('likebird-owncard', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-partners', (val) => { setPartnerStock(val); localStorage.setItem('likebird-partners', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-schedule', (val) => { setScheduleData(val); localStorage.setItem('likebird-schedule', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-events', (val) => { setEventsCalendar(val); localStorage.setItem('likebird-events', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); localStorage.setItem('likebird-manuals', JSON.stringify(val)); } }),
+      guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); localStorage.setItem('likebird-admin-password', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-employees', (val) => {
         if (!Array.isArray(val)) return;
         // Синхронизируем employees с registered users: добавляем недостающих
         const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
@@ -933,22 +937,22 @@ export default function LikeBirdApp() {
         setEmployees(merged);
         localStorage.setItem('likebird-employees', JSON.stringify(merged));
       }),
-      fbSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); }),
-      fbSubscribe('likebird-audit-log', (val) => { setAuditLog(val); localStorage.setItem('likebird-audit-log', JSON.stringify(val)); }),
-      fbSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); localStorage.setItem('likebird-custom-products', JSON.stringify(val)); }),
-      fbSubscribe('likebird-locations', (val) => { setLocations(val); localStorage.setItem('likebird-locations', JSON.stringify(val)); }),
-      fbSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); }),
-      fbSubscribe('likebird-penalties', (val) => { setPenalties(val); localStorage.setItem('likebird-penalties', JSON.stringify(val)); }),
-      fbSubscribe('likebird-bonuses', (val) => { setBonuses(val); localStorage.setItem('likebird-bonuses', JSON.stringify(val)); }),
-      fbSubscribe('likebird-timeoff', (val) => { setTimeOff(val); localStorage.setItem('likebird-timeoff', JSON.stringify(val)); }),
-      fbSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); localStorage.setItem('likebird-ratings', JSON.stringify(val)); }),
-      fbSubscribe('likebird-chat', (val) => { setChatMessages(val); localStorage.setItem('likebird-chat', JSON.stringify(val)); }),
-      fbSubscribe('likebird-stock-history', (val) => { setStockHistory(val); localStorage.setItem('likebird-stock-history', JSON.stringify(val)); }),
-      fbSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); }),
-      fbSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
-      fbSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
-      fbSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } }),
-      fbSubscribe('likebird-notifications', (val) => {
+      guardedSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-audit-log', (val) => { setAuditLog(val); localStorage.setItem('likebird-audit-log', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); localStorage.setItem('likebird-custom-products', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-locations', (val) => { setLocations(val); localStorage.setItem('likebird-locations', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-penalties', (val) => { setPenalties(val); localStorage.setItem('likebird-penalties', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-bonuses', (val) => { setBonuses(val); localStorage.setItem('likebird-bonuses', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-timeoff', (val) => { setTimeOff(val); localStorage.setItem('likebird-timeoff', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); localStorage.setItem('likebird-ratings', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-chat', (val) => { setChatMessages(val); localStorage.setItem('likebird-chat', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-stock-history', (val) => { setStockHistory(val); localStorage.setItem('likebird-stock-history', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } }),
+      guardedSubscribe('likebird-notifications', (val) => {
         if (!Array.isArray(val)) return;
         localStorage.setItem('likebird-notifications', JSON.stringify(val));
         setUserNotifications(val);
@@ -989,9 +993,9 @@ export default function LikeBirdApp() {
           }
         } catch {}
       }),
-      fbSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } }),
-      fbSubscribe('likebird-profiles', (val) => { setProfilesData(val); localStorage.setItem('likebird-profiles', JSON.stringify(val)); }),
-      fbSubscribe('likebird-users', (val) => {
+      guardedSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } }),
+      guardedSubscribe('likebird-profiles', (val) => { setProfilesData(val); localStorage.setItem('likebird-profiles', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-users', (val) => {
         if (!Array.isArray(val)) return;
         localStorage.setItem('likebird-users', JSON.stringify(val));
         // Обновляем currentUser если его данные изменились (например роль)
@@ -1004,12 +1008,13 @@ export default function LikeBirdApp() {
           }
         } catch {}
       }),
-      fbSubscribe('likebird-shifts', (val) => {
+      guardedSubscribe('likebird-shifts', (val) => {
         if (val && typeof val === 'object') { setShiftsData(val); localStorage.setItem('likebird-shifts', JSON.stringify(val)); }
       }),
-      fbSubscribe('likebird-invite-codes', (val) => {
+      guardedSubscribe('likebird-invite-codes', (val) => {
         if (!Array.isArray(val)) return;
         localStorage.setItem('likebird-invite-codes', JSON.stringify(val));
+        setInviteCodes(val); // FIX: обновляем глобальное состояние
       }),
     ];
 
@@ -1070,13 +1075,81 @@ export default function LikeBirdApp() {
     }
   }, [stock]);
 
+  // ===== Автоматическое начисление достижений при изменении отчётов =====
+  useEffect(() => {
+    if (!currentUser?.login || !customAchievements.length) return;
+    // Для каждого активного пользователя проверяем автоматические достижения
+    const allUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+    let anyGranted = false;
+    const newGranted = { ...achievementsGranted };
+
+    allUsers.forEach(u => {
+      const login = u.login;
+      const empName = (profilesData[login]?.displayName) || u.name || u.login;
+      const userReports = reports.filter(r => r.employee === empName && !r.isUnrecognized);
+      const totalRevenue = userReports.reduce((s, r) => s + r.total, 0);
+
+      customAchievements.forEach(ach => {
+        if (ach.condType === 'manual') return; // ручные — только через админ
+        const val = Number(ach.condValue) || 0;
+        const alreadyGranted = (newGranted[ach.id] || []).includes(login);
+        if (alreadyGranted) return;
+
+        let done = false;
+        if (ach.condType === 'sales_count') done = userReports.length >= val;
+        else if (ach.condType === 'revenue') done = totalRevenue >= val;
+        else if (ach.condType === 'big_sale') done = userReports.some(r => r.salePrice >= val);
+        else if (ach.condType === 'tips_count') done = userReports.filter(r => r.tips > 0).length >= val;
+
+        if (done) {
+          newGranted[ach.id] = [...(newGranted[ach.id] || []), login];
+          anyGranted = true;
+          // Уведомление сотруднику
+          const notifKey = 'likebird-notifications';
+          const existing = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
+          const notif = { id: Date.now() + Math.random(), type: 'achievement', login, title: `🏆 Новое достижение: ${ach.title}`, message: ach.desc || '', icon: ach.icon || '🏆', timestamp: Date.now(), read: false };
+          const updated = [notif, ...existing.slice(0, 49)];
+          localStorage.setItem(notifKey, JSON.stringify(updated));
+          // Сохраняем в Firebase чтобы уведомление дошло до устройства сотрудника
+          fbSave(notifKey, updated);
+          // Бонус если задан
+          if (ach.bonusAmount) {
+            // FIX: Ищем числовой id сотрудника по имени (ранее записывался login-строка, не находился в getEmployeeBonuses)
+            const matchedEmp = employees.find(e => e.name === empName);
+            const empId = matchedEmp ? matchedEmp.id : login;
+            const bonus = { id: Date.now() + Math.random(), employeeId: empId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
+            const newBonuses = [...bonuses, bonus];
+            setBonuses(newBonuses);
+            localStorage.setItem('likebird-bonuses', JSON.stringify(newBonuses));
+            fbSave('likebird-bonuses', newBonuses);
+          }
+        }
+      });
+    });
+
+    if (anyGranted) {
+      setAchievementsGranted(newGranted);
+      localStorage.setItem('likebird-achievements-granted', JSON.stringify(newGranted));
+      fbSave('likebird-achievements-granted', newGranted);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports, customAchievements]);
+
   // ===== Реф для блокировки Firebase-обновлений пока мы сами пишем =====
   const fbWriting = useRef(false);
+  const fbWriteKeys = useRef(new Set());
 
   // Сохраняет данные: локально + в Firebase (для всех устройств)
+  // FIX: устанавливает guard чтобы подписки не перезаписывали данные обратно
   const save = (key, data) => {
+    fbWriteKeys.current.add(key);
+    fbWriting.current = true;
     localStorage.setItem(key, JSON.stringify(data));
     fbSave(key, data);
+    setTimeout(() => {
+      fbWriteKeys.current.delete(key);
+      if (fbWriteKeys.current.size === 0) fbWriting.current = false;
+    }, 500);
   };
   const updateReports = (r) => { setReports(r); save('likebird-reports', r); };
   const updateStock = (s) => { setStock(s); save('likebird-stock', s); };
@@ -1084,6 +1157,13 @@ export default function LikeBirdApp() {
   const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings);
   const showNotification = (message, type = 'success') => { setNotification({ message, type }); setTimeout(() => setNotification(null), 3000); };
   const showConfirm = (message, onConfirm) => setConfirmDialog({ message, onConfirm });
+  
+  // FIX: React-стейт для универсального модала ввода (заменяет DOM-манипуляцию)
+  const [inputModal, setInputModal] = useState(null); // { title, placeholder, defaultValue, onSave }
+  
+  const showInputModal = ({ title, placeholder, defaultValue = '', onSave }) => {
+    setInputModal({ title, placeholder, defaultValue, onSave });
+  };
   const updateOwnCard = (emp, date, value) => { const u = {...ownCardTransfers, [`${emp}_${date}`]: value}; setOwnCardTransfers(u); save('likebird-owncard', u); };
   const getOwnCard = (emp, date) => ownCardTransfers[`${emp}_${date}`] || false;
 
@@ -1295,7 +1375,7 @@ export default function LikeBirdApp() {
     const now = new Date();
     const periodStart = new Date();
     if (period === 'week') periodStart.setDate(now.getDate() - 7);
-    else if (period === 'month') periodStart.setMonth(now.getMonth() - 1);
+    else if (period === 'month') periodStart.setDate(now.getDate() - 30); // FIX: единообразно 30 дней
     
     const empReports = reports.filter(r => {
       const emp = employees.find(e => e.id === employeeId);
@@ -1322,7 +1402,7 @@ export default function LikeBirdApp() {
   
   // Проверка низкого остатка и создание уведомлений
   const checkLowStock = () => {
-    const lowItems = Object.entries(stock).filter(([name, data]) => data.count <= data.minStock && data.count >= 0);
+    const lowItems = Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= data.minStock);
     if (lowItems.length > 0) {
       addSystemNotification('stock', `Низкий остаток: ${lowItems.map(([n]) => n).join(', ')}`, 'high');
     }
@@ -1519,37 +1599,8 @@ export default function LikeBirdApp() {
   };
 
   const addExpense = (emp) => {
-    // Используем модальное окно вместо prompt()
-    const descEl = document.createElement('div');
-    descEl.innerHTML = `
-      <div style="position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;">
-        <div style="background:white;border-radius:16px;padding:24px;max-width:360px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
-          <h3 style="font-size:18px;font-weight:700;margin-bottom:16px;">📝 Новый расход</h3>
-          <input id="exp-desc" style="width:100%;padding:12px;border:2px solid #e5e7eb;border-radius:8px;margin-bottom:12px;box-sizing:border-box;" placeholder="Описание расхода" />
-          <input id="exp-amt" type="number" style="width:100%;padding:12px;border:2px solid #e5e7eb;border-radius:8px;margin-bottom:16px;box-sizing:border-box;" placeholder="Сумма" />
-          <div style="display:flex;gap:12px;">
-            <button id="exp-cancel" style="flex:1;padding:12px;background:#e5e7eb;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Отмена</button>
-            <button id="exp-save" style="flex:1;padding:12px;background:#f59e0b;color:white;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Сохранить</button>
-          </div>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(descEl);
-    const descInput = descEl.querySelector('#exp-desc');
-    const amtInput = descEl.querySelector('#exp-amt');
-    descInput.focus();
-    const cleanup = () => { document.body.removeChild(descEl); };
-    descEl.querySelector('#exp-cancel').onclick = cleanup;
-    descEl.querySelector('#exp-save').onclick = () => {
-      const desc = descInput.value.trim();
-      const amt = parseInt(amtInput.value);
-      if (!desc) { showNotification('Введите описание', 'error'); return; }
-      if (!amt || isNaN(amt)) { showNotification('Неверная сумма', 'error'); return; }
-      const newExp = { id: Date.now(), date: new Date().toLocaleString('ru-RU'), amount: amt, description: desc, employee: emp };
-      const updated = [newExp, ...expenses]; setExpenses(updated); save('likebird-expenses', updated);
-      showNotification('Расход добавлен');
-      cleanup();
-    };
+    // FIX: Используем React-стейт вместо DOM-манипуляции
+    setExpenseModal({ employee: emp });
   };
 
   const deleteExpense = (id) => {
@@ -1614,17 +1665,40 @@ export default function LikeBirdApp() {
     if (recognized.length > 0 || unrecognized.length > 0) showNotification(`Распознано: ${recognized.length}, нераспознано: ${unrecognized.length}`);
   }, [textReport]);
 
-  const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => data.count <= data.minStock && data.count >= 0).map(([name, data]) => ({name, ...data}));
+  // FIX: Условие count > 0 — при инициализации все count=0, не считаем их «низким остатком»
+  const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= data.minStock).map(([name, data]) => ({name, ...data}));
   
   const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); const sales = {}; reports.filter(r => { const [d, m, y] = r.date.split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + r.quantity; }); return sales; };
 
-  const exportData = () => {
-    const data = SyncManager.exportAll();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `likebird-backup-${formatDate(new Date())}.json`; a.click();
-    URL.revokeObjectURL(url);
-    showNotification('Полный бэкап сохранён');
+  const exportData = async () => {
+    showNotification('⏳ Получаем актуальные данные из Firebase...');
+    try {
+      // Тянем свежие данные из Firebase для всех ключей
+      const fbData = {};
+      const keys = [...SyncManager.ALL_KEYS];
+      await Promise.all(keys.map(async (key) => {
+        try {
+          const val = await fbGet(key);
+          if (val !== null && val !== undefined) fbData[key] = val;
+        } catch {}
+      }));
+      // Мержим: Firebase приоритетнее localStorage
+      const localData = SyncManager.exportAll();
+      const merged = { ...localData, ...fbData, _version: 2, _exportDate: new Date().toISOString(), _source: 'firebase+local' };
+      const blob = new Blob([JSON.stringify(merged, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `likebird-backup-${formatDate(new Date())}.json`; a.click();
+      URL.revokeObjectURL(url);
+      showNotification('✅ Полный бэкап из Firebase сохранён');
+    } catch (err) {
+      // Fallback на localStorage
+      const data = SyncManager.exportAll();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `likebird-backup-${formatDate(new Date())}.json`; a.click();
+      URL.revokeObjectURL(url);
+      showNotification('⚠️ Бэкап из локального хранилища (Firebase недоступен)');
+    }
   };
 
   const importData = (file) => {
@@ -1661,22 +1735,6 @@ export default function LikeBirdApp() {
       }
     };
     reader.readAsText(file);
-  };
-
-  const handleSync = async () => {
-    if (!syncUrl) { showNotification('Укажите URL сервера синхронизации', 'error'); return; }
-    setSyncStatus('syncing');
-    const result = await SyncManager.syncWithServer(syncUrl);
-    if (result.success) {
-      setSyncStatus('success');
-      setLastSyncTime(SyncManager.getLastSync());
-      showNotification('Данные синхронизированы');
-      setTimeout(() => setSyncStatus('idle'), 3000);
-    } else {
-      setSyncStatus('error');
-      showNotification('Ошибка синхронизации: ' + result.error, 'error');
-      setTimeout(() => setSyncStatus('idle'), 3000);
-    }
   };
 
   const clearAllData = () => {
@@ -1748,6 +1806,54 @@ export default function LikeBirdApp() {
 
   const ConfirmDialog = () => { if (!confirmDialog) return null; return (<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-2xl"><p className="text-lg mb-4">{confirmDialog.message}</p><div className="flex gap-3"><button onClick={() => setConfirmDialog(null)} className="flex-1 py-2 bg-gray-200 rounded-lg font-semibold">Отмена</button><button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 py-2 bg-red-500 text-white rounded-lg font-semibold">Подтвердить</button></div></div></div>); };
   const Notification = () => { if (!notification) return null; return (<div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white`}>{notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}{notification.message}</div>); };
+
+  // FIX: React-компонент модала расходов (заменяет DOM-манипуляцию)
+  const ExpenseModal = () => {
+    const [desc, setDesc] = useState('');
+    const [amt, setAmt] = useState('');
+    if (!expenseModal) return null;
+    const handleSave = () => {
+      if (!desc.trim()) { showNotification('Введите описание', 'error'); return; }
+      const amtNum = parseInt(amt);
+      if (!amtNum || isNaN(amtNum)) { showNotification('Неверная сумма', 'error'); return; }
+      const newExp = { id: Date.now(), date: new Date().toLocaleString('ru-RU'), amount: amtNum, description: desc.trim(), employee: expenseModal.employee };
+      const updated = [newExp, ...expenses]; setExpenses(updated); save('likebird-expenses', updated);
+      showNotification('Расход добавлен');
+      setExpenseModal(null);
+    };
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+          <h3 className="text-lg font-bold mb-4">📝 Новый расход</h3>
+          <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Описание расхода" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-3 focus:border-amber-500 focus:outline-none" autoFocus />
+          <input type="number" value={amt} onChange={e => setAmt(e.target.value)} placeholder="Сумма" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" onKeyDown={e => { if (e.key === 'Enter') handleSave(); }} />
+          <div className="flex gap-3">
+            <button onClick={() => setExpenseModal(null)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
+            <button onClick={handleSave} className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-semibold hover:bg-amber-600">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // FIX: React-компонент модала ввода (заменяет DOM showInputModal)
+  const InputModal = () => {
+    const [val, setVal] = useState(inputModal?.defaultValue || '');
+    if (!inputModal) return null;
+    const handleSave = () => { const v = val.trim(); if (v) { inputModal.onSave(v); } setInputModal(null); };
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+          <h3 className="text-lg font-bold mb-3">{inputModal.title}</h3>
+          <input type="text" value={val} onChange={e => setVal(e.target.value)} placeholder={inputModal.placeholder} className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" autoFocus onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setInputModal(null); }} />
+          <div className="flex gap-3">
+            <button onClick={() => setInputModal(null)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
+            <button onClick={handleSave} className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-semibold hover:bg-amber-600">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const MenuView = () => {
     const todayAllReports = getReportsByDate(formatDate(new Date()));
@@ -1850,17 +1956,6 @@ export default function LikeBirdApp() {
             </button>
           </div>
         )}
-
-        {/* Синхронизация */}
-        <div className="bg-white rounded-xl p-4 shadow">
-          <h3 className="font-bold mb-3 flex items-center gap-2"><RefreshCw className="w-5 h-5 text-blue-500" />Синхронизация</h3>
-          <p className="text-sm text-gray-500 mb-3">Настройте URL сервера для синхронизации данных между устройствами</p>
-          <input type="url" value={syncUrl} onChange={(e) => { setSyncUrl(e.target.value); localStorage.setItem('likebird-sync-url', e.target.value); }} placeholder="https://your-server.com/api" className="w-full p-3 border-2 rounded-lg mb-3 text-sm focus:border-blue-500 focus:outline-none" />
-          <button onClick={handleSync} disabled={syncStatus === 'syncing'} className={`w-full py-3 rounded-lg font-semibold ${syncStatus === 'syncing' ? 'bg-blue-300 text-white' : syncStatus === 'success' ? 'bg-green-500 text-white' : syncStatus === 'error' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white hover:bg-blue-600'}`}>
-            {syncStatus === 'syncing' ? '⏳ Синхронизация...' : syncStatus === 'success' ? '✅ Синхронизировано' : syncStatus === 'error' ? '❌ Ошибка' : '🔄 Синхронизировать'}
-          </button>
-          {lastSyncTime && <p className="text-xs text-gray-400 mt-2 text-center">Последняя: {new Date(lastSyncTime).toLocaleString('ru-RU')}</p>}
-        </div>
 
         <div className="bg-white rounded-xl p-4 shadow">
           <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-green-500" />Экспорт данных</h3>
@@ -2092,33 +2187,17 @@ export default function LikeBirdApp() {
     
     // Проверка: цена ниже базы?
     const isBelowBase = selectedProduct && localPrice && parseInt(localPrice) < selectedProduct.price;
-    // Расчёт наценки (чаевые = цена продажи - база, если > 0)
-    const calculatedTips = selectedProduct && localPrice ? Math.max(0, parseInt(localPrice) - selectedProduct.price) : 0;
     
-    // Обработчик изменения цены - автоматически пересчитывает чаевые
+    // FIX: Чаевые и цена продажи — полностью независимые поля.
+    // Чаевые — это доплата от клиента СВЕРХ цены, вводятся вручную.
+    // Наценка (продал дороже базы) — НЕ чаевые.
     const handlePriceChange = (newPrice) => {
       setLocalPrice(newPrice);
-      if (selectedProduct && newPrice) {
-        const priceNum = parseInt(newPrice);
-        if (priceNum > selectedProduct.price) {
-          // Если цена выше базы - чаевые = разница
-          setLocalTips((priceNum - selectedProduct.price).toString());
-        } else {
-          // Если цена <= базы - чаевые = 0
-          setLocalTips('0');
-        }
-      } else {
-        setLocalTips('0');
-      }
+      // Не трогаем чаевые при изменении цены — они вводятся отдельно
     };
     
     // Обработчик изменения чаевых вручную
     const handleTipsChange = (newTips) => {
-      if (isBelowBase) {
-        // Нельзя указать чаевые при цене ниже базы
-        showNotification('При скидке чаевые невозможны', 'error');
-        return;
-      }
       setLocalTips(newTips);
     };
     
@@ -2173,8 +2252,8 @@ export default function LikeBirdApp() {
         productName = textWithoutTips.replace(/\s*\d+\s*р?$/i, '').trim();
       }
       
-      // Ищем товар
-      const product = ALL_PRODUCTS.find(p => 
+      // FIX: Используем DYNAMIC_ALL_PRODUCTS чтобы находить кастомные товары
+      const product = DYNAMIC_ALL_PRODUCTS.find(p => 
         p.name.toLowerCase() === productName.toLowerCase() ||
         p.aliases.some(a => a === productName.toLowerCase())
       );
@@ -2256,11 +2335,6 @@ export default function LikeBirdApp() {
     };
     
     const handleSave = () => {
-      // Проверяем: если цена ниже базы и чаевые > 0, то ошибка
-      if (selectedProduct && localPrice && parseInt(localPrice) < selectedProduct.price && parseInt(localTips || 0) > 0) {
-        showNotification('Чаевые при продаже ниже базы невозможны', 'error');
-        return;
-      }
       // Сохраняем точку в профиль пользователя
       if (saleLocation) {
         const login = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
@@ -2278,7 +2352,7 @@ export default function LikeBirdApp() {
       saveReport({
         employeeName: localName,
         salePrice: localPrice,
-        tipsAmount: isBelowBase ? '0' : localTips,
+        tipsAmount: localTips,
         mixedCash: localMixedCash,
         mixedCashless: localMixedCashless,
         selectedProduct: selectedProduct,
@@ -2908,7 +2982,7 @@ export default function LikeBirdApp() {
               </div>
               <div className="text-right">
                 <p className="text-2xl font-bold text-amber-700">{totalBirds > 0 ? totalBirds : '—'} <span className="text-lg text-amber-500">/ {totalBirdsInStock}</span></p>
-                <button onClick={() => { const val = prompt('Общее количество птичек:', totalBirds); if (val !== null) updateTotalBirdsManual(val); }} className="text-xs text-amber-600 underline">изменить</button>
+                <button onClick={() => showInputModal({ title: '🐦 Общее количество птичек', placeholder: 'Введите число', defaultValue: String(totalBirds), onSave: (v) => updateTotalBirdsManual(v) })} className="text-xs text-amber-600 underline">изменить</button>
               </div>
             </div>
           </div>
@@ -2943,14 +3017,15 @@ export default function LikeBirdApp() {
                     </div>
                   ))
                 )}
-                <button onClick={() => {
-                  const name = prompt('Имя партнёра:');
-                  if (name) {
+                <button onClick={() => showInputModal({
+                  title: '👥 Новый партнёр-реализатор',
+                  placeholder: 'Имя партнёра',
+                  onSave: (name) => {
                     const newPartners = {...partnerStock, [name]: { total: 0, history: [] }};
                     setPartnerStock(newPartners);
                     save('likebird-partners', newPartners);
                   }
-                }} className="w-full py-2 bg-purple-100 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-200">+ Добавить партнёра</button>
+                })} className="w-full py-2 bg-purple-100 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-200">+ Добавить партнёра</button>
               </div>
             )}
           </div>
@@ -3154,9 +3229,12 @@ export default function LikeBirdApp() {
     const dayExpenses = dateExpenses.reduce((s, e) => s + e.amount, 0);
     
     // Проверка можно ли редактировать (20 минут = 1200000 мс)
+    // Администраторы могут редактировать без ограничений
     const EDIT_TIME_LIMIT = 20 * 60 * 1000;
+    const isAdminUser = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin;
     const canEdit = (report) => {
-      if (!report.createdAt) return true; // Старые отчёты без createdAt можно редактировать
+      if (isAdminUser) return true; // Админ может редактировать всегда
+      if (!report.createdAt) return true;
       return Date.now() - report.createdAt < EDIT_TIME_LIMIT;
     };
     
@@ -3289,8 +3367,7 @@ export default function LikeBirdApp() {
     const [editProductData, setEditProductData] = useState({ name: '', price: '', emoji: '', category: '' });
     const [productPhoto, setProductPhoto] = useState(null);
     const [productPhotos, setProductPhotos] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-product-photos') || '{}'); } catch { return {}; } });
-    // Invite codes for employee registration
-    const [inviteCodes, setInviteCodes] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-invite-codes') || '[]'); } catch { return []; } });
+    // FIX: inviteCodes перенесён в глобальное состояние LikeBirdApp (синхронизируется через Firebase)
     
     // Проверка пароля при входе
     if (adminPassword && !isAdminUnlocked) {
@@ -3319,6 +3396,8 @@ export default function LikeBirdApp() {
     const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
     
     const todayReports = reports.filter(r => r.date.startsWith(todayStr) && !r.isUnrecognized);
+    const todayApproved = todayReports.filter(r => r.reviewStatus === 'approved' || r.reviewStatus === 'submitted');
+    const todayPending = todayReports.filter(r => !r.reviewStatus || r.reviewStatus === 'pending');
     const weekReports = reports.filter(r => {
       const [datePart] = r.date.split(',');
       const [d, m, y] = datePart.split('.');
@@ -3691,7 +3770,7 @@ export default function LikeBirdApp() {
                   <div className="bg-gradient-to-br from-green-400 to-emerald-500 rounded-xl p-3 text-white">
                     <p className="text-xs opacity-80">Сегодня</p>
                     <p className="text-xl font-bold">{todayRevenue.toLocaleString()}₽</p>
-                    <p className="text-xs">{todayReports.length} продаж</p>
+                    <p className="text-xs">{todayApproved.length} подтв.{todayPending.length > 0 && <span className="opacity-70"> · {todayPending.length} ожид.</span>}</p>
                     <div className="mt-1 bg-white/20 rounded-full h-1.5"><div className="bg-white rounded-full h-1.5 transition-all" style={{ width: `${Math.min(100, (todayRevenue / (salesPlan.daily || 1)) * 100)}%` }} /></div>
                   </div>
                   <div className="bg-gradient-to-br from-blue-400 to-indigo-500 rounded-xl p-3 text-white">
@@ -5695,502 +5774,6 @@ export default function LikeBirdApp() {
     );
   };
 
-  const ScheduleView = () => {
-    const [isEditing, setIsEditing] = useState(false);
-    const [weekRange, setWeekRange] = useState(scheduleData.week || '');
-    const [shifts, setShifts] = useState(scheduleData.shifts || {});
-    const allEmployees = employees.filter(e => e.active).map(e => e.name);
-
-    const saveSchedule = () => {
-      const data = { week: weekRange, shifts };
-      setScheduleData(data);
-      save('likebird-schedule', data);
-      showNotification('График сохранен');
-      setIsEditing(false);
-    };
-
-    const addShift = (employee) => {
-      const newShifts = { ...shifts };
-      if (!newShifts[employee]) newShifts[employee] = [];
-      newShifts[employee].push({ date: '', hours: 0 });
-      setShifts(newShifts);
-    };
-
-    const updateShift = (employee, index, field, value) => {
-      const newShifts = { ...shifts };
-      newShifts[employee][index][field] = value;
-      setShifts(newShifts);
-    };
-
-    const removeShift = (employee, index) => {
-      const newShifts = { ...shifts };
-      newShifts[employee].splice(index, 1);
-      if (newShifts[employee].length === 0) delete newShifts[employee];
-      setShifts(newShifts);
-    };
-
-    const shiftsCount = Object.values(shifts).reduce((sum, emp) => sum + (emp?.length || 0), 0);
-
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6">
-        <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold flex items-center gap-2"><Calendar className="w-6 h-6" />График работы</h2>
-            {!isEditing && currentView === 'schedule' && (
-              <button onClick={() => setIsEditing(true)} className="bg-white/20 px-4 py-2 rounded-lg hover:bg-white/30 flex items-center gap-2">
-                <Edit3 className="w-4 h-4" /> Редактировать
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="max-w-4xl mx-auto px-4 mt-4">
-          {isEditing ? (
-            <div className="space-y-4">
-              <div className="bg-white rounded-xl p-6 shadow">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Неделя</label>
-                <input
-                  type="text"
-                  value={weekRange}
-                  onChange={(e) => setWeekRange(e.target.value)}
-                  placeholder="17.11.25 - 23.11.25"
-                  className="w-full p-3 border rounded-lg"
-                />
-              </div>
-              {allEmployees.map(emp => (
-                <div key={emp} className="bg-white rounded-xl p-6 shadow">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg">{emp}</h3>
-                    <button onClick={() => addShift(emp)} className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 flex items-center gap-2">
-                      <Plus className="w-4 h-4" /> Добавить смену
-                    </button>
-                  </div>
-                  {shifts[emp]?.map((shift, idx) => (
-                    <div key={idx} className="flex gap-2 items-center mb-2 p-3 bg-gray-50 rounded-lg">
-                      <input
-                        type="text"
-                        placeholder="Дата"
-                        value={shift.date}
-                        onChange={(e) => updateShift(emp, idx, 'date', e.target.value)}
-                        className="flex-1 p-2 border rounded"
-                      />
-                      <input
-                        type="number"
-                        step="0.5"
-                        placeholder="Часы"
-                        value={shift.hours}
-                        onChange={(e) => updateShift(emp, idx, 'hours', parseFloat(e.target.value))}
-                        className="w-24 p-2 border rounded"
-                      />
-                      <button onClick={() => removeShift(emp, idx)} className="text-red-500 hover:text-red-700">
-                        <Trash2 className="w-5 h-5" />
-                      </button>
-                    </div>
-                  )) || <p className="text-gray-400 text-sm">Нет смен</p>}
-                </div>
-              ))}
-              <div className="flex gap-3">
-                <button onClick={saveSchedule} className="flex-1 bg-blue-500 text-white py-3 rounded-xl font-bold hover:bg-blue-600">
-                  Сохранить график
-                </button>
-                <button onClick={() => { setIsEditing(false); setShifts(scheduleData.shifts || {}); setWeekRange(scheduleData.week || ''); }} className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-400">
-                  Отмена
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4">
-                <h3 className="font-bold text-lg mb-2">📅 {scheduleData.week || 'График не установлен'}</h3>
-                <p className="text-sm text-gray-600">{shiftsCount} смен на этой неделе</p>
-              </div>
-              {allEmployees.map(emp => scheduleData.shifts?.[emp] && (
-                <div key={emp} className="bg-white rounded-xl p-6 shadow">
-                  <h3 className="font-bold text-lg mb-3">{emp}</h3>
-                  <div className="space-y-2">
-                    {scheduleData.shifts[emp].map((shift, idx) => (
-                      <div key={idx} className="flex justify-between items-center p-3 bg-blue-50 rounded-lg">
-                        <span className="font-medium">{shift.date}</span>
-                        <span className="text-blue-600 font-bold">{shift.hours}ч</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              {!scheduleData.week && (
-                <div className="text-center py-10 bg-white rounded-xl shadow">
-                  <Calendar className="w-16 h-16 mx-auto text-gray-300 mb-3" />
-                  <p className="text-gray-500">График еще не создан</p>
-                  <p className="text-sm text-gray-400 mt-2">Администратор может создать график в режиме редактирования</p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const WeekResultsView = () => {
-    // Получаем данные за последние 7 дней
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    
-    const weekReports = reports.filter(r => {
-      const [datePart] = r.date.split(',');
-      const [d, m, y] = datePart.split('.');
-      const reportDate = new Date(parseYear(y), m - 1, d); // ИСПРАВЛЕНО: используем parseYear
-      return reportDate >= weekAgo && !r.isUnrecognized;
-    });
-
-    // Группируем по сотрудникам
-    const byEmployee = {};
-    weekReports.forEach(r => {
-      if (!byEmployee[r.employee]) {
-        byEmployee[r.employee] = {
-          name: r.employee,
-          shifts: 0,
-          totalHours: 0,
-          sales: 0,
-          workDays: new Set()
-        };
-      }
-      byEmployee[r.employee].sales += 1;
-      const [datePart] = r.date.split(',');
-      byEmployee[r.employee].workDays.add(datePart);
-      
-      // Считаем часы из workTime если есть
-      if (r.workTime?.workHours) {
-        byEmployee[r.employee].totalHours += r.workTime.workHours;
-      }
-    });
-
-    // Считаем смены и скорость
-    const results = Object.values(byEmployee).map(emp => {
-      emp.shifts = emp.workDays.size;
-      emp.speed = emp.totalHours > 0 ? (emp.sales / emp.totalHours) : 0;
-      emp.totalHours = Math.round(emp.totalHours * 10) / 10; // округление до 1 знака
-      emp.speed = Math.round(emp.speed * 10) / 10;
-      return emp;
-    }).sort((a, b) => b.shifts - a.shifts);
-
-    const weekRange = scheduleData.week || 'Неделя';
-
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-amber-50 pb-6">
-        <div className="bg-gradient-to-r from-yellow-400 to-amber-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Ctext x='2' y='20' font-size='18'%3E🐦%3C/text%3E%3C/svg%3E" alt="🐦" className="w-6 h-6" />
-            LIKEBIRD
-          </h2>
-          <p className="text-sm opacity-90 mt-1">{weekRange}</p>
-        </div>
-
-        <div className="max-w-4xl mx-auto px-4 mt-4">
-          {/* Заголовок таблицы */}
-          <div className="bg-yellow-100 border-2 border-yellow-400 rounded-t-xl p-4 font-bold">
-            <div className="grid grid-cols-4 gap-4 text-center">
-              <div className="flex items-center justify-center gap-2">
-                <span className="text-2xl">🦩</span>
-                <span>Участники</span>
-              </div>
-              <div className="flex items-center justify-center gap-2">
-                <span className="text-2xl">⏱️</span>
-                <span>Время</span>
-              </div>
-              <div className="flex items-center justify-center gap-2">
-                <span className="text-2xl">🎨</span>
-                <span>Продажи</span>
-              </div>
-              <div className="flex items-center justify-center gap-2">
-                <span className="text-2xl">🚀</span>
-                <span>Скорость (продаж/ч)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Строки с данными */}
-          {results.map((emp, idx) => {
-            const bgColor = idx % 2 === 0 ? 'bg-yellow-50' : 'bg-white';
-            const shiftsLabel = emp.shifts === 3 ? '3 смены' : emp.shifts === 2 ? '2 смены' : `${emp.shifts} смен`;
-            
-            return (
-              <div key={emp.name} className={`${bgColor} border-x-2 border-b-2 border-yellow-400 p-4 ${idx === results.length - 1 ? 'rounded-b-xl' : ''}`}>
-                <div className="grid grid-cols-4 gap-4 text-center items-center">
-                  <div>
-                    <p className="font-bold text-lg">{emp.name}</p>
-                    <p className="text-sm text-gray-500">{shiftsLabel}</p>
-                  </div>
-                  <div className="text-lg font-bold">{emp.totalHours || '0'}</div>
-                  <div className="text-lg font-bold">{emp.sales}</div>
-                  <div className="text-lg font-bold flex items-center justify-center gap-1">
-                    {emp.speed > 2 && <span className="text-yellow-500">⚡</span>}
-                    {emp.speed.toFixed(1)}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-
-          {results.length === 0 && (
-            <div className="bg-white border-2 border-yellow-400 rounded-b-xl p-10 text-center">
-              <BarChart3 className="w-16 h-16 mx-auto text-gray-300 mb-3" />
-              <p className="text-gray-500">Нет данных за последнюю неделю</p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // Календарь событий (просмотр для сотрудников)
-  const EventsView = () => {
-    const sortedEvents = Object.entries(eventsCalendar)
-      .sort((a, b) => {
-        const [dA, mA, yA] = a[0].split('.');
-        const [dB, mB, yB] = b[0].split('.');
-        const dateA = new Date(parseYear(yA), parseInt(mA) - 1, parseInt(dA));
-        const dateB = new Date(parseYear(yB), parseInt(mB) - 1, parseInt(dB));
-        return dateA - dateB;
-      });
-
-    const today = new Date();
-    const upcomingEvents = sortedEvents.filter(([date]) => {
-      const [d, m, y] = date.split('.');
-      const eventDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
-      return eventDate >= today;
-    });
-
-    const pastEvents = sortedEvents.filter(([date]) => {
-      const [d, m, y] = date.split('.');
-      const eventDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
-      return eventDate < today;
-    });
-
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-red-50 to-pink-50 pb-6">
-        <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Calendar className="w-6 h-6" />
-            Календарь событий
-          </h2>
-          <p className="text-sm opacity-90 mt-1">Праздники и важные мероприятия</p>
-        </div>
-
-        <div className="max-w-2xl mx-auto px-4 mt-4 space-y-6">
-          {/* Предстоящие события */}
-          {upcomingEvents.length > 0 && (
-            <div>
-              <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
-                <span className="text-2xl">📅</span>
-                Предстоящие события
-              </h3>
-              <div className="space-y-3">
-                {upcomingEvents.map(([date, event]) => {
-                  const [d, m, y] = date.split('.');
-                  const eventDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
-                  const daysUntil = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
-                  
-                  return (
-                    <div key={date} className="bg-white rounded-xl p-5 shadow-md border-l-4 border-red-500">
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <p className="text-2xl font-bold text-red-600">{d}.{m}.{y}</p>
-                          {daysUntil <= 7 && (
-                            <span className="inline-block mt-1 px-2 py-1 bg-red-100 text-red-700 text-xs rounded-full font-medium">
-                              {daysUntil === 0 ? 'Сегодня!' : daysUntil === 1 ? 'Завтра' : `Через ${daysUntil} дн.`}
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-3xl">🎉</span>
-                      </div>
-                      <p className="text-lg font-semibold text-gray-800">{event}</p>
-                      <p className="text-xs text-gray-500 mt-2">⚠️ Выход на работу приоритетен</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Прошедшие события */}
-          {pastEvents.length > 0 && (
-            <div>
-              <h3 className="text-lg font-bold text-gray-500 mb-3 flex items-center gap-2">
-                <span className="text-2xl">📋</span>
-                Прошедшие события
-              </h3>
-              <div className="space-y-2">
-                {pastEvents.map(([date, event]) => (
-                  <div key={date} className="bg-gray-50 rounded-lg p-4 border border-gray-200 opacity-60">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="font-bold text-gray-600">{date}</p>
-                        <p className="text-sm text-gray-700">{event}</p>
-                      </div>
-                      <CheckCircle className="w-5 h-5 text-gray-400" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {sortedEvents.length === 0 && (
-            <div className="text-center py-16 bg-white rounded-xl shadow">
-              <Calendar className="w-20 h-20 mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-500 text-lg font-medium">Пока нет событий</p>
-              <p className="text-sm text-gray-400 mt-2">Администратор может добавить важные даты</p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // Редактирование календаря (админ)
-  const EventsAdminView = () => {
-    const [newDate, setNewDate] = useState('');
-    const [newEvent, setNewEvent] = useState('');
-
-    const addEvent = () => {
-      if (!newDate || !newEvent) {
-        showNotification('Заполните дату и название события', 'error');
-        return;
-      }
-      
-      // Проверка формата даты DD.MM.YY или DD.MM.YYYY
-      const dateRegex = /^\d{2}\.\d{2}\.\d{2,4}$/;
-      if (!dateRegex.test(newDate)) {
-        showNotification('Неверный формат даты. Используйте ДД.ММ.ГГ или ДД.ММ.ГГГГ', 'error');
-        return;
-      }
-
-      // Сразу сохраняем в глобальное состояние и localStorage
-      const updated = { ...eventsCalendar, [newDate]: newEvent };
-      setEventsCalendar(updated);
-      save('likebird-events', updated);
-      
-      setNewDate('');
-      setNewEvent('');
-      showNotification('Событие добавлено и сохранено ✓');
-    };
-
-    const removeEvent = (date) => {
-      showConfirm('Удалить это событие?', () => {
-        const updated = { ...eventsCalendar };
-        delete updated[date];
-        setEventsCalendar(updated);
-        save('likebird-events', updated);
-        showNotification('Событие удалено');
-      });
-    };
-
-    const saveCalendar = () => {
-      showNotification('Изменения сохранены');
-      setCurrentView('admin');
-    };
-
-    const sortedEvents = Object.entries(eventsCalendar).sort((a, b) => {
-      const [dA, mA, yA] = a[0].split('.');
-      const [dB, mB, yB] = b[0].split('.');
-      const dateA = new Date(parseYear(yA), parseInt(mA) - 1, parseInt(dA));
-      const dateB = new Date(parseYear(yB), parseInt(mB) - 1, parseInt(dB));
-      return dateA - dateB;
-    });
-
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-red-50 to-pink-50 pb-6">
-        <div className="bg-gradient-to-r from-red-500 to-pink-600 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('admin')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Edit3 className="w-6 h-6" />
-            Редактирование календаря
-          </h2>
-        </div>
-
-        <div className="max-w-2xl mx-auto px-4 mt-4 space-y-4">
-          {/* Форма добавления события */}
-          <div className="bg-white rounded-xl p-6 shadow-lg border-2 border-red-200">
-            <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-red-600" />
-              Добавить событие
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Дата</label>
-                <input
-                  type="text"
-                  value={newDate}
-                  onChange={(e) => setNewDate(e.target.value)}
-                  placeholder="28.01.26"
-                  className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none"
-                />
-                <p className="text-xs text-gray-500 mt-1">Формат: ДД.ММ.ГГ (например: 28.01.26)</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Событие</label>
-                <input
-                  type="text"
-                  value={newEvent}
-                  onChange={(e) => setNewEvent(e.target.value)}
-                  placeholder="День города Ростов-на-Дону"
-                  className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-red-500 focus:outline-none"
-                />
-              </div>
-              <button
-                onClick={addEvent}
-                className="w-full bg-red-500 text-white py-3 rounded-lg font-bold hover:bg-red-600 flex items-center justify-center gap-2"
-              >
-                <Plus className="w-5 h-5" />
-                Добавить событие
-              </button>
-            </div>
-          </div>
-
-          {/* Список событий */}
-          <div className="bg-white rounded-xl p-6 shadow">
-            <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-red-600" />
-              Все события ({sortedEvents.length})
-            </h3>
-            {sortedEvents.length > 0 ? (
-              <div className="space-y-2">
-                {sortedEvents.map(([date, event]) => (
-                  <div key={date} className="flex justify-between items-center p-4 bg-red-50 rounded-lg border border-red-200">
-                    <div className="flex-1">
-                      <p className="font-bold text-red-700">{date}</p>
-                      <p className="text-gray-700">{event}</p>
-                    </div>
-                    <button
-                      onClick={() => removeEvent(date)}
-                      className="text-red-500 hover:text-red-700 p-2"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-center text-gray-400 py-8">Нет событий. Добавьте первое событие выше.</p>
-            )}
-          </div>
-
-          {/* Кнопка выхода */}
-          <button
-            onClick={saveCalendar}
-            className="w-full bg-green-500 text-white py-3 rounded-xl font-bold hover:bg-green-600 flex items-center justify-center gap-2"
-          >
-            <CheckCircle className="w-5 h-5" />
-            Готово
-          </button>
-        </div>
-      </div>
-    );
-  };
-
   // Объединённый TeamView с вкладками (только просмотр для сотрудников)
   const TeamView = () => {
     const activeEmployees = employees.filter(e => e.active).map(e => e.name);
@@ -6456,25 +6039,31 @@ export default function LikeBirdApp() {
                 });
                 const hours = Math.floor(totalMinutes / 60);
                 const mins = totalMinutes % 60;
+                // Если часы известны — показываем их; если работает сейчас — пульс;
+                // если нет данных о смене — показываем количество рабочих дней
                 const timeLabel = totalMinutes > 0
                   ? (mins > 0 ? `${hours}ч ${mins}м` : `${hours}ч`)
-                  : (isCurrentlyOpen ? '...' : '—');
+                  : isCurrentlyOpen ? null
+                  : `${emp.shifts} дн.`;
 
                 return (
                   <div key={emp.name} className={`${idx % 2 === 0 ? 'bg-yellow-50' : 'bg-white'} border-2 border-yellow-300 rounded-xl p-4`}>
                     <div className="grid grid-cols-4 gap-2 text-center items-center">
                       <div>
                         <p className="font-bold">{emp.name}</p>
-                        <p className="text-xs text-gray-500">{emp.shifts} смен</p>
+                        <p className="text-xs text-gray-500">{emp.sales} прод.</p>
                       </div>
-                      <div className="font-bold text-lg flex flex-col items-center">
-                        {timeLabel}
-                        {isCurrentlyOpen && <span className="text-xs text-green-500 animate-pulse font-normal">● работает</span>}
+                      <div className="font-bold text-lg flex flex-col items-center gap-0.5">
+                        {isCurrentlyOpen
+                          ? <span className="text-green-500 animate-pulse text-sm font-semibold">● работает</span>
+                          : <span>{timeLabel}</span>
+                        }
+                        {totalMinutes > 0 && isCurrentlyOpen && <span className="text-xs text-green-400">{hours}ч {mins}м</span>}
                       </div>
                       <div className="font-bold text-lg">{emp.sales}</div>
                       <div className="font-bold text-lg flex items-center justify-center gap-1">
                         {emp.speed > 2 && <span className="text-yellow-500">⚡</span>}
-                        {emp.speed.toFixed(1)}
+                        {emp.speed > 0 ? emp.speed.toFixed(1) : <span className="text-gray-300">—</span>}
                       </div>
                     </div>
                   </div>
@@ -6559,12 +6148,29 @@ export default function LikeBirdApp() {
               { id: 'info', label: '💰 Финансы', color: 'green' },
               { id: 'faq', label: '❓ FAQ', color: 'orange' },
             ];
-            const filteredManuals = manualFilter === 'all' 
-              ? manuals 
-              : manuals.filter(m => m.category === manualFilter);
+            const [manualSearch, setManualSearch] = React.useState('');
+            const filteredManuals = manuals.filter(m => {
+              const matchCat = manualFilter === 'all' || m.category === manualFilter;
+              const matchSearch = !manualSearch.trim() || m.title.toLowerCase().includes(manualSearch.toLowerCase()) || (m.content && m.content.toLowerCase().includes(manualSearch.toLowerCase()));
+              return matchCat && matchSearch;
+            });
             
             return (
               <div className="space-y-4">
+                {/* Поиск */}
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={manualSearch}
+                    onChange={e => setManualSearch(e.target.value)}
+                    placeholder="🔍 Поиск по названию или содержанию..."
+                    className="w-full p-3 pr-10 border-2 border-gray-200 rounded-xl text-sm focus:border-purple-400 focus:outline-none"
+                  />
+                  {manualSearch && (
+                    <button onClick={() => setManualSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
+                  )}
+                </div>
+
                 {/* Категории */}
                 <div className="flex gap-2 overflow-x-auto pb-2">
                   {categories.map(cat => (
@@ -6707,14 +6313,17 @@ export default function LikeBirdApp() {
     const saveEditReport = (r) => {
       const priceNum = parseInt(editForm.salePrice) || r.salePrice;
       const tipsNum = parseInt(editForm.tips) || 0;
-      const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === editForm.product) || { name: editForm.product, price: r.basePrice };
-      const newSalary = calculateSalary(r.basePrice, priceNum, r.category, tipsNum, 'normal', salarySettings);
+      const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === editForm.product) || { name: editForm.product, price: r.basePrice, category: r.category };
+      // FIX: Используем цену найденного товара как basePrice (ранее всегда использовал старый r.basePrice)
+      const newBase = prod.price || r.basePrice;
+      const newCategory = prod.category || r.category;
+      const newSalary = calculateSalary(newBase, priceNum, newCategory, tipsNum, 'normal', salarySettings);
       let cashAmt = 0, cashlessAmt = 0;
       if (editForm.paymentType === 'cash') cashAmt = priceNum;
       else if (editForm.paymentType === 'cashless') cashlessAmt = priceNum;
       else { cashAmt = r.cashAmount; cashlessAmt = r.cashlessAmount; }
       const updated = reports.map(rep => rep.id === r.id
-        ? { ...rep, product: editForm.product, salePrice: priceNum, total: priceNum, tips: tipsNum, salary: newSalary, paymentType: editForm.paymentType, cashAmount: cashAmt, cashlessAmount: cashlessAmt, isBelowBase: priceNum < r.basePrice }
+        ? { ...rep, product: editForm.product, basePrice: newBase, category: newCategory, salePrice: priceNum, total: priceNum, tips: tipsNum, salary: newSalary, paymentType: editForm.paymentType, cashAmount: cashAmt, cashlessAmount: cashlessAmt, isBelowBase: priceNum < newBase }
         : rep
       );
       updateReports(updated);
@@ -6724,7 +6333,18 @@ export default function LikeBirdApp() {
 
     const deleteMyReport = (id) => {
       showConfirm('Удалить эту продажу?', () => {
-        updateReports(reports.filter(r => r.id !== id));
+        // FIX: Восстанавливаем склад при удалении (ранее не возвращался)
+        const r = reports.find(x => x.id === id);
+        const productName = r ? getProductName(r.product) : null;
+        if (r && !r.isUnrecognized && productName && stock[productName]) {
+          const newStock = {...stock};
+          newStock[productName] = {...newStock[productName], count: newStock[productName].count + (r.quantity || 1)};
+          updateStock(newStock);
+          addStockHistoryEntry(productName, 'return', (r.quantity || 1), `Удалена продажа ${employeeName}`);
+        }
+        // Удаляем решения по зарплате
+        const nd = {...salaryDecisions}; delete nd[id]; setSalaryDecisions(nd); save('likebird-salary-decisions', nd);
+        updateReports(reports.filter(x => x.id !== id));
         showNotification('Удалено');
       });
     };
@@ -6842,7 +6462,11 @@ export default function LikeBirdApp() {
                       className="py-3 bg-indigo-500 text-white rounded-xl font-bold shadow hover:shadow-md transition-all flex items-center justify-center gap-2">
                       <Edit3 className="w-4 h-4" /> Отчёт
                     </button>
-                    <button onClick={() => setShowTimeModal('open')}
+                    <button onClick={() => {
+                        showConfirm(`Смена уже была закрыта (${myShift.openTime} → ${myShift.closeTime}). Переоткрыть? Время закрытия будет сброшено.`, () => {
+                          setShowTimeModal('open');
+                        });
+                      }}
                       className="py-3 bg-white text-green-600 border-2 border-green-300 rounded-xl font-bold shadow hover:shadow-md transition-all">
                       Переоткрыть
                     </button>
@@ -7085,7 +6709,8 @@ export default function LikeBirdApp() {
     const now = new Date();
     const periodStart = new Date();
     if (period === 'week') periodStart.setDate(now.getDate() - 7);
-    else periodStart.setDate(1); // с начала месяца
+    // FIX: «месяц» = 30 дней назад (единообразно с getEmployeeProgress)
+    else periodStart.setDate(now.getDate() - 30);
 
     const parseReportDate = (dateStr) => {
       try {
@@ -7727,9 +7352,16 @@ export default function LikeBirdApp() {
       if (password !== confirmPassword) { setError('Пароли не совпадают'); return; }
       
       const hashedPass = await hashPassword(password);
-      const newUser = { login: login.trim(), name: login.trim(), passwordHash: hashedPass, createdAt: Date.now(), isAdmin: true };
+      const newUser = { login: login.trim(), name: login.trim(), passwordHash: hashedPass, createdAt: Date.now(), isAdmin: true, role: 'admin' };
       localStorage.setItem('likebird-users', JSON.stringify([newUser]));
       fbSave('likebird-users', [newUser]);
+      
+      // FIX: Добавляем первого пользователя в employees (ранее отсутствовало)
+      const newEmp = { id: Date.now(), name: newUser.name, role: 'admin', salaryMultiplier: 1.0, active: true };
+      const empList = [newEmp];
+      localStorage.setItem('likebird-employees', JSON.stringify(empList));
+      fbSave('likebird-employees', empList);
+      setEmployees(empList);
       
       const authData = { authenticated: true, name: login.trim(), login: login.trim(), expiry: Date.now() + (30*24*60*60*1000), createdAt: Date.now() };
       localStorage.setItem('likebird-auth', JSON.stringify(authData));
@@ -7867,6 +7499,8 @@ export default function LikeBirdApp() {
     <>
       <Notification />
       <ConfirmDialog />
+      <ExpenseModal />
+      <InputModal />
       {currentView === 'menu' && <MenuView />}
       {currentView === 'catalog' && <CatalogView />}
       {currentView === 'new-report' && <NewReportView />}
@@ -7877,7 +7511,6 @@ export default function LikeBirdApp() {
       {currentView === 'settings' && <SettingsView />}
       {currentView === 'admin' && <AdminView />}
       {currentView === 'team' && <TeamView />}
-      {currentView === 'events-admin' && <EventsAdminView />}
       {currentView === 'profile' && <ProfileView />}
       {currentView === 'shift' && <ShiftView />}
     </>

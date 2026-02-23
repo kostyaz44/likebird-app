@@ -1,14 +1,15 @@
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, set, onValue, get } from 'firebase/database';
 
+// FIX: Используем переменные окружения если доступны, иначе fallback
 const firebaseConfig = {
-  apiKey: "AIzaSyAoZOo5LYtUKYiFhntbr0O5LfCKQEHn3jo",
-  authDomain: "likebird-928e2.firebaseapp.com",
-  databaseURL: "https://likebird-928e2-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "likebird-928e2",
-  storageBucket: "likebird-928e2.firebasestorage.app",
-  messagingSenderId: "438710809259",
-  appId: "1:438710809259:web:f944a3340e3452f318bdee"
+  apiKey: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_API_KEY) || "AIzaSyAoZOo5LYtUKYiFhntbr0O5LfCKQEHn3jo",
+  authDomain: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN) || "likebird-928e2.firebaseapp.com",
+  databaseURL: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_DATABASE_URL) || "https://likebird-928e2-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_PROJECT_ID) || "likebird-928e2",
+  storageBucket: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET) || "likebird-928e2.firebasestorage.app",
+  messagingSenderId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID) || "438710809259",
+  appId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APP_ID) || "1:438710809259:web:f944a3340e3452f318bdee"
 };
 
 const app = initializeApp(firebaseConfig);
@@ -51,6 +52,8 @@ export const SYNC_KEYS = new Set([
   'likebird-custom-achievements',
   'likebird-achievements-granted',
   'likebird-shifts',
+  'likebird-notifications',
+  'likebird-product-photos',
 ]);
 
 // likebird-reports → data/likebird-reports
