@@ -34,6 +34,11 @@ const SyncManager = {
     'likebird-writeoffs', 'likebird-autoorder', 'likebird-kpi',
     'likebird-auth', 'likebird-sync-id', 'likebird-last-sync',
     'likebird-sync-url', 'likebird-employee',
+    // FIX: Ранее отсутствовали — не экспортировались, не очищались, не синхронизировались
+    'likebird-invite-codes', 'likebird-custom-achievements',
+    'likebird-achievements-granted', 'likebird-shifts', 'likebird-profiles',
+    'likebird-users', 'likebird-notifications', 'likebird-product-photos',
+    'likebird-system-notifications',
   ],
 
   // Экспорт всех данных
@@ -297,7 +302,7 @@ const compareInventory = (inventory, sold) => {
   allProducts.forEach(name => {
     const start = inventory.start[name] || 0, end = inventory.end[name] || 0, soldCount = sold[name] || 0, expected = start - end;
     if ((start > 0 || end > 0) && expected !== soldCount) {
-      const p = ALL_PRODUCTS.find(x => x.name === name);
+      const p = DYNAMIC_ALL_PRODUCTS.find(x => x.name === name);
       discrepancies.push({ name, emoji: p?.emoji || '❓', startCount: start, endCount: end, expectedSold: expected, actualSold: soldCount, difference: soldCount - expected });
     }
   });
@@ -801,11 +806,22 @@ export default function LikeBirdApp() {
       if (savedReports) {
         const parsed = JSON.parse(savedReports);
         // Миграция: если product - объект, преобразуем в строку
-        const migrated = parsed.map(r => {
+        let migrated = parsed.map(r => {
           if (r.product && typeof r.product === 'object' && r.product.name) {
             return { ...r, product: r.product.name };
           }
           return r;
+        });
+        // FIX: Миграция v2 — обнуляем auto-tips (старая модель записывала наценку как чаевые)
+        // В старой модели: tips = salePrice - basePrice (автоматически), cashAmount = salePrice
+        // В новой модели: tips = только реальные чаевые (вводятся вручную)
+        migrated = migrated.map(r => {
+          if (!r.tipsModel && r.tips > 0 && r.basePrice > 0 && r.tips === r.salePrice - r.basePrice) {
+            // Это автоматически рассчитанные «чаевые» = наценка, обнуляем
+            const newSalary = r.salary - r.tips; // Убираем tips из salary (salary = base + tips)
+            return { ...r, tips: 0, salary: Math.max(0, newSalary), tipsModel: 'v2' };
+          }
+          return { ...r, tipsModel: r.tipsModel || 'v2' };
         });
         setReports(migrated);
         // Сохраняем миграцию
@@ -904,10 +920,17 @@ export default function LikeBirdApp() {
     const subscriptions = [
       // Отчёты (с миграцией старого формата)
       guardedSubscribe('likebird-reports', (val) => {
-        const migrated = Array.isArray(val) ? val.map(r => {
+        let migrated = Array.isArray(val) ? val.map(r => {
           if (r.product && typeof r.product === 'object' && r.product.name) return { ...r, product: r.product.name };
           return r;
         }) : [];
+        // FIX: Миграция v2 для данных от Firebase (auto-tips → 0)
+        migrated = migrated.map(r => {
+          if (!r.tipsModel && r.tips > 0 && r.basePrice > 0 && r.tips === r.salePrice - r.basePrice) {
+            return { ...r, tips: 0, salary: Math.max(0, (r.salary || 0) - r.tips), tipsModel: 'v2' };
+          }
+          return { ...r, tipsModel: r.tipsModel || 'v2' };
+        });
         setReports(migrated);
         localStorage.setItem('likebird-reports', JSON.stringify(migrated));
       }),
@@ -1059,7 +1082,19 @@ export default function LikeBirdApp() {
         category: p.category || '3D игрушки', isCustom: true,
       })),
     ];
-  }, [customProducts]);
+    // FIX: Дозаполняем stock для кастомных товаров без записей (миграция)
+    if (customProducts.length > 0) {
+      let needUpdate = false;
+      const newStock = {...stock};
+      customProducts.forEach(p => {
+        if (!newStock[p.name]) {
+          newStock[p.name] = { count: 0, minStock: 3, category: p.category || '3D игрушки', emoji: p.emoji || '📦', price: p.price };
+          needUpdate = true;
+        }
+      });
+      if (needUpdate) updateStock(newStock);
+    }
+  }, [customProducts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ===== Проверка низкого остатка при изменении склада =====
   useEffect(() => {
@@ -1085,8 +1120,10 @@ export default function LikeBirdApp() {
 
     allUsers.forEach(u => {
       const login = u.login;
-      const empName = (profilesData[login]?.displayName) || u.name || u.login;
-      const userReports = reports.filter(r => r.employee === empName && !r.isUnrecognized);
+      const empName = u.name || u.login;
+      const empDisplayName = profilesData[login]?.displayName;
+      // FIX: Ищем отчёты по login И по displayName (отчёты сохраняются под login, но displayName мог измениться)
+      const userReports = reports.filter(r => (r.employee === empName || r.employee === login || (empDisplayName && r.employee === empDisplayName)) && !r.isUnrecognized);
       const totalRevenue = userReports.reduce((s, r) => s + r.total, 0);
 
       customAchievements.forEach(ach => {
@@ -1107,7 +1144,7 @@ export default function LikeBirdApp() {
           // Уведомление сотруднику
           const notifKey = 'likebird-notifications';
           const existing = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
-          const notif = { id: Date.now() + Math.random(), type: 'achievement', login, title: `🏆 Новое достижение: ${ach.title}`, message: ach.desc || '', icon: ach.icon || '🏆', timestamp: Date.now(), read: false };
+          const notif = { id: Date.now() + Math.random(), type: 'achievement', targetLogin: login, title: `🏆 Новое достижение: ${ach.title}`, body: ach.desc || '', icon: ach.icon || '🏆', timestamp: Date.now(), read: false };
           const updated = [notif, ...existing.slice(0, 49)];
           localStorage.setItem(notifKey, JSON.stringify(updated));
           // Сохраняем в Firebase чтобы уведомление дошло до устройства сотрудника
@@ -1117,11 +1154,10 @@ export default function LikeBirdApp() {
             // FIX: Ищем числовой id сотрудника по имени (ранее записывался login-строка, не находился в getEmployeeBonuses)
             const matchedEmp = employees.find(e => e.name === empName);
             const empId = matchedEmp ? matchedEmp.id : login;
-            const bonus = { id: Date.now() + Math.random(), employeeId: empId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
+            const bonus = { id: Date.now() + Math.random(), employeeId: empId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toISOString(), createdAt: Date.now() };
             const newBonuses = [...bonuses, bonus];
             setBonuses(newBonuses);
-            localStorage.setItem('likebird-bonuses', JSON.stringify(newBonuses));
-            fbSave('likebird-bonuses', newBonuses);
+            save('likebird-bonuses', newBonuses);
           }
         }
       });
@@ -1129,8 +1165,7 @@ export default function LikeBirdApp() {
 
     if (anyGranted) {
       setAchievementsGranted(newGranted);
-      localStorage.setItem('likebird-achievements-granted', JSON.stringify(newGranted));
-      fbSave('likebird-achievements-granted', newGranted);
+      save('likebird-achievements-granted', newGranted);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reports, customAchievements]);
@@ -1221,11 +1256,22 @@ export default function LikeBirdApp() {
   const addCustomProduct = (product) => {
     const newProd = { ...product, id: Date.now(), isCustom: true };
     updateCustomProducts([...customProducts, newProd]);
+    // FIX: Добавляем товар в склад (ранее кастомные не появлялись в остатках)
+    if (!stock[product.name]) {
+      const newStock = {...stock, [product.name]: { count: 0, minStock: 3, category: product.category || '3D игрушки', emoji: product.emoji || '📦', price: product.price }};
+      updateStock(newStock);
+    }
     logAction('Добавлен товар', product.name);
   };
   const removeCustomProduct = (id) => {
     const prod = customProducts.find(p => p.id === id);
     updateCustomProducts(customProducts.filter(p => p.id !== id));
+    // FIX: Убираем запись из склада (ранее оставался «призрачный» товар)
+    if (prod && stock[prod.name]) {
+      const newStock = {...stock};
+      delete newStock[prod.name];
+      updateStock(newStock);
+    }
     if (prod) logAction('Удалён товар', prod.name);
   };
 
@@ -1271,13 +1317,22 @@ export default function LikeBirdApp() {
     updateBonuses([...bonuses, bonus]);
     logAction('Бонус добавлен', `${employees.find(e => e.id === employeeId)?.name}: ${amount}₽ - ${reason}`);
   };
+  // FIX: Безопасный парсинг дат (поддержка ISO и DD.MM.YYYY)
+  const safeParseDateStr = (dateStr) => {
+    if (!dateStr) return new Date(0);
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) return d;
+    const parts = dateStr.split('.');
+    if (parts.length === 3) return new Date(parseYear(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+    return new Date(0);
+  };
   const getEmployeePenalties = (employeeId, period = 30) => {
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - period);
-    return penalties.filter(p => p.employeeId === employeeId && new Date(p.date) >= cutoff);
+    return penalties.filter(p => p.employeeId === employeeId && safeParseDateStr(p.date) >= cutoff);
   };
   const getEmployeeBonuses = (employeeId, period = 30) => {
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - period);
-    return bonuses.filter(b => b.employeeId === employeeId && new Date(b.date) >= cutoff);
+    return bonuses.filter(b => b.employeeId === employeeId && safeParseDateStr(b.date) >= cutoff);
   };
   
   // Больничные и отпуска
@@ -1343,7 +1398,8 @@ export default function LikeBirdApp() {
   const generateAutoOrder = () => {
     const order = [];
     Object.entries(stock).forEach(([name, data]) => {
-      if (data.count <= data.minStock) {
+      // FIX: Не включаем товары с count=0, у которых никогда не было остатка (init state)
+      if (data.count > 0 && data.count <= data.minStock) {
         const toOrder = (data.minStock * 2) - data.count; // Заказываем до двойного минимума
         order.push({ productName: name, currentStock: data.count, minStock: data.minStock, toOrder, selected: true });
       }
@@ -1531,7 +1587,7 @@ export default function LikeBirdApp() {
       return {
         id: now + i, date: dateStr, product: product.name, category: category,
         basePrice: product.price, salePrice: priceNum, quantity: 1, employee: empName,
-        total: priceNum, tips: tipsNum, salary: salary,
+        total: priceNum, tips: tipsNum, salary: salary, tipsModel: 'v2',
         paymentType: pType, cashAmount: cashAmt, cashlessAmount: cashlessAmt, isUnrecognized: false,
         createdAt: now + i, reviewStatus: 'pending',
         photo: photo || null,
@@ -1563,8 +1619,9 @@ export default function LikeBirdApp() {
     const dateStr = new Date().toLocaleString('ru-RU');
     const now = Date.now();
     const newReports = [
-      ...parsedSales.map((s, i) => ({ id: now + i, date: dateStr, product: s.product.name, category: s.category, basePrice: s.product.price, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: false, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport })),
-      ...unrecognizedSales.map((s, i) => ({ id: now + 10000 + i, date: dateStr, product: s.extractedName, category: 'Нераспознанный товар', basePrice: 0, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: true, originalText: s.originalText, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport })),
+      // FIX: добавлен tipsModel:'v2' чтобы миграция не обнулила реальные чаевые
+      ...parsedSales.map((s, i) => ({ id: now + i, date: dateStr, product: s.product.name, category: s.category, basePrice: s.product.price, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, tipsModel: 'v2', paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: false, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport })),
+      ...unrecognizedSales.map((s, i) => ({ id: now + 10000 + i, date: dateStr, product: s.extractedName, category: 'Нераспознанный товар', basePrice: 0, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, tipsModel: 'v2', paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: true, originalText: s.originalText, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport })),
     ];
     if (parsedExpenses.length > 0) {
       const newExpenses = parsedExpenses.map((e, i) => ({ id: now + 20000 + i, date: dateStr, amount: e.amount, description: e.description, employee: empName }));
@@ -1588,9 +1645,11 @@ export default function LikeBirdApp() {
       const r = reports.find(x => x.id === id);
       const productName = r ? getProductName(r.product) : null;
       if (r && !r.isUnrecognized && productName && stock[productName]) {
+        const qty = r.quantity || 1;
         const newStock = {...stock};
-        newStock[productName] = {...newStock[productName], count: newStock[productName].count + r.quantity};
+        newStock[productName] = {...newStock[productName], count: newStock[productName].count + qty};
         updateStock(newStock);
+        addStockHistoryEntry(productName, 'return', qty, 'Удалена продажа');
       }
       updateReports(reports.filter(x => x.id !== id));
       const nd = {...salaryDecisions}; delete nd[id]; setSalaryDecisions(nd); save('likebird-salary-decisions', nd);
@@ -1623,10 +1682,15 @@ export default function LikeBirdApp() {
     const text = inputText || textReport;
     if (!text.trim()) { showNotification('Введите текст отчёта', 'error'); return; }
     const { recognized, unrecognized, workTime, expenses: exp, inventory } = parseTextReport(text);
-    setParsedSales(recognized); setUnrecognizedSales(unrecognized); setParsedWorkTime(workTime); setParsedExpenses(exp); setParsedInventory(inventory);
-    const sold = countSoldProducts(recognized);
+    // FIX: Пересчитываем salary по актуальным salarySettings (parseTextReport не имеет к ним доступа)
+    const recalcRecognized = recognized.map(s => ({
+      ...s,
+      salary: calculateSalary(s.product.price, s.price, s.category, s.tips || 0, 'normal', salarySettings),
+    }));
+    setParsedSales(recalcRecognized); setUnrecognizedSales(unrecognized); setParsedWorkTime(workTime); setParsedExpenses(exp); setParsedInventory(inventory);
+    const sold = countSoldProducts(recalcRecognized);
     setInventoryDiscrepancies(compareInventory(inventory, sold));
-    const allSales = [...recognized, ...unrecognized];
+    const allSales = [...recalcRecognized, ...unrecognized];
     
     // Считаем суммы продаж без чаевых
     const baseCash = allSales.reduce((s, x) => s + (x.cashAmount || 0), 0);
@@ -1663,12 +1727,12 @@ export default function LikeBirdApp() {
       soldByProduct 
     });
     if (recognized.length > 0 || unrecognized.length > 0) showNotification(`Распознано: ${recognized.length}, нераспознано: ${unrecognized.length}`);
-  }, [textReport]);
+  }, [textReport, salarySettings]);
 
   // FIX: Условие count > 0 — при инициализации все count=0, не считаем их «низким остатком»
   const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= data.minStock).map(([name, data]) => ({name, ...data}));
   
-  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); const sales = {}; reports.filter(r => { const [d, m, y] = r.date.split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + r.quantity; }); return sales; };
+  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); const sales = {}; reports.filter(r => { const [d, m, y] = r.date.split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
 
   const exportData = async () => {
     showNotification('⏳ Получаем актуальные данные из Firebase...');
@@ -1710,17 +1774,8 @@ export default function LikeBirdApp() {
         const imported = SyncManager.importAll(data);
         // 2. Синхронизируем каждый ключ с Firebase
         let fbPushed = 0;
-        const FIREBASE_KEYS = [
-          'likebird-reports','likebird-expenses','likebird-stock','likebird-employees',
-          'likebird-salary-settings','likebird-custom-products','likebird-locations',
-          'likebird-chat','likebird-stock-history','likebird-audit-log',
-          'likebird-penalties','likebird-bonuses','likebird-timeoff','likebird-ratings',
-          'likebird-kpi','likebird-manuals','likebird-events','likebird-schedule',
-          'likebird-sales-plan','likebird-cost-prices','likebird-profiles',
-          'likebird-users','likebird-invite-codes','likebird-custom-achievements',
-          'likebird-achievements-granted','likebird-admin-password','likebird-locations',
-        ];
-        for (const key of FIREBASE_KEYS) {
+        // FIX: Используем SYNC_KEYS из firebase.js (ранее — неполный хардкод с дубликатом)
+        for (const key of SYNC_KEYS) {
           if (data[key] !== undefined) {
             try {
               await fbSave(key, data[key]);
@@ -1740,18 +1795,23 @@ export default function LikeBirdApp() {
   const clearAllData = () => {
     showConfirm('Очистить ВСЕ данные? Это действие нельзя отменить!', () => {
       SyncManager.ALL_KEYS.forEach(k => localStorage.removeItem(k));
+      // FIX: Очищаем и Firebase, иначе данные вернутся через подписки
+      SYNC_KEYS.forEach(key => fbSave(key, null));
       setReports([]); setExpenses([]); setStock(getInitialStock()); setGivenToAdmin({}); setSalaryDecisions({}); setOwnCardTransfers({});
       setPartnerStock({}); setTotalBirds(0); setScheduleData({}); setEventsCalendar({});
       setAuditLog([]); setCustomProducts([]); setPenalties([]); setBonuses([]);
       setTimeOff([]); setEmployeeRatings({}); setChatMessages([]); setStockHistory([]);
       setWriteOffs([]); setAutoOrderList([]); setEmployeeKPI({}); setSystemNotifications([]);
+      // FIX: Ранее не очищались
+      setInviteCodes([]); setCustomAchievements([]); setAchievementsGranted({});
+      setShiftsData({}); setProfilesData({}); setUserNotifications([]);
       showNotification('Все данные очищены');
     });
   };
 
   const copyDayReport = (emp, empReports, totals) => {
     const { cashTotal, cashlessTotal, totalTips, totalSalary, empExpenses, toGive } = totals;
-    const byCat = empReports.filter(r => !r.isUnrecognized).reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + r.quantity; return acc; }, {});
+    const byCat = empReports.filter(r => !r.isUnrecognized).reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + (r.quantity || 1); return acc; }, {});
     let text = `📅 ${selectedDate} - ${emp}\n📦 Продаж: ${empReports.length}\n`;
     Object.entries(byCat).forEach(([cat, cnt]) => { text += `${CAT_ICONS[cat]} ${cat}: ${cnt}\n`; });
     text += `\n💰 Итого: ${(cashTotal + cashlessTotal).toLocaleString()}₽\n💵 Наличные: ${cashTotal.toLocaleString()}₽\n💳 Безнал: ${cashlessTotal.toLocaleString()}₽\n🎁 Чаевые: ${totalTips.toLocaleString()}₽\n👛 ЗП: ${totalSalary.toLocaleString()}₽\n`;
@@ -1790,7 +1850,7 @@ export default function LikeBirdApp() {
     const [newName, setNewName] = useState('');
     const [suggestions, setSuggestions] = useState([]);
     if (!report.isUnrecognized) return null;
-    const handleSearch = (value) => { setNewName(value); if (value.length >= 2) setSuggestions(ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
+    const handleSearch = (value) => { setNewName(value); if (value.length >= 2) setSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
     if (editing) return (
       <div className="mt-2 space-y-2">
         <div className="flex gap-2">
@@ -1805,7 +1865,7 @@ export default function LikeBirdApp() {
   };
 
   const ConfirmDialog = () => { if (!confirmDialog) return null; return (<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-2xl"><p className="text-lg mb-4">{confirmDialog.message}</p><div className="flex gap-3"><button onClick={() => setConfirmDialog(null)} className="flex-1 py-2 bg-gray-200 rounded-lg font-semibold">Отмена</button><button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 py-2 bg-red-500 text-white rounded-lg font-semibold">Подтвердить</button></div></div></div>); };
-  const Notification = () => { if (!notification) return null; return (<div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white`}>{notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}{notification.message}</div>); };
+  const ToastNotification = () => { if (!notification) return null; return (<div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white`}>{notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}{notification.message}</div>); };
 
   // FIX: React-компонент модала расходов (заменяет DOM-манипуляцию)
   const ExpenseModal = () => {
@@ -2005,7 +2065,7 @@ export default function LikeBirdApp() {
     const [suggestions, setSuggestions] = useState([]);
     const [localName, setLocalName] = useState(() => employeeName || ''); // Локальное состояние для имени
     const fmt = (base, withTips) => withTips > base ? `${base.toLocaleString()}(${withTips.toLocaleString()})` : base.toLocaleString();
-    const handleSearch = (value) => { setEditName(value); if (value.length >= 2) setSuggestions(ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
+    const handleSearch = (value) => { setEditName(value); if (value.length >= 2) setSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
     const fixUnrecognizedInImport = (idx, newName) => {
       const sale = unrecognizedSales[idx];
       const product = findProductByPrice(newName, sale.price);
@@ -2142,8 +2202,8 @@ export default function LikeBirdApp() {
               {!ownCardImport && calculatedTotals.cashless > 0 && <p className="text-xs text-gray-500 text-center">💳 Безнал {calculatedTotals.baseCashless || calculatedTotals.cashless}₽{calculatedTotals.tipsCashless > 0 && ` (+${calculatedTotals.tipsCashless}₽ чай)`} остаётся на карте компании</p>}
             </div>
             {parsedExpenses.length > 0 && (<div className="bg-red-50 rounded-xl p-3 border border-red-200"><h4 className="font-bold text-red-700 text-sm mb-2">📝 Расходы ({parsedExpenses.length})</h4>{parsedExpenses.map((e, i) => (<div key={i} className="flex justify-between text-sm py-1"><span>{e.description}</span><span className="font-bold text-red-600">{e.amount}₽</span></div>))}</div>)}
-            {calculatedTotals.soldByProduct && Object.keys(calculatedTotals.soldByProduct).length > 0 && (<div className="bg-cyan-50 rounded-xl p-4 border border-cyan-200"><h4 className="font-bold text-cyan-700 mb-3">📦 Продано по отчёту</h4><div className="grid grid-cols-2 gap-2">{Object.entries(calculatedTotals.soldByProduct).map(([name, count]) => { const product = ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between items-center bg-white rounded-lg px-3 py-2 text-sm"><span>{product?.emoji || '📦'} {name}</span><span className="font-bold text-cyan-600">{count} шт</span></div>); })}</div></div>)}
-            {(Object.keys(parsedInventory.start).length > 0 || Object.keys(parsedInventory.end).length > 0) && (<div className="bg-indigo-50 rounded-xl p-4 border border-indigo-200"><h4 className="font-bold text-indigo-700 mb-3">📋 Пересчёт товара</h4><div className="grid grid-cols-2 gap-4">{Object.keys(parsedInventory.start).length > 0 && (<div><p className="text-xs font-semibold text-indigo-600 mb-2">🌅 Начало смены</p>{Object.entries(parsedInventory.start).map(([name, count]) => { const product = ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between text-xs bg-white rounded px-2 py-1 mb-1"><span>{product?.emoji} {name}</span><span className="font-bold">{count}</span></div>); })}</div>)}{Object.keys(parsedInventory.end).length > 0 && (<div><p className="text-xs font-semibold text-indigo-600 mb-2">🌙 Конец смены</p>{Object.entries(parsedInventory.end).map(([name, count]) => { const product = ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between text-xs bg-white rounded px-2 py-1 mb-1"><span>{product?.emoji} {name}</span><span className="font-bold">{count}</span></div>); })}</div>)}</div></div>)}
+            {calculatedTotals.soldByProduct && Object.keys(calculatedTotals.soldByProduct).length > 0 && (<div className="bg-cyan-50 rounded-xl p-4 border border-cyan-200"><h4 className="font-bold text-cyan-700 mb-3">📦 Продано по отчёту</h4><div className="grid grid-cols-2 gap-2">{Object.entries(calculatedTotals.soldByProduct).map(([name, count]) => { const product = DYNAMIC_ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between items-center bg-white rounded-lg px-3 py-2 text-sm"><span>{product?.emoji || '📦'} {name}</span><span className="font-bold text-cyan-600">{count} шт</span></div>); })}</div></div>)}
+            {(Object.keys(parsedInventory.start).length > 0 || Object.keys(parsedInventory.end).length > 0) && (<div className="bg-indigo-50 rounded-xl p-4 border border-indigo-200"><h4 className="font-bold text-indigo-700 mb-3">📋 Пересчёт товара</h4><div className="grid grid-cols-2 gap-4">{Object.keys(parsedInventory.start).length > 0 && (<div><p className="text-xs font-semibold text-indigo-600 mb-2">🌅 Начало смены</p>{Object.entries(parsedInventory.start).map(([name, count]) => { const product = DYNAMIC_ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between text-xs bg-white rounded px-2 py-1 mb-1"><span>{product?.emoji} {name}</span><span className="font-bold">{count}</span></div>); })}</div>)}{Object.keys(parsedInventory.end).length > 0 && (<div><p className="text-xs font-semibold text-indigo-600 mb-2">🌙 Конец смены</p>{Object.entries(parsedInventory.end).map(([name, count]) => { const product = DYNAMIC_ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between text-xs bg-white rounded px-2 py-1 mb-1"><span>{product?.emoji} {name}</span><span className="font-bold">{count}</span></div>); })}</div>)}</div></div>)}
             {inventoryDiscrepancies.length > 0 && (<div className="bg-orange-50 rounded-xl p-4 border-2 border-orange-400"><h4 className="font-bold text-orange-700 mb-3">⚠️ Расхождения ({inventoryDiscrepancies.length})</h4>{inventoryDiscrepancies.map((d, i) => (<div key={i} className="bg-white rounded-lg p-3 border border-orange-300 mb-2"><div className="flex justify-between items-center mb-2"><span className="font-semibold">{d.emoji} {d.name}</span><span className={`font-bold px-2 py-1 rounded ${d.difference > 0 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{d.difference > 0 ? '+' : ''}{d.difference}</span></div><div className="grid grid-cols-3 gap-2 text-xs"><div className="text-center"><p className="text-gray-500">Было</p><p className="font-bold">{d.startCount}</p></div><div className="text-center"><p className="text-gray-500">Стало</p><p className="font-bold">{d.endCount}</p></div><div className="text-center"><p className="text-gray-500">По остаткам</p><p className="font-bold text-indigo-600">{d.expectedSold}</p></div></div><div className="mt-2 pt-2 border-t flex justify-between text-sm"><span>Записано:</span><span className="font-bold text-cyan-600">{d.actualSold}</span></div></div>))}</div>)}
             {(Object.keys(parsedInventory.start).length > 0 || Object.keys(parsedInventory.end).length > 0) && inventoryDiscrepancies.length === 0 && (<div className="bg-green-50 rounded-xl p-4 border border-green-300 text-center"><p className="text-green-700 font-bold">✅ Сверка сходится!</p></div>)}
             {unrecognizedSales.length > 0 && (<div className="bg-red-50 border-2 border-red-300 rounded-xl p-4"><h4 className="font-bold text-red-700 mb-3"><AlertTriangle className="w-4 h-4 inline" /> Нераспознанные ({unrecognizedSales.length})</h4>{unrecognizedSales.map((s, i) => (<div key={i} className="p-3 bg-white rounded-lg border border-red-200 mb-2"><div className="flex justify-between items-center"><div><span className="text-red-700 font-medium">❓ {s.extractedName}</span><p className="text-xs text-gray-400">{s.originalText}</p></div><div className="flex items-center gap-2"><span className="font-bold">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><button onClick={() => setUnrecognizedSales(p => p.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600"><X className="w-5 h-5" /></button></div></div>{editingIdx === i ? (<div className="mt-3 space-y-2"><div className="flex gap-2"><input type="text" value={editName} onChange={(e) => handleSearch(e.target.value)} placeholder="Название товара" className="flex-1 px-3 py-2 border-2 border-blue-300 rounded-lg text-sm" autoFocus /><button onClick={() => fixUnrecognizedInImport(i, editName)} className="px-4 py-2 bg-green-500 text-white rounded-lg font-bold">✓</button><button onClick={() => { setEditingIdx(null); setEditName(''); setSuggestions([]); }} className="px-4 py-2 bg-gray-400 text-white rounded-lg">✕</button></div>{suggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{suggestions.map((p, j) => (<button key={j} onClick={() => fixUnrecognizedInImport(i, p.name)} className="w-full text-left px-3 py-2 hover:bg-amber-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-amber-600 font-semibold">{p.price}₽</span></button>))}</div>}</div>) : (<button onClick={() => { setEditingIdx(i); setEditName(''); setSuggestions([]); }} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить</button>)}</div>))}</div>)}
@@ -2215,7 +2275,12 @@ export default function LikeBirdApp() {
       }
     };
     
-    const filteredProducts = selectedCategory && productSearch ? PRODUCTS[selectedCategory].filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()) || p.aliases.some(a => a.includes(productSearch.toLowerCase()))) : selectedCategory ? PRODUCTS[selectedCategory] : [];
+    // FIX: Включаем кастомные товары в список (PRODUCTS содержит только встроенные)
+    const allCategoryProducts = selectedCategory ? [
+      ...(PRODUCTS[selectedCategory] || []),
+      ...customProducts.filter(p => (p.category || '3D игрушки') === selectedCategory).map(p => ({ ...p, aliases: p.aliases || [p.name.toLowerCase()] })),
+    ] : [];
+    const filteredProducts = selectedCategory && productSearch ? allCategoryProducts.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()) || p.aliases.some(a => a.includes(productSearch.toLowerCase()))) : allCategoryProducts;
     
     // Парсинг быстрого ввода: "Снегирь 600 (100) перевод"
     const parseQuickLine = (line) => {
@@ -2293,6 +2358,7 @@ export default function LikeBirdApp() {
           total: sale.price,
           salePrice: sale.price,
           tips: sale.tips,
+          tipsModel: 'v2', // FIX: без этого миграция обнулит чаевые при перезагрузке
           cashAmount: sale.paymentType === 'cash' ? sale.price : 0,
           cashlessAmount: sale.paymentType === 'cashless' ? sale.price : 0,
           paymentType: sale.paymentType,
@@ -2325,6 +2391,15 @@ export default function LikeBirdApp() {
         saved++;
       });
       
+      // FIX: Обновляем остатки на складе (ранее только stockHistory обновлялся)
+      const newStock = {...stock};
+      quickParsed.forEach(sale => {
+        if (sale.product && newStock[sale.product.name]) {
+          newStock[sale.product.name] = {...newStock[sale.product.name], count: Math.max(0, newStock[sale.product.name].count - 1)};
+        }
+      });
+      updateStock(newStock);
+
       updateReports([...newReports, ...reports]);
       localStorage.setItem('likebird-employee', localName.trim());
       setEmployeeName(localName.trim());
@@ -2507,28 +2582,17 @@ export default function LikeBirdApp() {
                   )}
                 </div>
                 
-                {/* Чаевые / Наценка */}
-                <div className={`bg-white rounded-xl p-4 shadow ${isBelowBase ? 'opacity-60' : ''}`}>
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-semibold">Чаевые (наценка)</label>
-                    {!isBelowBase && calculatedTips > 0 && (
-                      <span className="text-xs text-green-600 bg-green-100 px-2 py-0.5 rounded">авто: +{calculatedTips}₽</span>
-                    )}
-                  </div>
+                {/* Чаевые — отдельная доплата от клиента */}
+                <div className="bg-white rounded-xl p-4 shadow">
+                  <label className="text-sm font-semibold">Чаевые (доплата от клиента)</label>
                   <input 
                     type="number" 
                     value={localTips} 
                     onChange={(e) => handleTipsChange(e.target.value)} 
                     placeholder="0" 
-                    disabled={isBelowBase}
-                    className={`w-full p-3 border-2 rounded-lg text-center mt-1 focus:border-amber-500 focus:outline-none ${isBelowBase ? 'bg-gray-100 cursor-not-allowed' : ''}`} 
+                    className="w-full p-3 border-2 rounded-lg text-center mt-1 focus:border-amber-500 focus:outline-none"
                   />
-                  {isBelowBase && parseInt(localTips || 0) > 0 && (
-                    <p className="text-xs text-red-500 mt-1 text-center">❌ Чаевые при продаже ниже базы невозможны</p>
-                  )}
-                  {isBelowBase && (
-                    <p className="text-xs text-gray-400 mt-1 text-center">При скидке чаевые = 0</p>
-                  )}
+                  <p className="text-xs text-gray-400 mt-1 text-center">Дополнительная сумма сверх цены продажи</p>
                 </div>
                 
                 <div className="bg-white rounded-xl p-4 shadow"><label className="text-sm font-semibold">Количество</label><div className="flex items-center justify-center gap-4 mt-2"><button onClick={() => setLocalQuantity(Math.max(1, localQuantity - 1))} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">-</button><span className="text-3xl font-bold w-16 text-center">{localQuantity}</span><button onClick={() => setLocalQuantity(localQuantity + 1)} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">+</button></div></div>
@@ -2626,7 +2690,7 @@ export default function LikeBirdApp() {
             {activeCategory && !localSearch && <button onClick={() => setActiveCategory(null)} className="mb-3 text-amber-600 font-semibold flex items-center gap-1 text-sm hover:text-amber-700"><ArrowLeft className="w-4 h-4" /> Назад</button>}
             {localSearch && <p className="mb-3 text-gray-500 text-sm">Результаты поиска: "{localSearch}"</p>}
             {(() => {
-              const prods = localSearch ? ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(localSearch.toLowerCase()) || p.aliases.some(a => a.includes(localSearch.toLowerCase()))) : PRODUCTS[activeCategory].map(p => ({...p, category: activeCategory}));
+              const prods = localSearch ? DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(localSearch.toLowerCase()) || p.aliases.some(a => a.includes(localSearch.toLowerCase()))) : (PRODUCTS[activeCategory] || []).map(p => ({...p, category: activeCategory})).concat(customProducts.filter(cp => cp.category === activeCategory));
               if (prods.length === 0) return <div className="text-center py-10 text-gray-400"><Search className="w-12 h-12 mx-auto mb-2 opacity-50" /><p>Ничего не найдено</p></div>;
               const grouped = prods.reduce((acc, p) => { if (!acc[p.price]) acc[p.price] = []; acc[p.price].push(p); return acc; }, {});
               return Object.keys(grouped).map(Number).sort((a,b) => a-b).map(price => (
@@ -2771,7 +2835,7 @@ export default function LikeBirdApp() {
         // Сначала проверяем алиасы ревизии
         if (revisionAliases[t]) {
           if (revisionAliases[t] === '__TOTAL_BIRDS__') return { special: '__TOTAL_BIRDS__' };
-          const p = ALL_PRODUCTS.find(p => p.name === revisionAliases[t]);
+          const p = DYNAMIC_ALL_PRODUCTS.find(p => p.name === revisionAliases[t]);
           if (p) return p;
         }
         // Потом ищем в товарах
@@ -3283,7 +3347,7 @@ export default function LikeBirdApp() {
             const grandTotal = cashTotal + cashlessTotal;
             const ownCard = getOwnCard(emp, selectedDate);
             const toGive = ownCard ? (cashTotal + cashlessTotal + totalTips - totalSalary - empExpenses - given) : (cashTotal + totalTips - totalSalary - empExpenses - given);
-            const byCat = empReports.filter(r => !r.isUnrecognized).reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + r.quantity; return acc; }, {});
+            const byCat = empReports.filter(r => !r.isUnrecognized).reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + (r.quantity || 1); return acc; }, {});
             const workTime = empReports[0]?.workTime;
             const reviewStatus = getReviewStatus(empReports);
             const anyEditable = empReports.some(r => canEdit(r));
@@ -3428,7 +3492,7 @@ export default function LikeBirdApp() {
     // Топ продаж за неделю
     const topProducts = weekReports.reduce((acc, r) => {
       const pName = getProductName(r.product);
-      acc[pName] = (acc[pName] || 0) + r.quantity;
+      acc[pName] = (acc[pName] || 0) + (r.quantity || 1);
       return acc;
     }, {});
     const topProductsList = Object.entries(topProducts).sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -3436,7 +3500,7 @@ export default function LikeBirdApp() {
     // Статистика по сотрудникам
     const employeeStats = weekReports.reduce((acc, r) => {
       if (!acc[r.employee]) acc[r.employee] = { sales: 0, revenue: 0, count: 0 };
-      acc[r.employee].sales += r.quantity;
+      acc[r.employee].sales += (r.quantity || 1);
       acc[r.employee].revenue += r.total;
       acc[r.employee].count++;
       return acc;
@@ -3445,7 +3509,7 @@ export default function LikeBirdApp() {
     // Статистика по категориям
     const categoryStats = weekReports.reduce((acc, r) => {
       if (!acc[r.category]) acc[r.category] = { count: 0, revenue: 0 };
-      acc[r.category].count += r.quantity;
+      acc[r.category].count += (r.quantity || 1);
       acc[r.category].revenue += r.total;
       return acc;
     }, {});
@@ -3968,7 +4032,7 @@ export default function LikeBirdApp() {
                       
                       {Object.entries(byEmployee).map(([empName, empReports]) => {
                         const empTotal = empReports.reduce((s, r) => s + r.total, 0);
-                        const empSalary = empReports.reduce((s, r) => s + (r.salary || 0), 0);
+                        const empSalary = empReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
                         const status = empReports[0]?.reviewStatus || 'pending';
                         const hasOriginalText = empReports.some(r => r.originalReportText);
                         
@@ -4023,14 +4087,16 @@ export default function LikeBirdApp() {
                                           <div className="flex gap-2">
                                             <button onClick={() => {
                                               const priceNum = parseInt(adminEditForm.salePrice) || r.salePrice;
-                                              const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === adminEditForm.product) || { price: r.basePrice };
-                                              const newSal = calculateSalary(r.basePrice, priceNum, r.category, r.tips || 0, 'normal', salarySettings);
+                                              const prod = DYNAMIC_ALL_PRODUCTS.find(p => p.name === adminEditForm.product) || { price: r.basePrice, category: r.category };
+                                              const newBase = prod.price || r.basePrice;
+                                              const newCat = prod.category || r.category;
+                                              const newSal = calculateSalary(newBase, priceNum, newCat, r.tips || 0, 'normal', salarySettings);
                                               let ca = 0, cla = 0;
                                               if (adminEditForm.paymentType === 'cash') ca = priceNum;
                                               else if (adminEditForm.paymentType === 'cashless') cla = priceNum;
                                               else { ca = r.cashAmount; cla = r.cashlessAmount; }
                                               const updatedR = reports.map(rep => rep.id === r.id
-                                                ? { ...rep, product: adminEditForm.product, salePrice: priceNum, total: priceNum, salary: newSal, paymentType: adminEditForm.paymentType, cashAmount: ca, cashlessAmount: cla, isBelowBase: priceNum < r.basePrice }
+                                                ? { ...rep, product: adminEditForm.product, basePrice: newBase, category: newCat, salePrice: priceNum, total: priceNum, salary: newSal, paymentType: adminEditForm.paymentType, cashAmount: ca, cashlessAmount: cla, isBelowBase: priceNum < newBase }
                                                 : rep
                                               );
                                               updateReports(updatedR);
@@ -4040,6 +4106,15 @@ export default function LikeBirdApp() {
                                             }} className="flex-1 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-bold">✅ Сохранить</button>
                                             <button onClick={() => {
                                               showConfirm('Удалить эту продажу?', () => {
+                                                // FIX: Восстанавливаем склад при удалении (как в deleteReport)
+                                                const productName = r ? getProductName(r.product) : null;
+                                                if (r && !r.isUnrecognized && productName && stock[productName]) {
+                                                  const newStock = {...stock};
+                                                  newStock[productName] = {...newStock[productName], count: newStock[productName].count + (r.quantity || 1)};
+                                                  updateStock(newStock);
+                                                  addStockHistoryEntry(productName, 'return', (r.quantity || 1), `Удалена продажа (админ)`);
+                                                }
+                                                const nd = {...salaryDecisions}; delete nd[r.id]; setSalaryDecisions(nd); save('likebird-salary-decisions', nd);
                                                 updateReports(reports.filter(rep => rep.id !== r.id));
                                                 setExpandedEdit(null);
                                                 showNotification('Удалено');
@@ -4052,7 +4127,7 @@ export default function LikeBirdApp() {
                                         <div className={`p-2 flex justify-between items-center cursor-pointer hover:bg-gray-50 ${r.isUnrecognized ? 'bg-red-50' : 'bg-white'}`}
                                           onClick={() => { setExpandedEdit(r.id); setAdminEditForm({ product: r.product, salePrice: String(r.salePrice), paymentType: r.paymentType }); }}>
                                           <div className="flex items-center gap-2 min-w-0">
-                                            <span className="text-base flex-shrink-0">{r.isUnrecognized ? '❓' : ([...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦')}</span>
+                                            <span className="text-base flex-shrink-0">{r.isUnrecognized ? '❓' : (DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦')}</span>
                                             <span className="truncate text-sm">{getProductName(r.product)}</span>
                                           </div>
                                           <div className="flex items-center gap-2 flex-shrink-0">
@@ -4175,6 +4250,14 @@ export default function LikeBirdApp() {
                 : u
               );
               saveUsers(updated);
+              // FIX: Синхронизируем роль в employees (ранее role менялось только в users)
+              const editedUser = updated.find(u => u.login === editingUser);
+              if (editedUser) {
+                const empMatch = employees.find(e => e.name === editedUser.name || e.name === editingUser);
+                if (empMatch) {
+                  updateEmployees(employees.map(e => e.id === empMatch.id ? { ...e, name: editedUser.name, role: editedUser.role } : e));
+                }
+              }
               // Если редактируем самого себя — обновить currentUser
               if (editingUser === currentUser?.login) {
                 const me = updated.find(u => u.login === editingUser);
@@ -5057,7 +5140,7 @@ export default function LikeBirdApp() {
                     <h3 className="font-bold mb-3">💰 Себестоимость товаров</h3>
                     <p className="text-xs text-gray-500 mb-3">⚠️ Эта информация видна только администратору</p>
                     <div className="space-y-2 max-h-96 overflow-y-auto">
-                      {ALL_PRODUCTS.map(prod => (
+                      {DYNAMIC_ALL_PRODUCTS.map(prod => (
                         <div key={prod.name} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                           <div>
                             <span className="font-medium">{prod.emoji} {prod.name}</span>
@@ -5305,8 +5388,7 @@ export default function LikeBirdApp() {
                   const code = Math.random().toString(36).substring(2, 8).toUpperCase();
                   const newCodes = [...inviteCodes, { code, createdAt: Date.now(), used: false, usedBy: null }];
                   setInviteCodes(newCodes);
-                  localStorage.setItem('likebird-invite-codes', JSON.stringify(newCodes));
-                  fbSave('likebird-invite-codes', newCodes);
+                  save('likebird-invite-codes', newCodes);
                   logAction('Создан код приглашения', code);
                   showNotification(`Код: ${code}`);
                 }} className="w-full bg-green-500 text-white py-3 rounded-lg font-bold hover:bg-green-600 mb-3">🔑 Сгенерировать код</button>
@@ -5322,8 +5404,7 @@ export default function LikeBirdApp() {
                         <button onClick={() => {
                           const updated = inviteCodes.filter((_, j) => j !== inviteCodes.length - 1 - i);
                           setInviteCodes(updated);
-                          localStorage.setItem('likebird-invite-codes', JSON.stringify(updated));
-                          fbSave('likebird-invite-codes', updated);
+                          save('likebird-invite-codes', updated);
                         }} className="text-red-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
@@ -5904,7 +5985,7 @@ export default function LikeBirdApp() {
                       // Продажи сегодня
                       const todayStr = formatDate(new Date());
                       const todaySales = reports.filter(r =>
-                        r.employee === (userProfile.displayName || u.name) &&
+                        (r.employee === u.name || r.employee === u.login || r.employee === userProfile.displayName) &&
                         r.date.split(',')[0].trim() === todayStr
                       ).length;
 
@@ -6313,7 +6394,7 @@ export default function LikeBirdApp() {
     const saveEditReport = (r) => {
       const priceNum = parseInt(editForm.salePrice) || r.salePrice;
       const tipsNum = parseInt(editForm.tips) || 0;
-      const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === editForm.product) || { name: editForm.product, price: r.basePrice, category: r.category };
+      const prod = DYNAMIC_ALL_PRODUCTS.find(p => p.name === editForm.product) || { name: editForm.product, price: r.basePrice, category: r.category };
       // FIX: Используем цену найденного товара как basePrice (ранее всегда использовал старый r.basePrice)
       const newBase = prod.price || r.basePrice;
       const newCategory = prod.category || r.category;
@@ -6481,7 +6562,7 @@ export default function LikeBirdApp() {
                   <div className="space-y-2">
                     {myTodayReports.slice(0, 5).map(r => (
                       <div key={r.id} className="bg-white rounded-xl p-3 shadow flex items-center gap-3">
-                        <div className="text-2xl">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦'}</div>
+                        <div className="text-2xl">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-sm truncate">{r.product}</p>
                           <p className="text-xs text-gray-400">{r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
@@ -6553,7 +6634,7 @@ export default function LikeBirdApp() {
                     {editingReport === r.id ? (
                       <div className="p-4 space-y-3">
                         <div className="flex items-center gap-2 mb-2">
-                          <div className="text-2xl">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === editForm.product)?.emoji || '🐦'}</div>
+                          <div className="text-2xl">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === editForm.product)?.emoji || '🐦'}</div>
                           <p className="font-bold text-gray-700">{r.product}</p>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
@@ -6583,7 +6664,7 @@ export default function LikeBirdApp() {
                       </div>
                     ) : (
                       <div className="p-3 flex items-center gap-3">
-                        <div className="text-2xl flex-shrink-0">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦'}</div>
+                        <div className="text-2xl flex-shrink-0">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-sm truncate">{r.product}</p>
                           <p className="text-xs text-gray-400">{r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
@@ -6629,7 +6710,7 @@ export default function LikeBirdApp() {
                 <div className="space-y-2">
                   {myTodayReports.map(r => (
                     <div key={r.id} className="bg-white rounded-xl p-3 shadow flex items-center gap-3">
-                      <div className="text-2xl flex-shrink-0">{[...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product)?.emoji || '🐦'}</div>
+                      <div className="text-2xl flex-shrink-0">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-sm truncate">{r.product}</p>
                         <p className="text-xs text-gray-400">
@@ -6738,12 +6819,23 @@ export default function LikeBirdApp() {
 
     // Штрафы и бонусы за период
     const myEmpId = myEmployee?.id;
+    // FIX: Безопасный парсинг дат бонусов/штрафов (поддержка ISO и DD.MM.YYYY)
+    const parseBonusDate = (dateStr) => {
+      if (!dateStr) return new Date(0);
+      const d = new Date(dateStr);
+      if (!isNaN(d.getTime())) return d;
+      // Пробуем DD.MM.YYYY
+      const parts = dateStr.split('.');
+      if (parts.length === 3) return new Date(parseYear(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      return new Date(0);
+    };
+
     const myPenalties = myEmpId ? penalties.filter(p => {
-      const d = new Date(p.date);
+      const d = parseBonusDate(p.date);
       return p.employeeId === myEmpId && d >= periodStart && d <= now;
     }) : [];
     const myBonuses = myEmpId ? bonuses.filter(b => {
-      const d = new Date(b.date);
+      const d = parseBonusDate(b.date);
       return b.employeeId === myEmpId && d >= periodStart && d <= now;
     }) : [];
     const totalPenalties = myPenalties.reduce((s, p) => s + p.amount, 0);
@@ -6811,6 +6903,8 @@ export default function LikeBirdApp() {
       const hashed = await hashPassword(newPassword);
       users[idx].passwordHash = hashed;
       localStorage.setItem('likebird-users', JSON.stringify(users));
+      // FIX: Синхронизируем с Firebase (ранее пароль не сохранялся — терялся при sync/на другом устройстве)
+      fbSave('likebird-users', users);
       setNewPassword(''); setConfirmNewPassword('');
       setPassSaved(true);
       setTimeout(() => setPassSaved(false), 3000);
@@ -6964,7 +7058,7 @@ export default function LikeBirdApp() {
                       return (
                         <div key={r.id} className="bg-white rounded-xl p-3 shadow flex items-center gap-3">
                           <div className="text-2xl">{(() => {
-                            const prod = [...ALL_PRODUCTS, ...customProducts].find(p => p.name === r.product);
+                            const prod = DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product);
                             return prod?.emoji || '🐦';
                           })()}</div>
                           <div className="flex-1 min-w-0">
@@ -7068,7 +7162,7 @@ export default function LikeBirdApp() {
                 myGoals.map(goal => {
                   const progress = myEmpId ? getEmployeeProgress(myEmpId, goal.goalType, goal.period) : null;
                   const pct = progress ? Math.min(100, Math.round((progress.current / progress.target) * 100)) : 0;
-                  const goalLabels = { sales_count: '🛒 Количество продаж', revenue: '💰 Выручка', avg_check: '📊 Средний чек' };
+                  const goalLabels = { sales: '🛒 Количество продаж', sales_count: '🛒 Количество продаж', revenue: '💰 Выручка', avg_check: '📊 Средний чек' };
                   return (
                     <div key={`${goal.employeeId}_${goal.goalType}_${goal.period}`} className="bg-white rounded-xl p-4 shadow">
                       <div className="flex items-center justify-between mb-3">
@@ -7297,12 +7391,16 @@ export default function LikeBirdApp() {
         const updatedEmps = [...currentEmps, newEmp];
         localStorage.setItem('likebird-employees', JSON.stringify(updatedEmps));
         await fbSave('likebird-employees', updatedEmps);
+        // FIX: Обновляем React-state (ранее отсутствовало — сотрудник не появлялся до перезагрузки)
+        setEmployees(updatedEmps);
       }
 
       // Помечаем код как использованный — сразу в Firebase
       const updatedCodes = codes.map(c => c.code === validCode.code ? {...c, used: true, usedBy: login.trim(), usedAt: Date.now()} : c);
       localStorage.setItem('likebird-invite-codes', JSON.stringify(updatedCodes));
       await fbSave('likebird-invite-codes', updatedCodes);
+      // FIX: Обновляем React-state (ранее код оставался «неиспользованным» в UI админки)
+      setInviteCodes(updatedCodes);
 
       // Авторизуем
       const authData = { authenticated: true, name: login.trim(), login: login.trim(), expiry: Date.now() + (30*24*60*60*1000), createdAt: Date.now() };
@@ -7497,10 +7595,10 @@ export default function LikeBirdApp() {
 
   return (
     <>
-      <Notification />
+      <ToastNotification />
       <ConfirmDialog />
-      <ExpenseModal />
-      <InputModal />
+      <ExpenseModal key={expenseModal ? 'exp-' + expenseModal.employee : 'exp-closed'} />
+      <InputModal key={inputModal ? 'inp-' + inputModal.title : 'inp-closed'} />
       {currentView === 'menu' && <MenuView />}
       {currentView === 'catalog' && <CatalogView />}
       {currentView === 'new-report' && <NewReportView />}

@@ -53,7 +53,6 @@ export const SYNC_KEYS = new Set([
   'likebird-achievements-granted',
   'likebird-shifts',
   'likebird-notifications',
-  'likebird-product-photos',
 ]);
 
 // likebird-reports → data/likebird-reports
