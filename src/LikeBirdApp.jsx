@@ -1874,7 +1874,30 @@ export default function LikeBirdApp() {
   const copyDayReport = (emp, empReports, totals) => {
     const { cashTotal, cashlessTotal, totalTips, totalSalary, empExpenses, toGive } = totals;
     const byCat = empReports.filter(r => !r.isUnrecognized).reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + (r.quantity || 1); return acc; }, {});
-    let text = `📅 ${selectedDate} - ${emp}\n📦 Продаж: ${empReports.length}\n`;
+    // Добавляем время смены
+    let shiftLine = '';
+    try {
+      const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+      const u = users.find(u => (u.name || u.login) === emp);
+      const login = u?.login || emp;
+      const shift = shiftsData[`${login}_${selectedDate}`];
+      if (shift?.openTime) {
+        shiftLine = `⏱️ Смена: ${shift.openTime}`;
+        if (shift.closeTime) {
+          shiftLine += ` → ${shift.closeTime}`;
+          const [oh, om] = shift.openTime.split(':').map(Number);
+          const [ch, cm] = shift.closeTime.split(':').map(Number);
+          const mins = (ch * 60 + cm) - (oh * 60 + om);
+          if (mins > 0) {
+            const h = Math.floor(mins / 60);
+            const roundedH = h + Math.floor((mins % 60) / 15) * 0.25;
+            shiftLine += ` (${Number.isInteger(roundedH) ? roundedH : roundedH.toFixed(2).replace(/0$/, '')} ч)`;
+          }
+        }
+        shiftLine += '\n';
+      }
+    } catch {}
+    let text = `📅 ${selectedDate} - ${emp}\n${shiftLine}📦 Продаж: ${empReports.length}\n`;
     Object.entries(byCat).forEach(([cat, cnt]) => { text += `${CAT_ICONS[cat]} ${cat}: ${cnt}\n`; });
     text += `\n💰 Итого: ${(cashTotal + cashlessTotal).toLocaleString()}₽\n💵 Наличные: ${cashTotal.toLocaleString()}₽\n💳 Безнал: ${cashlessTotal.toLocaleString()}₽\n🎁 Чаевые: ${totalTips.toLocaleString()}₽\n👛 ЗП: ${totalSalary.toLocaleString()}₽\n`;
     if (empExpenses > 0) text += `📝 Расходы: -${empExpenses}₽\n`;
@@ -3429,6 +3452,71 @@ export default function LikeBirdApp() {
     const daySalary = dateReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
     const dayExpenses = dateExpenses.reduce((s, e) => s + e.amount, 0);
     
+    // Редактирование смены
+    const [editingShift, setEditingShift] = useState(null); // login сотрудника
+    const [editOpen, setEditOpen] = useState('');
+    const [editClose, setEditClose] = useState('');
+    
+    // Получить login сотрудника по имени
+    const getLoginByName = (empName) => {
+      try {
+        const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+        const u = users.find(u => (u.name || u.login) === empName);
+        return u?.login || empName;
+      } catch { return empName; }
+    };
+    
+    // Получить данные смены сотрудника за выбранную дату
+    const getEmployeeShift = (empName) => {
+      const login = getLoginByName(empName);
+      const key = `${login}_${selectedDate}`;
+      return { shift: shiftsData[key] || null, key, login };
+    };
+    
+    // Округление минут до четверти часа (0, 0.25, 0.5, 0.75)
+    const roundMinutesToQuarter = (totalMinutes) => {
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      return h + Math.floor(m / 15) * 0.25;
+    };
+    
+    // Форматировать округлённые часы
+    const formatRoundedHours = (roundedHours) => {
+      if (roundedHours <= 0) return '—';
+      if (Number.isInteger(roundedHours)) return `${roundedHours} ч`;
+      return `${roundedHours.toFixed(2).replace(/0$/, '')} ч`;
+    };
+    
+    // Посчитать минуты смены
+    const getShiftMinutes = (shift) => {
+      if (!shift?.openTime || !shift?.closeTime) return 0;
+      const [oh, om] = shift.openTime.split(':').map(Number);
+      const [ch, cm] = shift.closeTime.split(':').map(Number);
+      const mins = (ch * 60 + cm) - (oh * 60 + om);
+      return mins > 0 ? mins : 0;
+    };
+    
+    // Сохранить отредактированное время смены
+    const saveShiftEdit = (empName) => {
+      const { key } = getEmployeeShift(empName);
+      const existing = shiftsData[key] || {};
+      const updated = { 
+        ...shiftsData, 
+        [key]: { 
+          ...existing,
+          openTime: editOpen || existing.openTime, 
+          closeTime: editClose || existing.closeTime, 
+          status: (editClose || existing.closeTime) ? 'closed' : 'open',
+          openedAt: existing.openedAt || Date.now(),
+          closedAt: (editClose || existing.closeTime) ? (existing.closedAt || Date.now()) : undefined,
+          editedInDayReport: true
+        } 
+      };
+      updateShiftsData(updated);
+      setEditingShift(null);
+      showNotification('Время смены обновлено');
+    };
+    
     // Проверка можно ли редактировать (20 минут = 1200000 мс)
     // Администраторы могут редактировать без ограничений
     const EDIT_TIME_LIMIT = 20 * 60 * 1000;
@@ -3485,7 +3573,6 @@ export default function LikeBirdApp() {
             const ownCard = getOwnCard(emp, selectedDate);
             const toGive = ownCard ? (cashTotal + cashlessTotal + totalTips - totalSalary - empExpenses - given) : (cashTotal + totalTips - totalSalary - empExpenses - given);
             const byCat = empReports.filter(r => !r.isUnrecognized).reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + (r.quantity || 1); return acc; }, {});
-            const workTime = empReports[0]?.workTime;
             const reviewStatus = getReviewStatus(empReports);
             const anyEditable = empReports.some(r => canEdit(r));
             
@@ -3500,12 +3587,71 @@ export default function LikeBirdApp() {
                         {reviewStatus === 'rejected' && <span className="bg-red-400 text-white px-2 py-0.5 rounded text-xs">✗ Ошибки</span>}
                         {reviewStatus === 'revision' && <span className="bg-orange-300 text-white px-2 py-0.5 rounded text-xs">↻ Доработать</span>}
                       </div>
-                      <p className="text-white/80 text-xs">{empReports.length} продаж{Object.entries(byCat).map(([cat, cnt]) => (<span key={cat} className="ml-2">{CAT_ICONS[cat]}{cnt}</span>))}{workTime?.workHours && <span className="ml-2">⏱️{workTime.workHours.toFixed(1)}ч</span>}</p>
+                      <p className="text-white/80 text-xs">{empReports.length} продаж{Object.entries(byCat).map(([cat, cnt]) => (<span key={cat} className="ml-2">{CAT_ICONS[cat]}{cnt}</span>))}</p>
                     </div>
                     <button onClick={() => copyDayReport(emp, empReports, { cashTotal, cashlessTotal, totalTips, totalSalary, empExpenses, toGive })} className="bg-white/20 p-1.5 rounded hover:bg-white/30" title="Скопировать"><Copy className="w-4 h-4" /></button>
                   </div>
                 </div>
                 <div className="p-3 space-y-3">
+                  {/* Время смены */}
+                  {(() => {
+                    const { shift, login } = getEmployeeShift(emp);
+                    const mins = getShiftMinutes(shift);
+                    const roundedHours = roundMinutesToQuarter(mins);
+                    const salesCount = empReports.length;
+                    const speed = roundedHours > 0 ? parseFloat((salesCount / roundedHours).toFixed(2)) : 0;
+                    const isEditing = editingShift === login;
+                    
+                    return (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-sm font-semibold text-blue-700">⏱️ Время работы</span>
+                          {!isEditing && (
+                            <button onClick={() => {
+                              setEditingShift(login);
+                              setEditOpen(shift?.openTime || '');
+                              setEditClose(shift?.closeTime || '');
+                            }} className="text-xs text-blue-500 hover:text-blue-700 underline">
+                              {shift?.openTime ? 'изменить' : 'указать'}
+                            </button>
+                          )}
+                        </div>
+                        
+                        {isEditing ? (
+                          <div className="space-y-2 mt-2">
+                            <div className="flex gap-2 items-center">
+                              <label className="text-xs text-gray-500 w-16">Начало:</label>
+                              <input type="time" value={editOpen} onChange={e => setEditOpen(e.target.value)}
+                                className="flex-1 p-2 border-2 border-blue-300 rounded-lg text-sm font-bold focus:border-blue-500 focus:outline-none" />
+                            </div>
+                            <div className="flex gap-2 items-center">
+                              <label className="text-xs text-gray-500 w-16">Конец:</label>
+                              <input type="time" value={editClose} onChange={e => setEditClose(e.target.value)}
+                                className="flex-1 p-2 border-2 border-blue-300 rounded-lg text-sm font-bold focus:border-blue-500 focus:outline-none" />
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={() => setEditingShift(null)} className="flex-1 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-semibold">Отмена</button>
+                              <button onClick={() => saveShiftEdit(emp)} className="flex-1 py-2 bg-blue-500 text-white rounded-lg text-sm font-semibold">Сохранить</button>
+                            </div>
+                          </div>
+                        ) : shift?.openTime ? (
+                          <div>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span className="text-lg font-black text-blue-800">
+                                {shift.openTime} → {shift.closeTime || <span className="text-green-500 animate-pulse text-sm">работает</span>}
+                              </span>
+                            </div>
+                            <div className="flex gap-4 mt-1.5 text-xs text-blue-600">
+                              {mins > 0 && <span className="bg-blue-100 px-2 py-0.5 rounded-full font-semibold">{formatRoundedHours(roundedHours)}</span>}
+                              {speed > 0 && <span className="bg-indigo-100 px-2 py-0.5 rounded-full font-semibold">🚀 {speed} прод/ч</span>}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-blue-400 mt-1">Смена не зафиксирована</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {/* Предупреждение о времени редактирования */}
                   {anyEditable && (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs text-blue-700">
@@ -6255,7 +6401,7 @@ export default function LikeBirdApp() {
                   const [d, m, y] = dateStr.split('.');
                   const shiftDate = y ? new Date(parseInt('20'+y), parseInt(m)-1, parseInt(d)) : new Date(0);
                   if (shiftDate.getTime() < weekAgoTs) return;
-                  // Считаем часы
+                  // Считаем минуты
                   if (shift.openTime && shift.closeTime) {
                     const [oh, om] = shift.openTime.split(':').map(Number);
                     const [ch, cm] = shift.closeTime.split(':').map(Number);
@@ -6265,12 +6411,21 @@ export default function LikeBirdApp() {
                     isCurrentlyOpen = true;
                   }
                 });
-                const hours = Math.floor(totalMinutes / 60);
-                const mins = totalMinutes % 60;
-                // Если часы известны — показываем их; если работает сейчас — пульс;
-                // если нет данных о смене — показываем количество рабочих дней
-                const timeLabel = totalMinutes > 0
-                  ? (mins > 0 ? `${hours}ч ${mins}м` : `${hours}ч`)
+                // Округление времени до четверти часа (0.25 = 15 мин):
+                // floor(минуты / 15) * 0.25 — 14м→0, 15м→0.25, 25м→0.25, 30м→0.5, 45м→0.75
+                const fullHours = Math.floor(totalMinutes / 60);
+                const remainMinutes = totalMinutes % 60;
+                const quarterFraction = Math.floor(remainMinutes / 15) * 0.25;
+                const roundedHours = fullHours + quarterFraction;
+                // Скорость продаж = продажи / округлённые часы (до сотых)
+                const speed = roundedHours > 0 ? emp.sales / roundedHours : 0;
+                const speedDisplay = parseFloat(speed.toFixed(2));
+                // Формат отображения часов: "5.25 ч", "8 ч", "0.5 ч"
+                const hoursDisplay = roundedHours > 0
+                  ? (Number.isInteger(roundedHours) ? `${roundedHours} ч` : `${roundedHours.toFixed(2).replace(/0$/, '')} ч`)
+                  : null;
+                const timeLabel = hoursDisplay
+                  ? hoursDisplay
                   : isCurrentlyOpen ? null
                   : `${emp.shifts} дн.`;
 
@@ -6286,12 +6441,12 @@ export default function LikeBirdApp() {
                           ? <span className="text-green-500 animate-pulse text-sm font-semibold">● работает</span>
                           : <span>{timeLabel}</span>
                         }
-                        {totalMinutes > 0 && isCurrentlyOpen && <span className="text-xs text-green-400">{hours}ч {mins}м</span>}
+                        {totalMinutes > 0 && isCurrentlyOpen && <span className="text-xs text-green-400">{hoursDisplay || `${fullHours}ч`}</span>}
                       </div>
                       <div className="font-bold text-lg">{emp.sales}</div>
                       <div className="font-bold text-lg flex items-center justify-center gap-1">
-                        {emp.speed > 2 && <span className="text-yellow-500">⚡</span>}
-                        {emp.speed > 0 ? emp.speed.toFixed(1) : <span className="text-gray-300">—</span>}
+                        {speedDisplay > 2 && <span className="text-yellow-500">⚡</span>}
+                        {speedDisplay > 0 ? speedDisplay : <span className="text-gray-300">—</span>}
                       </div>
                     </div>
                   </div>
