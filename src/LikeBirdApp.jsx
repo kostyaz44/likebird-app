@@ -2045,6 +2045,7 @@ export default function LikeBirdApp() {
             {(currentUser?.isAdmin || currentUser?.role === 'admin') && <button onClick={() => setCurrentView('admin')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Shield className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Админ-панель</h3><p className="text-xs text-white/80">Управление и аналитика</p></div>{lowStock.length > 0 && <span className="absolute top-2 right-2 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{lowStock.length}</span>}</button>}
             <button onClick={() => setCurrentView('settings')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-gray-100 p-3 rounded-lg"><Settings className="w-6 h-6 text-gray-600" /></div><div className="text-left"><h3 className="font-bold">Настройки</h3><p className="text-xs text-gray-400">Экспорт, бэкап, аккаунт</p></div></button>
             <button onClick={() => setCurrentView('profile')} className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">{(profilesData[(() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })()]?.avatar) ? '🖼️' : '👤'}</span></div><div className="text-left flex-1"><h3 className="font-bold">Мой профиль</h3><p className="text-xs text-white/80">Зарплата, достижения, аккаунт</p></div><div className="text-right"><p className="text-white/80 text-sm font-semibold">{employeeName}</p></div></button>
+            <button onClick={() => setCurrentView('game')} className="w-full bg-gradient-to-r from-cyan-400 to-sky-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">🌊</span></div><div className="text-left flex-1"><h3 className="font-bold">Ветер на набережной</h3><p className="text-xs text-white/80">Мини-игра: лови товар!</p></div><div className="text-right"><p className="text-white/80 text-xs font-semibold">🏆 {(() => { try { return localStorage.getItem('likebird-game-highscore') || '0'; } catch { return '0'; } })()}</p></div></button>
           </div>
         </div>
       </div>
@@ -2141,6 +2142,523 @@ export default function LikeBirdApp() {
             </div>
           )}
         </div>
+      </div>
+    );
+  };
+
+  // ════════════════════════════════════════════════════════════════════════
+  // GameView — «Ветер на набережной» Canvas мини-игра
+  // ════════════════════════════════════════════════════════════════════════
+  const GameView = () => {
+    const canvasRef = useRef(null);
+    const gameRef = useRef(null);
+    const touchXRef = useRef(0.5); // 0..1 normalized
+    const [gameState, setGameState] = useState('menu'); // menu | playing | over
+    const [score, setScore] = useState(0);
+    const [highScore, setHighScore] = useState(() => parseInt(localStorage.getItem('likebird-game-highscore') || '0'));
+
+    // Товары, которые падают (emoji + цвет + очки)
+    const ITEMS = [
+      { emoji: '🐦', name: 'Птичка', points: 10, size: 32, color: '#f59e0b' },
+      { emoji: '🐦', name: 'Птичка', points: 10, size: 28, color: '#ef4444' },
+      { emoji: '🐦', name: 'Птичка', points: 10, size: 30, color: '#3b82f6' },
+      { emoji: '🧌', name: 'Йети', points: 20, size: 38, color: '#a78bfa' },
+      { emoji: '🦈', name: 'Акула', points: 15, size: 34, color: '#6366f1' },
+      { emoji: '🦎', name: 'Ящерица', points: 15, size: 30, color: '#10b981' },
+      { emoji: '🐙', name: 'Осьминог', points: 12, size: 32, color: '#ec4899' },
+      { emoji: '🦴', name: 'Скелет', points: 15, size: 28, color: '#f5f5f5' },
+      { emoji: '🧸', name: 'Медвежонок', points: 12, size: 34, color: '#d97706' },
+    ];
+
+    const startGame = () => {
+      setScore(0);
+      setGameState('playing');
+    };
+
+    useEffect(() => {
+      if (gameState !== 'playing') return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+
+      // Размеры под мобильный
+      const W = canvas.width = canvas.offsetWidth * 2;
+      const H = canvas.height = canvas.offsetHeight * 2;
+      ctx.scale(1, 1);
+
+      const TABLE_Y = H * 0.18;      // Верх стола
+      const TABLE_H = H * 0.07;      // Высота стола
+      const GROUND_Y = H * 0.88;     // Земля
+      const CATCH_Y = H * 0.78;      // Зона ловли
+      const CATCHER_W = W * 0.22;    // Ширина "рук"
+      const CATCHER_H = H * 0.08;
+
+      // Игровое состояние в ref (без re-render)
+      const g = {
+        items: [],            // Падающие предметы
+        particles: [],        // Частицы ветра
+        catchEffects: [],     // Эффекты ловли
+        missEffects: [],      // Эффекты промаха
+        score: 0,
+        lives: 3,
+        level: 1,
+        wind: 2,              // Сила ветра (пикселей/кадр)
+        windDir: 1,           // Направление (1=вправо, -1=влево)
+        windTimer: 0,
+        spawnTimer: 0,
+        spawnRate: 80,        // Кадров между спавнами
+        frame: 0,
+        running: true,
+      };
+      gameRef.current = g;
+
+      // Спавн предмета
+      const spawnItem = () => {
+        const template = ITEMS[Math.floor(Math.random() * ITEMS.length)];
+        const x = W * 0.15 + Math.random() * W * 0.7;
+        g.items.push({
+          ...template,
+          x, y: TABLE_Y + TABLE_H,
+          vx: g.windDir * (g.wind + Math.random() * 2),
+          vy: 1 + Math.random() * 2 + g.level * 0.3,
+          rotation: Math.random() * 360,
+          rotSpeed: (Math.random() - 0.5) * 8,
+          caught: false,
+        });
+      };
+
+      // Спавн частиц ветра
+      const spawnWindParticle = () => {
+        g.particles.push({
+          x: g.windDir > 0 ? -10 : W + 10,
+          y: Math.random() * H * 0.7,
+          vx: g.windDir * (3 + Math.random() * 4 + g.wind),
+          vy: 0.5 + Math.random(),
+          life: 60 + Math.random() * 40,
+          maxLife: 100,
+          size: 1 + Math.random() * 2,
+        });
+      };
+
+      // Рисуем фон — набережная
+      const drawBackground = () => {
+        // Небо
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, H * 0.5);
+        skyGrad.addColorStop(0, '#87ceeb');
+        skyGrad.addColorStop(1, '#b8e4f9');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, W, H * 0.5);
+
+        // Море на горизонте
+        const seaGrad = ctx.createLinearGradient(0, H * 0.08, 0, H * 0.14);
+        seaGrad.addColorStop(0, '#3b82f6');
+        seaGrad.addColorStop(1, '#60a5fa');
+        ctx.fillStyle = seaGrad;
+        ctx.fillRect(0, H * 0.08, W, H * 0.06);
+
+        // Волны
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 2;
+        for (let w = 0; w < 5; w++) {
+          ctx.beginPath();
+          const waveY = H * 0.09 + w * H * 0.01;
+          for (let x = 0; x < W; x += 4) {
+            ctx.lineTo(x, waveY + Math.sin((x + g.frame * 2 + w * 50) / 30) * 3);
+          }
+          ctx.stroke();
+        }
+
+        // Плитка набережной
+        const tileGrad = ctx.createLinearGradient(0, H * 0.14, 0, H);
+        tileGrad.addColorStop(0, '#c4a882');
+        tileGrad.addColorStop(0.3, '#b89f7a');
+        tileGrad.addColorStop(1, '#a08060');
+        ctx.fillStyle = tileGrad;
+        ctx.fillRect(0, H * 0.14, W, H);
+
+        // Линии плитки
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+        ctx.lineWidth = 1;
+        const tileSize = W / 8;
+        for (let x = 0; x < W; x += tileSize) {
+          ctx.beginPath(); ctx.moveTo(x, H * 0.14); ctx.lineTo(x, H); ctx.stroke();
+        }
+        for (let y = H * 0.14; y < H; y += tileSize * 0.6) {
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        }
+      };
+
+      // Рисуем стол
+      const drawTable = () => {
+        // Тень стола
+        ctx.fillStyle = 'rgba(0,0,0,0.15)';
+        ctx.fillRect(W * 0.06, TABLE_Y + TABLE_H + 4, W * 0.88, 8);
+
+        // Столешница (тёмно-коричневая как на фото)
+        const tableGrad = ctx.createLinearGradient(0, TABLE_Y, 0, TABLE_Y + TABLE_H);
+        tableGrad.addColorStop(0, '#5d3a1a');
+        tableGrad.addColorStop(0.5, '#4a2e14');
+        tableGrad.addColorStop(1, '#3d2410');
+        ctx.fillStyle = tableGrad;
+
+        // Перспектива — трапеция
+        ctx.beginPath();
+        ctx.moveTo(W * 0.08, TABLE_Y + TABLE_H);
+        ctx.lineTo(W * 0.92, TABLE_Y + TABLE_H);
+        ctx.lineTo(W * 0.85, TABLE_Y);
+        ctx.lineTo(W * 0.15, TABLE_Y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Белая окантовка как на фото
+        ctx.strokeStyle = '#e8ddd0';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Товары на столе (декоративные, не интерактивные)
+        const tableItems = ['🐦','🐦','🐦','🧌','🦈','🐦','🐦','🦎','🐦'];
+        const itemSpacing = W * 0.7 / tableItems.length;
+        ctx.font = `${Math.round(W * 0.04)}px serif`;
+        ctx.textAlign = 'center';
+        tableItems.forEach((item, i) => {
+          const ix = W * 0.18 + i * itemSpacing;
+          const iy = TABLE_Y + TABLE_H * 0.3;
+          // Лёгкое покачивание от ветра
+          const wobble = Math.sin((g.frame * 0.05 + i) * g.wind * 0.3) * (g.wind * 0.5);
+          ctx.fillText(item, ix + wobble, iy);
+        });
+      };
+
+      // Рисуем частицы ветра
+      const drawWind = () => {
+        g.particles.forEach(p => {
+          const alpha = Math.max(0, p.life / p.maxLife) * 0.4;
+          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+          ctx.fillRect(p.x, p.y, p.size * 8, p.size);
+        });
+      };
+
+      // Рисуем ловца (руки)
+      const drawCatcher = () => {
+        const cx = touchXRef.current * W;
+        const left = cx - CATCHER_W / 2;
+
+        // Тень
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.beginPath();
+        ctx.ellipse(cx, CATCH_Y + CATCHER_H + 4, CATCHER_W * 0.5, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Руки — дуга
+        ctx.fillStyle = '#fcd9b6';
+        ctx.beginPath();
+        ctx.moveTo(left, CATCH_Y + CATCHER_H);
+        ctx.quadraticCurveTo(left, CATCH_Y, cx - CATCHER_W * 0.3, CATCH_Y - 10);
+        ctx.lineTo(cx - CATCHER_W * 0.1, CATCH_Y - 20);
+        ctx.lineTo(cx + CATCHER_W * 0.1, CATCH_Y - 20);
+        ctx.lineTo(cx + CATCHER_W * 0.3, CATCH_Y - 10);
+        ctx.quadraticCurveTo(left + CATCHER_W, CATCH_Y, left + CATCHER_W, CATCH_Y + CATCHER_H);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#e8b88a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Рукава
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(left - 8, CATCH_Y + CATCHER_H * 0.5, 20, CATCHER_H * 0.7);
+        ctx.fillRect(left + CATCHER_W - 12, CATCH_Y + CATCHER_H * 0.5, 20, CATCHER_H * 0.7);
+      };
+
+      // Рисуем падающие предметы
+      const drawItems = () => {
+        g.items.forEach(item => {
+          ctx.save();
+          ctx.translate(item.x, item.y);
+          ctx.rotate(item.rotation * Math.PI / 180);
+          ctx.font = `${item.size * 2}px serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(item.emoji, 0, 0);
+          ctx.restore();
+        });
+      };
+
+      // Рисуем эффекты
+      const drawEffects = () => {
+        g.catchEffects.forEach(e => {
+          const alpha = e.life / 30;
+          ctx.font = `bold ${Math.round(24 + (30 - e.life) * 1.5)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = `rgba(34,197,94,${alpha})`;
+          ctx.fillText(`+${e.points}`, e.x, e.y - (30 - e.life) * 2);
+          // Звёздочки
+          for (let i = 0; i < 4; i++) {
+            const angle = (i / 4) * Math.PI * 2 + e.life * 0.2;
+            const dist = (30 - e.life) * 3;
+            ctx.fillStyle = `rgba(250,204,21,${alpha})`;
+            ctx.font = `${16}px serif`;
+            ctx.fillText('✨', e.x + Math.cos(angle) * dist, e.y + Math.sin(angle) * dist);
+          }
+        });
+        g.missEffects.forEach(e => {
+          const alpha = e.life / 30;
+          ctx.font = `bold ${22}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = `rgba(239,68,68,${alpha})`;
+          ctx.fillText('💨', e.x, e.y - (30 - e.life));
+        });
+      };
+
+      // Рисуем HUD
+      const drawHUD = () => {
+        const pad = W * 0.03;
+        const fontSize = Math.round(W * 0.04);
+
+        // Фон HUD
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        const hudR = 12, hudX = pad, hudY2 = pad, hudW = W - pad * 2, hudH2 = fontSize * 2.2;
+        ctx.beginPath();
+        ctx.moveTo(hudX + hudR, hudY2);
+        ctx.lineTo(hudX + hudW - hudR, hudY2);
+        ctx.arcTo(hudX + hudW, hudY2, hudX + hudW, hudY2 + hudR, hudR);
+        ctx.lineTo(hudX + hudW, hudY2 + hudH2 - hudR);
+        ctx.arcTo(hudX + hudW, hudY2 + hudH2, hudX + hudW - hudR, hudY2 + hudH2, hudR);
+        ctx.lineTo(hudX + hudR, hudY2 + hudH2);
+        ctx.arcTo(hudX, hudY2 + hudH2, hudX, hudY2 + hudH2 - hudR, hudR);
+        ctx.lineTo(hudX, hudY2 + hudR);
+        ctx.arcTo(hudX, hudY2, hudX + hudR, hudY2, hudR);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.textBaseline = 'middle';
+        const hudY = pad + fontSize * 1.1;
+
+        // Очки
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillText(`⭐ ${g.score}`, pad * 2, hudY);
+
+        // Уровень
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#60a5fa';
+        ctx.fillText(`🌊 Ур.${g.level}`, W / 2, hudY);
+
+        // Жизни
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#f87171';
+        let hearts = '';
+        for (let i = 0; i < 3; i++) hearts += i < g.lives ? '❤️' : '🖤';
+        ctx.fillText(hearts, W - pad * 2, hudY);
+
+        // Индикатор ветра
+        const windArrow = g.windDir > 0 ? '→' : '←';
+        const windStrength = '~'.repeat(Math.min(5, Math.round(g.wind)));
+        ctx.font = `${Math.round(fontSize * 0.7)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText(`💨 ${windArrow} ${windStrength}`, W / 2, pad + fontSize * 2.5 + 10);
+      };
+
+      // Рисуем землю/границу
+      const drawGround = () => {
+        ctx.fillStyle = 'rgba(239,68,68,0.15)';
+        ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+        ctx.setLineDash([10, 10]);
+        ctx.strokeStyle = 'rgba(239,68,68,0.3)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND_Y);
+        ctx.lineTo(W, GROUND_Y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      };
+
+      // Обновление физики
+      const update = () => {
+        g.frame++;
+
+        // Ветер меняет направление и силу
+        g.windTimer++;
+        if (g.windTimer > 200 + Math.random() * 200) {
+          g.windTimer = 0;
+          g.windDir = Math.random() > 0.5 ? 1 : -1;
+          g.wind = 1.5 + Math.random() * 2 + g.level * 0.5;
+        }
+        // Плавное изменение ветра
+        g.wind += (Math.sin(g.frame * 0.01) * 0.1);
+
+        // Спавн предметов
+        g.spawnTimer++;
+        if (g.spawnTimer >= g.spawnRate) {
+          g.spawnTimer = 0;
+          spawnItem();
+        }
+
+        // Спавн частиц
+        if (g.frame % 3 === 0) spawnWindParticle();
+
+        // Обновление частиц
+        g.particles = g.particles.filter(p => {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.life--;
+          return p.life > 0;
+        });
+
+        // Обновление предметов
+        const cx = touchXRef.current * W;
+        g.items = g.items.filter(item => {
+          item.x += item.vx + g.windDir * g.wind * 0.3;
+          item.y += item.vy;
+          item.rotation += item.rotSpeed;
+
+          // Проверка ловли
+          if (item.y >= CATCH_Y - 20 && item.y <= CATCH_Y + CATCHER_H) {
+            if (Math.abs(item.x - cx) < CATCHER_W * 0.55) {
+              // Поймал!
+              g.score += item.points;
+              g.catchEffects.push({ x: item.x, y: item.y, points: item.points, life: 30 });
+              return false;
+            }
+          }
+
+          // Упал на землю
+          if (item.y > GROUND_Y) {
+            g.lives--;
+            g.missEffects.push({ x: item.x, y: GROUND_Y, life: 30 });
+            return false;
+          }
+
+          // Улетел за экран
+          if (item.x < -50 || item.x > W + 50) return false;
+
+          return true;
+        });
+
+        // Обновление эффектов
+        g.catchEffects = g.catchEffects.filter(e => { e.life--; return e.life > 0; });
+        g.missEffects = g.missEffects.filter(e => { e.life--; return e.life > 0; });
+
+        // Повышение уровня
+        const newLevel = Math.floor(g.score / 100) + 1;
+        if (newLevel > g.level) {
+          g.level = newLevel;
+          g.spawnRate = Math.max(25, 80 - g.level * 7);
+        }
+
+        // Конец игры
+        if (g.lives <= 0) {
+          g.running = false;
+          const finalScore = g.score;
+          const hs = parseInt(localStorage.getItem('likebird-game-highscore') || '0');
+          if (finalScore > hs) {
+            localStorage.setItem('likebird-game-highscore', String(finalScore));
+            setHighScore(finalScore);
+          }
+          setScore(finalScore);
+          setGameState('over');
+        }
+      };
+
+      // Главный цикл
+      let animId;
+      const loop = () => {
+        if (!g.running) return;
+        update();
+
+        ctx.clearRect(0, 0, W, H);
+        drawBackground();
+        drawTable();
+        drawGround();
+        drawWind();
+        drawItems();
+        drawCatcher();
+        drawEffects();
+        drawHUD();
+
+        setScore(g.score);
+        animId = requestAnimationFrame(loop);
+      };
+
+      animId = requestAnimationFrame(loop);
+      return () => { g.running = false; cancelAnimationFrame(animId); };
+    }, [gameState]);
+
+    // Touch/mouse handling
+    const handleMove = useCallback((clientX) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      touchXRef.current = Math.max(0.1, Math.min(0.9, (clientX - rect.left) / rect.width));
+    }, []);
+
+    return (
+      <div className="min-h-screen bg-gray-900 flex flex-col" style={{touchAction:'none', userSelect:'none'}}>
+        {/* Header */}
+        <div className="bg-gradient-to-r from-cyan-600 to-sky-700 text-white p-3 flex items-center gap-3 shrink-0" style={{paddingTop: "max(0.75rem, env(safe-area-inset-top))"}}>
+          <button onClick={() => { if (gameRef.current) gameRef.current.running = false; setGameState('menu'); setCurrentView('menu'); }}><ArrowLeft className="w-6 h-6" /></button>
+          <h2 className="font-bold flex-1">🌊 Ветер на набережной</h2>
+          <span className="text-amber-300 font-bold">⭐ {score}</span>
+        </div>
+
+        {gameState === 'menu' && (
+          <div className="flex-1 flex items-center justify-center p-6">
+            <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center">
+              <div className="text-6xl mb-4">🌊🐦💨</div>
+              <h2 className="text-2xl font-black text-gray-800 mb-2">Ветер на набережной</h2>
+              <p className="text-gray-500 text-sm mb-6">Ветер сдувает товар со стола! Двигай палец по экрану и лови всё, что падает. Не дай разбиться!</p>
+              <div className="bg-amber-50 rounded-xl p-4 mb-6 text-left space-y-2 text-sm">
+                <p>🐦 <b>Птичка</b> — 10 очков</p>
+                <p>🧌 <b>Йети</b> — 20 очков</p>
+                <p>🦈 <b>Акула</b> — 15 очков</p>
+                <p>🦎 <b>Ящерица</b> — 15 очков</p>
+                <p>❤️ <b>3 жизни</b> — каждый промах = -1</p>
+              </div>
+              {highScore > 0 && <p className="text-amber-600 font-bold mb-4">🏆 Рекорд: {highScore}</p>}
+              <button onClick={startGame} className="w-full py-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white rounded-2xl font-black text-lg shadow-lg hover:shadow-xl active:scale-95 transition-transform">
+                ▶ Начать игру
+              </button>
+            </div>
+          </div>
+        )}
+
+        {gameState === 'playing' && (
+          <canvas
+            ref={canvasRef}
+            className="flex-1 w-full"
+            style={{touchAction:'none'}}
+            onTouchMove={(e) => { e.preventDefault(); handleMove(e.touches[0].clientX); }}
+            onTouchStart={(e) => { e.preventDefault(); handleMove(e.touches[0].clientX); }}
+            onMouseMove={(e) => handleMove(e.clientX)}
+          />
+        )}
+
+        {gameState === 'over' && (
+          <div className="flex-1 flex items-center justify-center p-6">
+            <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center">
+              <div className="text-6xl mb-4">💨😅</div>
+              <h2 className="text-2xl font-black text-gray-800 mb-2">Ветер победил!</h2>
+              <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded-2xl p-5 my-4">
+                <p className="text-sm opacity-80">Ваш результат</p>
+                <p className="text-4xl font-black">{score}</p>
+              </div>
+              {score >= highScore && score > 0 && (
+                <p className="text-amber-600 font-bold text-lg mb-2">🎉 Новый рекорд!</p>
+              )}
+              {highScore > 0 && <p className="text-gray-400 text-sm mb-4">Лучший результат: {highScore}</p>}
+              <div className="space-y-3">
+                <button onClick={startGame} className="w-full py-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white rounded-2xl font-black text-lg shadow-lg active:scale-95 transition-transform">
+                  🔄 Ещё раз
+                </button>
+                <button onClick={() => setCurrentView('menu')} className="w-full py-3 bg-gray-100 text-gray-600 rounded-2xl font-bold">
+                  На главную
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -8258,6 +8776,7 @@ export default function LikeBirdApp() {
       {currentView === 'team' && <TeamView />}
       {currentView === 'profile' && <ProfileView />}
       {currentView === 'shift' && <ShiftView />}
+      {currentView === 'game' && <GameView />}
     </>
   );
 }
