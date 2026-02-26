@@ -2,6 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ShoppingBag, FileText, BarChart3, Plus, Search, ArrowLeft, Trash2, X, FileInput, AlertTriangle, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Clock, Package, Bell, RefreshCw, Download, Upload, Copy, Settings, Calendar, RotateCcw, Info, CheckCircle, Shield, DollarSign, Users, Lock, TrendingUp, Award, MapPin, Archive, MessageCircle, Star, Camera, Image, LogOut, Key, Wifi, WifiOff, Eye, EyeOff, Smartphone } from 'lucide-react';
 import { fbSave, fbSubscribe, fbGet, fbSetPresence, fbSubscribePresence, SYNC_KEYS } from './firebase.js';
 
+// ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
+const APP_VERSION = '2.5.2';
+
 // ===== УТИЛИТЫ: Хэширование пароля =====
 const hashPassword = async (password) => {
   const encoder = new TextEncoder();
@@ -43,7 +46,7 @@ const SyncManager = {
 
   // Экспорт всех данных
   exportAll: () => {
-    const data = { _version: 2, _exportDate: new Date().toISOString(), _syncId: SyncManager.getSyncId() };
+    const data = { _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _syncId: SyncManager.getSyncId() };
     SyncManager.ALL_KEYS.forEach(key => {
       try { const v = localStorage.getItem(key); if (v) data[key] = JSON.parse(v); } catch { const v = localStorage.getItem(key); if (v) data[key] = v; }
     });
@@ -518,8 +521,15 @@ export default function LikeBirdApp() {
   const [mixedCashless, setMixedCashless] = useState('');
   const [salePhotoGlobal, setSalePhotoGlobal] = useState(null);
   const [saleLocationGlobal, setSaleLocationGlobal] = useState('');
-  const [notification, setNotification] = useState(null);
-  const [confirmDialog, setConfirmDialog] = useState(null);
+  // FIX #56: Notification через useRef + DOM, НЕ через useState.
+  // Причина: showNotification вызывала setNotification → parent re-render → 
+  // все inner-компоненты (ShiftView, StockView, AdminView и др.) пересоздавались → 
+  // их локальный useState терялся. Это корневая причина ~80% багов с потерей данных.
+  const notificationRef = useRef(null);
+  const notificationTimerRef = useRef(null);
+  // FIX #56b: ConfirmDialog тоже через ref + DOM (та же проблема что и с notification)
+  const confirmDialogRef = useRef(null);
+  const confirmCallbackRef = useRef(null);
   // FIX: React-стейт для модала расходов (заменяет DOM-манипуляцию)
   const [expenseModal, setExpenseModal] = useState(null); // { employee: string }
   const [partnerStock, setPartnerStock] = useState({});
@@ -987,8 +997,7 @@ export default function LikeBirdApp() {
           const myUnread = val.filter(n => n.targetLogin === auth.login && !n.read);
           myUnread.forEach(n => {
             // Показать toast
-            setNotification({ message: n.body || n.title, type: 'achievement' });
-            setTimeout(() => setNotification(null), 5000);
+            showNotification(n.body || n.title, 'achievement');
             // Web Notification API
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
               new Notification(n.title || 'LikeBird', { body: n.body, icon: '/favicon.ico', badge: '/favicon.ico' });
@@ -1190,14 +1199,66 @@ export default function LikeBirdApp() {
   const updateStock = (s) => { setStock(s); save('likebird-stock', s); };
   const updateSalaryDecision = (id, dec) => { const u = {...salaryDecisions, [id]: dec}; setSalaryDecisions(u); save('likebird-salary-decisions', u); };
   const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings);
-  const showNotification = (message, type = 'success') => { setNotification({ message, type }); setTimeout(() => setNotification(null), 3000); };
-  const showConfirm = (message, onConfirm) => setConfirmDialog({ message, onConfirm });
+  // FIX #56: showNotification через DOM — НЕ вызывает parent re-render, 
+  // inner-компоненты сохраняют свой локальный state.
+  const showNotification = (message, type = 'success') => {
+    if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+    const el = notificationRef.current;
+    if (!el) return;
+    el.textContent = (type === 'error' ? '⚠️ ' : '✅ ') + message;
+    el.className = `fixed top-4 left-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 text-white text-sm font-medium transition-opacity duration-300 ${type === 'error' ? 'bg-red-500' : type === 'achievement' ? 'bg-yellow-500' : 'bg-green-500'}`;
+    el.style.transform = 'translateX(-50%)';
+    el.style.opacity = '1';
+    el.style.pointerEvents = 'auto';
+    notificationTimerRef.current = setTimeout(() => {
+      el.style.opacity = '0';
+      el.style.pointerEvents = 'none';
+    }, 3000);
+  };
+  // FIX #56b: showConfirm через DOM — НЕ вызывает parent re-render.
+  const showConfirm = (message, onConfirm) => {
+    confirmCallbackRef.current = onConfirm;
+    const el = confirmDialogRef.current;
+    if (!el) return;
+    el.querySelector('[data-confirm-msg]').textContent = message;
+    el.style.display = 'flex';
+  };
+  const hideConfirm = () => {
+    const el = confirmDialogRef.current;
+    if (el) el.style.display = 'none';
+    confirmCallbackRef.current = null;
+  };
+  const handleConfirmClick = () => {
+    const callback = confirmCallbackRef.current;
+    hideConfirm();
+    if (callback) callback();
+  };
   
-  // FIX: React-стейт для универсального модала ввода (заменяет DOM-манипуляцию)
-  const [inputModal, setInputModal] = useState(null); // { title, placeholder, defaultValue, onSave }
+  // FIX #56c: InputModal тоже через ref + DOM (та же проблема)
+  const inputModalRef = useRef(null);
+  const inputModalInputRef = useRef(null);
+  const inputModalCallbackRef = useRef(null);
   
   const showInputModal = ({ title, placeholder, defaultValue = '', onSave }) => {
-    setInputModal({ title, placeholder, defaultValue, onSave });
+    inputModalCallbackRef.current = onSave;
+    const el = inputModalRef.current;
+    if (!el) return;
+    el.querySelector('[data-input-title]').textContent = title;
+    const input = inputModalInputRef.current;
+    if (input) { input.placeholder = placeholder; input.value = defaultValue; }
+    el.style.display = 'flex';
+    setTimeout(() => input && input.focus(), 50);
+  };
+  const hideInputModal = () => {
+    const el = inputModalRef.current;
+    if (el) el.style.display = 'none';
+    inputModalCallbackRef.current = null;
+  };
+  const handleInputModalSave = () => {
+    const val = inputModalInputRef.current?.value?.trim();
+    const callback = inputModalCallbackRef.current;
+    hideInputModal();
+    if (val && callback) callback(val);
   };
   const updateOwnCard = (emp, date, value) => { const u = {...ownCardTransfers, [`${emp}_${date}`]: value}; setOwnCardTransfers(u); save('likebird-owncard', u); };
   const getOwnCard = (emp, date) => ownCardTransfers[`${emp}_${date}`] || false;
@@ -1748,7 +1809,7 @@ export default function LikeBirdApp() {
       }));
       // Мержим: Firebase приоритетнее localStorage
       const localData = SyncManager.exportAll();
-      const merged = { ...localData, ...fbData, _version: 2, _exportDate: new Date().toISOString(), _source: 'firebase+local' };
+      const merged = { ...localData, ...fbData, _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _source: 'firebase+local' };
       const blob = new Blob([JSON.stringify(merged, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = `likebird-backup-${formatDate(new Date())}.json`; a.click();
@@ -1794,6 +1855,7 @@ export default function LikeBirdApp() {
 
   const clearAllData = () => {
     showConfirm('Очистить ВСЕ данные? Это действие нельзя отменить!', () => {
+      logAction('Полная очистка данных', `Пользователь: ${employeeName || 'Неизвестен'}`);
       SyncManager.ALL_KEYS.forEach(k => localStorage.removeItem(k));
       // FIX: Очищаем и Firebase, иначе данные вернутся через подписки
       SYNC_KEYS.forEach(key => fbSave(key, null));
@@ -1864,8 +1926,8 @@ export default function LikeBirdApp() {
     return <button onClick={() => setEditing(true)} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить название</button>;
   };
 
-  const ConfirmDialog = () => { if (!confirmDialog) return null; return (<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-2xl"><p className="text-lg mb-4">{confirmDialog.message}</p><div className="flex gap-3"><button onClick={() => setConfirmDialog(null)} className="flex-1 py-2 bg-gray-200 rounded-lg font-semibold">Отмена</button><button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 py-2 bg-red-500 text-white rounded-lg font-semibold">Подтвердить</button></div></div></div>); };
-  const ToastNotification = () => { if (!notification) return null; return (<div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${notification.type === 'error' ? 'bg-red-500' : 'bg-green-500'} text-white`}>{notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />}{notification.message}</div>); };
+  // FIX #56b: ConfirmDialog теперь DOM-based через confirmDialogRef (см. showConfirm выше)
+  // FIX #56: ToastNotification теперь DOM-based через notificationRef (см. showNotification выше)
 
   // FIX: React-компонент модала расходов (заменяет DOM-манипуляцию)
   const ExpenseModal = () => {
@@ -1896,24 +1958,7 @@ export default function LikeBirdApp() {
     );
   };
 
-  // FIX: React-компонент модала ввода (заменяет DOM showInputModal)
-  const InputModal = () => {
-    const [val, setVal] = useState(inputModal?.defaultValue || '');
-    if (!inputModal) return null;
-    const handleSave = () => { const v = val.trim(); if (v) { inputModal.onSave(v); } setInputModal(null); };
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
-          <h3 className="text-lg font-bold mb-3">{inputModal.title}</h3>
-          <input type="text" value={val} onChange={e => setVal(e.target.value)} placeholder={inputModal.placeholder} className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" autoFocus onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setInputModal(null); }} />
-          <div className="flex gap-3">
-            <button onClick={() => setInputModal(null)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
-            <button onClick={handleSave} className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-semibold hover:bg-amber-600">Сохранить</button>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  // FIX #56c: InputModal теперь DOM-based через inputModalRef (см. showInputModal выше)
 
   const MenuView = () => {
     const todayAllReports = getReportsByDate(formatDate(new Date()));
@@ -1941,7 +1986,7 @@ export default function LikeBirdApp() {
         <div className="max-w-md mx-auto">
           <div className="text-center mb-6">
             <h1 className="text-3xl font-bold text-amber-600 mb-1">🐦 LikeBird</h1>
-            <p className="text-gray-500 text-sm">Учёт продаж v2.5</p>
+            <p className="text-gray-500 text-sm">Учёт продаж v{APP_VERSION}</p>
             {!isOnline && <p className="text-xs text-orange-500 mt-1 flex items-center justify-center gap-1"><WifiOff className="w-3 h-3" /> Оффлайн режим</p>}
             {todayReports.length > 0 && (
                 <div className="mt-3 bg-white rounded-xl p-3 shadow">
@@ -1963,7 +2008,7 @@ export default function LikeBirdApp() {
             <button onClick={() => { setSelectedDate(formatDate(new Date())); setCurrentView('day-report'); }} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-orange-100 p-3 rounded-lg"><BarChart3 className="w-6 h-6 text-orange-600" /></div><div className="text-left"><h3 className="font-bold">Итог дня</h3><p className="text-xs text-gray-400">Сводка по сотрудникам</p></div></button>
             <button onClick={() => setCurrentView('team')} className="w-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Users className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Команда</h3><p className="text-xs text-white/80">График, результаты, события</p></div>{upcomingEventsCount > 0 && <span className="absolute top-2 right-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{upcomingEventsCount}</span>}</button>
             {(currentUser?.isAdmin || currentUser?.role === 'admin') && <button onClick={() => setCurrentView('admin')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Shield className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Админ-панель</h3><p className="text-xs text-white/80">Управление и аналитика</p></div>{lowStock.length > 0 && <span className="absolute top-2 right-2 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{lowStock.length}</span>}</button>}
-            <button onClick={() => setCurrentView('settings')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-gray-100 p-3 rounded-lg"><Settings className="w-6 h-6 text-gray-600" /></div><div className="text-left"><h3 className="font-bold">Настройки</h3><p className="text-xs text-gray-400">Экспорт, очистка данных</p></div></button>
+            <button onClick={() => setCurrentView('settings')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-gray-100 p-3 rounded-lg"><Settings className="w-6 h-6 text-gray-600" /></div><div className="text-left"><h3 className="font-bold">Настройки</h3><p className="text-xs text-gray-400">Экспорт, бэкап, аккаунт</p></div></button>
             <button onClick={() => setCurrentView('profile')} className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">{(profilesData[(() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })()]?.avatar) ? '🖼️' : '👤'}</span></div><div className="text-left flex-1"><h3 className="font-bold">Мой профиль</h3><p className="text-xs text-white/80">Зарплата, достижения, аккаунт</p></div><div className="text-right"><p className="text-white/80 text-sm font-semibold">{employeeName}</p></div></button>
           </div>
         </div>
@@ -2046,13 +2091,7 @@ export default function LikeBirdApp() {
           }} className="w-full py-3 bg-orange-500 text-white rounded-lg font-semibold hover:bg-orange-600">🚪 Выйти</button>
         </div>
 
-        <div className="bg-white rounded-xl p-4 shadow">
-          <h3 className="font-bold mb-3 flex items-center gap-2 text-red-600"><Trash2 className="w-5 h-5" />Очистка данных</h3>
-          <p className="text-sm text-gray-500 mb-3">Удалить все данные приложения. Это действие нельзя отменить!</p>
-          <button onClick={clearAllData} className="w-full py-3 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600">🗑️ Очистить все данные</button>
-        </div>
-
-        <p className="text-center text-gray-400 text-xs pb-4">LikeBird v2.5 • PWA Ready</p>
+        <p className="text-center text-gray-400 text-xs pb-4">LikeBird v{APP_VERSION} • PWA Ready</p>
       </div>
     </div>
   );
@@ -2715,6 +2754,7 @@ export default function LikeBirdApp() {
     const [bulkParsed, setBulkParsed] = useState([]);
     const [bulkTotalBirds, setBulkTotalBirds] = useState(null);
     const [bulkPartnerMoves, setBulkPartnerMoves] = useState([]);
+    const [parseStatus, setParseStatus] = useState(''); // FIX: Локальный статус вместо showNotification
     const [editingMin, setEditingMin] = useState(null);
     const [minValue, setMinValue] = useState('');
     const [editingPartner, setEditingPartner] = useState(null);
@@ -2726,11 +2766,14 @@ export default function LikeBirdApp() {
     // Подсчёт всех птичек-свистулек
     const totalBirdsInStock = Object.entries(stock).filter(([_, data]) => data.category === 'Птички-свистульки').reduce((sum, [_, data]) => sum + data.count, 0);
     
-    const updateStockCount = (name, delta) => { const newStock = {...stock}; newStock[name] = {...newStock[name], count: Math.max(0, newStock[name].count + delta)}; updateStock(newStock); };
-    const setStockCount = (name, count) => { const newStock = {...stock}; newStock[name] = {...newStock[name], count: Math.max(0, parseInt(count) || 0)}; updateStock(newStock); };
+    // FIX #57: Добавлено логирование в stockHistory для ручных изменений
+    const updateStockCount = (name, delta) => { const newStock = {...stock}; const oldCount = newStock[name].count; newStock[name] = {...newStock[name], count: Math.max(0, oldCount + delta)}; updateStock(newStock); addStockHistoryEntry(name, delta > 0 ? 'manual_add' : 'manual_remove', delta, `Ручная корректировка ${employeeName}`); };
+    // FIX #58: Добавлено логирование в stockHistory для checkActual
+    const setStockCount = (name, count) => { const newStock = {...stock}; const oldCount = newStock[name].count; const newCount = Math.max(0, parseInt(count) || 0); newStock[name] = {...newStock[name], count: newCount}; updateStock(newStock); if (newCount !== oldCount) addStockHistoryEntry(name, 'actual_check', newCount - oldCount, `Сверка: ${oldCount} → ${newCount} (${employeeName})`); };
     const setMinStock = (name, min) => { const newStock = {...stock}; newStock[name] = {...newStock[name], minStock: Math.max(0, parseInt(min) || 0)}; updateStock(newStock); showNotification(`Минимум для ${name}: ${min}`); };
     const checkActual = (name) => { const actual = parseInt(actualInput[name]); if (isNaN(actual)) { showNotification('Введите число', 'error'); return; } const current = stock[name].count; if (actual !== current) showConfirm(`${name}: факт ${actual}, в системе ${current}. Обновить?`, () => { setStockCount(name, actual); showNotification('Остаток обновлён'); }); else showNotification('Остаток совпадает ✓'); setActualInput({...actualInput, [name]: ''}); };
-    const resetAllStock = () => showConfirm('Обнулить все остатки в этой категории?', () => { const newStock = {...stock}; categoryItems.forEach(([name]) => { newStock[name] = {...newStock[name], count: 0}; }); updateStock(newStock); showNotification('Остатки обнулены'); });
+    // FIX #59: Добавлено логирование в stockHistory при обнулении остатков
+    const resetAllStock = () => showConfirm('Обнулить все остатки в этой категории?', () => { const newStock = {...stock}; categoryItems.forEach(([name]) => { const oldCount = newStock[name].count; if (oldCount !== 0) { newStock[name] = {...newStock[name], count: 0}; addStockHistoryEntry(name, 'reset', -oldCount, `Обнуление категории (${employeeName})`); } }); updateStock(newStock); showNotification('Остатки обнулены'); });
     
     const updatePartnerStock = (partner, product, count) => {
       const newPartners = {...partnerStock};
@@ -2855,8 +2898,13 @@ export default function LikeBirdApp() {
         // Игнорируем заголовки разделов
         if (/^(3D|Мелкие|Меховые):?\s*$/i.test(l)) continue;
         
-        // Ищем перемещения партнёрам: "+2 от Олеси" или "- 4 Олесе" или "13.12: -4 Олесе"
-        if (/олес/i.test(l)) {
+        // FIX: Динамический поиск партнёров (ранее захардкожено только "Олеся")
+        const partnerNames = Object.keys(partnerStock);
+        const matchedPartner = partnerNames.find(name => {
+          const nameBase = name.toLowerCase().replace(/[аяуюоеиыэ]$/, ''); // склонения
+          return l.toLowerCase().includes(nameBase);
+        });
+        if (matchedPartner) {
           const numMatch = l.match(/([+-]?\s*\d+)/);
           if (numMatch && currentProduct && currentProduct.name !== '__TOTAL_BIRDS__') {
             let amount = parseInt(numMatch[1].replace(/\s/g, ''));
@@ -2865,7 +2913,7 @@ export default function LikeBirdApp() {
             else amount = -Math.abs(amount);
             
             partnerMoves.push({
-              partner: 'Олеся',
+              partner: matchedPartner,
               product: currentProduct.name,
               amount,
               direction: amount > 0 ? 'приход' : 'расход',
@@ -2875,8 +2923,10 @@ export default function LikeBirdApp() {
           continue;
         }
         
-        // Игнорируем строки продаж "1 Мила 30.12" или "2 Саша 05.01"
-        if (/^\d+\s+(мила|саша|ада|костя|дара|незаписан)/i.test(l)) continue;
+        // FIX: Динамический список имён сотрудников (ранее захардкожены "мила|саша|ада|костя|дара")
+        const empNamesPattern = employees.map(e => e.name.toLowerCase().replace(/[аяуюоеиыэ]$/, '')).filter(n => n.length >= 3).join('|');
+        const empIgnoreRegex = empNamesPattern ? new RegExp(`^\\d+\\s+(${empNamesPattern}|незаписан)`, 'i') : /^\d+\s+незаписан/i;
+        if (empIgnoreRegex.test(l)) continue;
         
         // Игнорируем "Количество продаж:", "Брак:", "Выдано:", "Фактич:"
         if (/^(количество продаж|брак|незаписан|выдано|фактич)/i.test(l)) continue;
@@ -2902,8 +2952,8 @@ export default function LikeBirdApp() {
           continue;
         }
         
-        // Ищем "Сдал остаток: X"
-        const ostatokMatch = l.match(/сдал остаток:?\s*(\d+)/i);
+        // Ищем "Сдал остаток: X" или "Остаток: X" или "Итого: X" или "Факт: X" или "Факт. X"
+        const ostatokMatch = l.match(/(?:сдал остаток|остаток|итого|факт\.?):?\s*(\d+)/i);
         if (ostatokMatch && currentProduct && currentProduct.name !== '__TOTAL_BIRDS__') {
           const count = parseInt(ostatokMatch[1]);
           parsed.push({ 
@@ -2917,8 +2967,46 @@ export default function LikeBirdApp() {
           continue;
         }
         
+        // Ищем просто число на отдельной строке (после названия товара)
+        // Например: "Хомяки\n12" — число = количество
+        if (currentProduct && currentProduct.name !== '__TOTAL_BIRDS__' && /^\d+\s*(?:шт\.?)?\s*$/.test(l)) {
+          const count = parseInt(l);
+          if (!isNaN(count) && count >= 0 && count < 10000) {
+            parsed.push({
+              name: currentProduct.name,
+              emoji: currentProduct.emoji,
+              count,
+              found: true,
+              original: currentProduct.original
+            });
+            currentProduct = null;
+            continue;
+          }
+        }
+        
         // Игнорируем строки с датами типа "26.12: 6" или "26,12: 5"
         if (/^\d{2}[.,]\d{2}:?\s*\d/.test(l)) continue;
+        
+        // Ищем инлайн-формат: "Хомяки - 12" или "Хомяки: 12" или "Хомяки 12 шт"
+        const inlineMatch = l.match(/^([а-яёa-z\s\-]+?)\s*[-:]\s*(\d+)\s*(?:шт\.?)?\s*$/i) || l.match(/^([а-яёa-z\s\-]+?)\s+(\d+)\s*(?:шт\.?)?\s*$/i);
+        if (inlineMatch) {
+          const productText = inlineMatch[1].trim();
+          const count = parseInt(inlineMatch[2]);
+          if (productText.length >= 2 && !isNaN(count) && count >= 0 && count < 10000) {
+            if (!/^(отчет|мелкие|3d|меховые|птички|меха?|количество|брак|выдано|сдал|фактич)$/i.test(productText)) {
+              const product = findProduct(productText);
+              if (product) {
+                if (product.special === '__TOTAL_BIRDS__') {
+                  foundTotalBirds = count;
+                } else {
+                  parsed.push({ name: product.name, emoji: product.emoji, count, found: true, original: productText });
+                }
+                currentProduct = null;
+                continue;
+              }
+            }
+          }
+        }
         
         // Ищем название товара: "Лабубы✅" или "Песы ❗" или просто "Хомяки"
         const titleMatch = l.match(/^([а-яёa-z\s\-]+?)(?:\s*[✅❗])?\s*$/i);
@@ -2970,17 +3058,29 @@ export default function LikeBirdApp() {
       if (foundTotalBirds !== null) msg += `${msg ? ', ' : ''}🐦 Птичек: ${foundTotalBirds}`;
       if (partnerMoves.length > 0) msg += `${msg ? ', ' : ''}👥 Партнёры: ${partnerMoves.length}`;
       
-      if (msg) showNotification(msg);
-      else showNotification('Не удалось распознать данные', 'error');
+      if (!msg) msg = '❌ Не удалось распознать данные';
+      // FIX #56: showNotification теперь DOM-based и НЕ вызывает parent re-render.
+      // Дополнительно показываем parseStatus инлайн для удобства.
+      setParseStatus(msg);
+      const isError = msg.startsWith('❌');
+      showNotification(msg, isError ? 'error' : 'success');
     };
     
     const applyBulkInventory = () => {
       const newStock = {...stock};
       let updated = 0;
+      const changes = []; // Собираем лог изменений
       bulkParsed.filter(p => p.found).forEach(p => {
         if (newStock[p.name]) {
-          newStock[p.name] = {...newStock[p.name], count: p.count};
-          updated++;
+          const oldCount = newStock[p.name].count;
+          const diff = p.count - oldCount;
+          if (diff !== 0) {
+            newStock[p.name] = {...newStock[p.name], count: p.count};
+            updated++;
+            changes.push({ name: p.name, oldCount, newCount: p.count, diff });
+            // Записываем в историю склада
+            addStockHistoryEntry(p.name, 'revision', diff, `Ревизия: ${oldCount} → ${p.count}`);
+          }
         }
       });
       updateStock(newStock);
@@ -2996,12 +3096,15 @@ export default function LikeBirdApp() {
         const newPartners = {...partnerStock};
         bulkPartnerMoves.forEach(move => {
           if (!newPartners[move.partner]) newPartners[move.partner] = { total: 0, history: [] };
-          newPartners[move.partner].total = (newPartners[move.partner].total || 0) - move.amount; // минус потому что расход у нас = к партнёру
+          newPartners[move.partner].total = (newPartners[move.partner].total || 0) - move.amount;
           newPartners[move.partner].history = [...(newPartners[move.partner].history || []), { ...move, date: new Date().toLocaleDateString('ru-RU') }];
         });
         setPartnerStock(newPartners);
         save('likebird-partners', newPartners);
       }
+      
+      // Логируем ревизию в аудит
+      logAction('Ревизия применена', `Обновлено ${updated} позиций${bulkTotalBirds !== null ? `, птичек: ${bulkTotalBirds}` : ''}${bulkPartnerMoves.length > 0 ? `, партнёрских движений: ${bulkPartnerMoves.length}` : ''}`);
       
       showNotification(`Обновлено ${updated} позиций`);
       setBulkText('');
@@ -3102,12 +3205,18 @@ export default function LikeBirdApp() {
           
           {showBulkImport && (
             <div className="bg-white rounded-xl p-4 shadow space-y-3">
-              <p className="text-sm text-gray-600">Вставьте текст ревизии. Распознаёт:<br/>• "На данный момент: X"<br/>• "+X от Олеси" / "-X Олесе"<br/>• "Птицы: 410" (общее кол-во)</p>
+              <p className="text-sm text-gray-600">Вставьте текст ревизии. Распознаёт:<br/>• "На данный момент: X"<br/>• "Остаток: X", "Факт: X", "Итого: X"<br/>• Число на отдельной строке после названия<br/>• Движения партнёров ("+X от ...", "-X ...")<br/>• "Птицы: 410" (общее кол-во)</p>
               <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder="Вставьте текст ревизии..." className="w-full p-3 border-2 rounded-lg font-mono text-sm h-40 focus:border-blue-500 focus:outline-none" />
               <div className="flex gap-2">
                 <button onClick={parseBulkInventory} className="flex-1 bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600">🔍 Распознать</button>
-                <button onClick={() => { setBulkText(''); setBulkParsed([]); setBulkTotalBirds(null); setBulkPartnerMoves([]); }} className="px-4 bg-gray-200 rounded-lg hover:bg-gray-300"><RotateCcw className="w-5 h-5" /></button>
+                <button onClick={() => { setBulkText(''); setBulkParsed([]); setBulkTotalBirds(null); setBulkPartnerMoves([]); setParseStatus(''); }} className="px-4 bg-gray-200 rounded-lg hover:bg-gray-300"><RotateCcw className="w-5 h-5" /></button>
               </div>
+              
+              {parseStatus && (
+                <div className={`text-sm font-medium p-2 rounded-lg text-center ${parseStatus.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                  {parseStatus}
+                </div>
+              )}
               
               {bulkTotalBirds !== null && (
                 <div className="bg-amber-50 border border-amber-300 rounded-lg p-3">
@@ -3130,14 +3239,42 @@ export default function LikeBirdApp() {
               {bulkParsed.length > 0 && (
                 <div className="space-y-2">
                   <p className="font-semibold text-sm">Товары ({bulkParsed.filter(p => p.found).length} распознано):</p>
-                  <div className="max-h-40 overflow-y-auto space-y-1">
-                    {bulkParsed.map((p, i) => (
-                      <div key={i} className={`flex justify-between text-sm p-2 rounded ${p.found ? 'bg-green-50' : 'bg-red-50'}`}>
-                        <span>{p.emoji} {p.name}</span>
-                        <span className={`font-bold ${p.found ? 'text-green-600' : 'text-red-600'}`}>{p.count} шт</span>
-                      </div>
-                    ))}
+                  <div className="max-h-60 overflow-y-auto space-y-1">
+                    {bulkParsed.map((p, i) => {
+                      const currentCount = stock[p.name]?.count ?? 0;
+                      const diff = p.found ? p.count - currentCount : 0;
+                      return (
+                        <div key={i} className={`flex justify-between items-center text-sm p-2 rounded ${p.found ? (diff !== 0 ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50') : 'bg-red-50'}`}>
+                          <span className="flex-1">{p.emoji} {p.name}</span>
+                          {p.found ? (
+                            <div className="flex items-center gap-2 text-right">
+                              <span className="text-gray-400 text-xs">{currentCount}→</span>
+                              <span className="font-bold text-green-600">{p.count}</span>
+                              {diff !== 0 && <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${diff > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{diff > 0 ? '+' : ''}{diff}</span>}
+                            </div>
+                          ) : (
+                            <span className="font-bold text-red-600">{p.count} шт</span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
+                  {(() => {
+                    const totalDiff = bulkParsed.filter(p => p.found).reduce((sum, p) => {
+                      const currentCount = stock[p.name]?.count ?? 0;
+                      return sum + (p.count - currentCount);
+                    }, 0);
+                    const changedCount = bulkParsed.filter(p => p.found && p.count !== (stock[p.name]?.count ?? 0)).length;
+                    return changedCount > 0 ? (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-sm">
+                        <span className="text-blue-700">📊 Изменений: <strong>{changedCount}</strong> позиций, итого: <strong className={totalDiff >= 0 ? 'text-green-600' : 'text-red-600'}>{totalDiff > 0 ? '+' : ''}{totalDiff} шт</strong></span>
+                      </div>
+                    ) : (
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-2 text-sm text-center">
+                        <span className="text-green-700">✅ Все остатки совпадают</span>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
               
@@ -3445,8 +3582,8 @@ export default function LikeBirdApp() {
               <h2 className="text-xl font-bold text-gray-800">Админ-панель</h2>
               <p className="text-sm text-gray-500 mt-1">Введите пароль для доступа</p>
             </div>
-            <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="Пароль" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-purple-500 focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') { checkAdminPassword(passwordInput).then(ok => ok ? setIsAdminUnlocked(true) : showNotification('Неверный пароль', 'error')); }}} />
-            <button onClick={() => { checkAdminPassword(passwordInput).then(ok => ok ? setIsAdminUnlocked(true) : showNotification('Неверный пароль', 'error')); }} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-3 rounded-xl font-bold hover:opacity-90">Войти</button>
+            <input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="Пароль" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-purple-500 focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') { checkAdminPassword(passwordInput).then(ok => ok ? setIsAdminUnlocked(true) : showNotification('Неверный пароль', 'error')).catch(() => showNotification('Ошибка проверки пароля', 'error')); }}} />
+            <button onClick={() => { checkAdminPassword(passwordInput).then(ok => ok ? setIsAdminUnlocked(true) : showNotification('Неверный пароль', 'error')).catch(() => showNotification('Ошибка проверки пароля', 'error')); }} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-3 rounded-xl font-bold hover:opacity-90">Войти</button>
             <button onClick={() => setCurrentView('menu')} className="w-full mt-3 text-gray-500 py-2">Назад</button>
           </div>
         </div>
@@ -3608,7 +3745,12 @@ export default function LikeBirdApp() {
 
       const clearAllShifts = () => {
         showConfirm('Очистить все смены?', () => {
-          setShifts({});
+          // FIX: Обновляем parent state напрямую (setShifts — локальный state ScheduleEditor, 
+          // который теряется при remount от showConfirm → parent re-render)
+          const data = { week: weekRange, shifts: {} };
+          setScheduleData(data);
+          save('likebird-schedule', data);
+          logAction('Очищены все смены', '');
           showNotification('Смены очищены');
         });
       };
@@ -5345,13 +5487,14 @@ export default function LikeBirdApp() {
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-purple-600" />Резервное копирование</h3>
                 <div className="space-y-2">
                   <button onClick={() => {
-                    const data = { reports, expenses, stock, employees, salarySettings, eventsCalendar, customProducts, salesPlan, exportDate: new Date().toISOString() };
+                    const data = SyncManager.exportAll();
                     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
                     a.download = `likebird-backup-${formatDate(new Date()).replace(/\./g, '-')}.json`;
                     a.click();
+                    URL.revokeObjectURL(url);
                     logAction('Создана резервная копия', '');
                     showNotification('Резервная копия создана');
                   }} className="w-full bg-green-500 text-white py-2 rounded hover:bg-green-600 flex items-center justify-center gap-2">
@@ -5371,6 +5514,10 @@ export default function LikeBirdApp() {
                     <button onClick={() => showConfirm('Удалить ВСЕ расходы? Это действие необратимо!', () => { setExpenses([]); save('likebird-expenses', []); logAction('Удалены все расходы', ''); showNotification('Расходы удалены'); })} className="w-full bg-red-100 text-red-600 py-2 rounded hover:bg-red-200">
                       Удалить все расходы
                     </button>
+                    <div className="border-t border-red-200 my-3 pt-3">
+                      <p className="text-xs text-red-400 mb-2">⚠️ Полная очистка удалит ВСЕ данные приложения: отчёты, расходы, склад, сотрудников, настройки и т.д. Это действие нельзя отменить!</p>
+                      <button onClick={clearAllData} className="w-full bg-red-500 text-white py-3 rounded-lg font-semibold hover:bg-red-600">🗑️ Очистить ВСЕ данные</button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -6359,7 +6506,8 @@ export default function LikeBirdApp() {
 
     const openShift = (time) => {
       const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      const updated = { ...shiftsData, [shiftKey]: { ...myShift, openTime: t, status: 'open', openedAt: Date.now() } };
+      // FIX: При переоткрытии очищаем closeTime/closedAt, иначе они остаются от прошлого закрытия
+      const updated = { ...shiftsData, [shiftKey]: { openTime: t, status: 'open', openedAt: Date.now() } };
       updateShiftsData(updated);
       setShowTimeModal(null);
       showNotification(`Смена открыта в ${t}`);
@@ -6545,7 +6693,11 @@ export default function LikeBirdApp() {
                     </button>
                     <button onClick={() => {
                         showConfirm(`Смена уже была закрыта (${myShift.openTime} → ${myShift.closeTime}). Переоткрыть? Время закрытия будет сброшено.`, () => {
-                          setShowTimeModal('open');
+                          // FIX: Напрямую обновляем parent state вместо setShowTimeModal (которая теряется при remount)
+                          const t = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                          const updated = { ...shiftsData, [shiftKey]: { openTime: t, status: 'open', openedAt: Date.now() } };
+                          updateShiftsData(updated);
+                          showNotification(`Смена переоткрыта в ${t}`);
                         });
                       }}
                       className="py-3 bg-white text-green-600 border-2 border-green-300 rounded-xl font-bold shadow hover:shadow-md transition-all">
@@ -7478,7 +7630,7 @@ export default function LikeBirdApp() {
               <span className="text-5xl">🐦</span>
             </div>
             <h1 className="text-4xl font-black text-white drop-shadow-lg">LikeBird</h1>
-            <p className="text-white/80 text-sm mt-1">Учёт продаж v2.5</p>
+            <p className="text-white/80 text-sm mt-1">Учёт продаж v{APP_VERSION}</p>
           </div>
 
           <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 shadow-2xl">
@@ -7595,10 +7747,27 @@ export default function LikeBirdApp() {
 
   return (
     <>
-      <ToastNotification />
-      <ConfirmDialog />
+      <div ref={notificationRef} style={{opacity: 0, pointerEvents: 'none'}} className="fixed top-4 left-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 text-white text-sm font-medium transition-opacity duration-300 bg-green-500" />
+      <div ref={confirmDialogRef} style={{display: 'none'}} className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-2xl">
+          <p data-confirm-msg className="text-lg mb-4"></p>
+          <div className="flex gap-3">
+            <button onClick={hideConfirm} className="flex-1 py-2 bg-gray-200 rounded-lg font-semibold">Отмена</button>
+            <button onClick={handleConfirmClick} className="flex-1 py-2 bg-red-500 text-white rounded-lg font-semibold">Подтвердить</button>
+          </div>
+        </div>
+      </div>
       <ExpenseModal key={expenseModal ? 'exp-' + expenseModal.employee : 'exp-closed'} />
-      <InputModal key={inputModal ? 'inp-' + inputModal.title : 'inp-closed'} />
+      <div ref={inputModalRef} style={{display: 'none'}} className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+          <h3 data-input-title className="text-lg font-bold mb-3"></h3>
+          <input ref={inputModalInputRef} type="text" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" onKeyDown={e => { if (e.key === 'Enter') handleInputModalSave(); if (e.key === 'Escape') hideInputModal(); }} />
+          <div className="flex gap-3">
+            <button onClick={hideInputModal} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
+            <button onClick={handleInputModalSave} className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-semibold hover:bg-amber-600">Сохранить</button>
+          </div>
+        </div>
+      </div>
       {currentView === 'menu' && <MenuView />}
       {currentView === 'catalog' && <CatalogView />}
       {currentView === 'new-report' && <NewReportView />}
