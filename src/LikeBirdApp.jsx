@@ -989,18 +989,18 @@ export default function LikeBirdApp() {
         if (!Array.isArray(val)) return;
         localStorage.setItem('likebird-notifications', JSON.stringify(val));
         setUserNotifications(val);
-        // Показать уведомления адресованные текущему пользователю
+        // Показать push-уведомления для НОВЫХ непрочитанных (но НЕ помечаем read автоматически)
         try {
           const authRaw = localStorage.getItem('likebird-auth');
           if (!authRaw) return;
           const auth = JSON.parse(authRaw);
-          const myUnread = val.filter(n => n.targetLogin === auth.login && !n.read);
-          myUnread.forEach(n => {
-            // Показать toast
+          // Ищем уведомления которые ещё не показывали (по shownLocally флагу)
+          const myNew = val.filter(n => n.targetLogin === auth.login && !n.read && !n.shownLocally);
+          myNew.forEach(n => {
             showNotification(n.body || n.title, 'achievement');
-            // Web Notification API
+            // Web Notification API (push на телефон)
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-              new Notification(n.title || 'LikeBird', { body: n.body, icon: '/favicon.ico', badge: '/favicon.ico' });
+              try { new Notification(n.title || 'LikeBird', { body: n.body, icon: '/favicon.ico', badge: '/favicon.ico' }); } catch {}
             }
             // Звук
             try {
@@ -1017,10 +1017,11 @@ export default function LikeBirdApp() {
               osc.stop(ctx.currentTime + 0.5);
             } catch {}
           });
-          // Пометить прочитанными
-          if (myUnread.length > 0) {
-            const updatedVal = val.map(n => n.targetLogin === auth.login ? { ...n, read: true } : n);
+          // Помечаем shownLocally чтобы не показывать toast повторно (но НЕ read!)
+          if (myNew.length > 0) {
+            const updatedVal = val.map(n => (n.targetLogin === auth.login && !n.shownLocally) ? { ...n, shownLocally: true } : n);
             localStorage.setItem('likebird-notifications', JSON.stringify(updatedVal));
+            setUserNotifications(updatedVal);
             fbSave('likebird-notifications', updatedVal);
           }
         } catch {}
@@ -1160,10 +1161,9 @@ export default function LikeBirdApp() {
           fbSave(notifKey, updated);
           // Бонус если задан
           if (ach.bonusAmount) {
-            // FIX: Ищем числовой id сотрудника по имени (ранее записывался login-строка, не находился в getEmployeeBonuses)
             const matchedEmp = employees.find(e => e.name === empName);
             const empId = matchedEmp ? matchedEmp.id : login;
-            const bonus = { id: Date.now() + Math.random(), employeeId: empId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toISOString(), createdAt: Date.now() };
+            const bonus = { id: Date.now() + Math.random(), employeeId: empId, employeeName: empName, employeeLogin: login, achievementId: ach.id, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toISOString(), createdAt: Date.now() };
             const newBonuses = [...bonuses, bonus];
             setBonuses(newBonuses);
             save('likebird-bonuses', newBonuses);
@@ -1887,7 +1887,8 @@ export default function LikeBirdApp() {
           shiftLine += ` → ${shift.closeTime}`;
           const [oh, om] = shift.openTime.split(':').map(Number);
           const [ch, cm] = shift.closeTime.split(':').map(Number);
-          const mins = (ch * 60 + cm) - (oh * 60 + om);
+          let mins = (ch * 60 + cm) - (oh * 60 + om);
+          if (mins < 0) mins += 24 * 60; // Ночная смена через полночь
           if (mins > 0) {
             const h = Math.floor(mins / 60);
             const roundedH = h + Math.floor((mins % 60) / 15) * 0.25;
@@ -2004,10 +2005,21 @@ export default function LikeBirdApp() {
       return daysUntil >= 0 && daysUntil <= 7;
     }).length;
 
+    // Мои непрочитанные уведомления
+    const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+    const myUnreadCount = userNotifications.filter(n => n.targetLogin === myLogin && !n.read).length;
+
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 via-orange-50 to-amber-100 p-4">
         <div className="max-w-md mx-auto">
-          <div className="text-center mb-6">
+          <div className="text-center mb-6 relative">
+            {/* Кнопка уведомлений — правый верхний угол */}
+            <button onClick={() => setCurrentView('notifications')} className="absolute top-0 right-0 w-10 h-10 bg-white rounded-xl shadow flex items-center justify-center hover:shadow-md relative">
+              <Bell className="w-5 h-5 text-amber-600" />
+              {myUnreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold animate-pulse">{myUnreadCount > 9 ? '9+' : myUnreadCount}</span>
+              )}
+            </button>
             <h1 className="text-3xl font-bold text-amber-600 mb-1">🐦 LikeBird</h1>
             <p className="text-gray-500 text-sm">Учёт продаж v{APP_VERSION}</p>
             {!isOnline && <p className="text-xs text-orange-500 mt-1 flex items-center justify-center gap-1"><WifiOff className="w-3 h-3" /> Оффлайн режим</p>}
@@ -2034,6 +2046,100 @@ export default function LikeBirdApp() {
             <button onClick={() => setCurrentView('settings')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-gray-100 p-3 rounded-lg"><Settings className="w-6 h-6 text-gray-600" /></div><div className="text-left"><h3 className="font-bold">Настройки</h3><p className="text-xs text-gray-400">Экспорт, бэкап, аккаунт</p></div></button>
             <button onClick={() => setCurrentView('profile')} className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">{(profilesData[(() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })()]?.avatar) ? '🖼️' : '👤'}</span></div><div className="text-left flex-1"><h3 className="font-bold">Мой профиль</h3><p className="text-xs text-white/80">Зарплата, достижения, аккаунт</p></div><div className="text-right"><p className="text-white/80 text-sm font-semibold">{employeeName}</p></div></button>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ════════════════════════════════════════════════════════════════════════
+  // NotificationsView — Уведомления пользователя
+  // ════════════════════════════════════════════════════════════════════════
+  const NotificationsView = () => {
+    const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+    const myNotifs = userNotifications.filter(n => n.targetLogin === myLogin).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const unread = myNotifs.filter(n => !n.read);
+    const read = myNotifs.filter(n => n.read);
+
+    const markAsRead = (notifId) => {
+      const updated = userNotifications.map(n => n.id === notifId ? { ...n, read: true } : n);
+      setUserNotifications(updated);
+      save('likebird-notifications', updated);
+    };
+
+    const markAllAsRead = () => {
+      const updated = userNotifications.map(n => n.targetLogin === myLogin ? { ...n, read: true } : n);
+      setUserNotifications(updated);
+      save('likebird-notifications', updated);
+    };
+
+    const formatTime = (ts) => {
+      if (!ts) return '';
+      const d = new Date(ts);
+      const now = new Date();
+      const diff = now - d;
+      if (diff < 60000) return 'только что';
+      if (diff < 3600000) return `${Math.floor(diff/60000)} мин. назад`;
+      if (diff < 86400000) return `${Math.floor(diff/3600000)} ч. назад`;
+      return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    };
+
+    const NotifCard = ({ n, isUnread }) => (
+      <div className={`rounded-xl p-3 shadow-sm border-l-4 ${isUnread ? 'bg-amber-50 border-amber-400' : 'bg-gray-50 border-gray-200'}`}>
+        <div className="flex justify-between items-start gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-lg">{n.type === 'achievement' ? '🏆' : n.type === 'stock' ? '📦' : n.type === 'chat' ? '💬' : '🔔'}</span>
+              <span className="font-bold text-sm truncate">{n.title || 'Уведомление'}</span>
+            </div>
+            <p className="text-sm text-gray-700">{n.body}</p>
+            <p className="text-xs text-gray-400 mt-1">{formatTime(n.createdAt)}</p>
+          </div>
+          {isUnread && (
+            <button onClick={() => markAsRead(n.id)} className="shrink-0 bg-amber-500 text-white text-xs px-2.5 py-1.5 rounded-lg font-semibold hover:bg-amber-600">
+              ✓ Прочитано
+            </button>
+          )}
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
+        <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 pt-safe sticky top-0 z-10" style={{paddingTop: "max(1rem, env(safe-area-inset-top))"}}>
+          <div className="flex items-center justify-between">
+            <button onClick={() => setCurrentView('menu')} className="mr-3"><ArrowLeft className="w-6 h-6" /></button>
+            <h2 className="text-xl font-bold flex-1">🔔 Уведомления</h2>
+            {unread.length > 0 && (
+              <button onClick={markAllAsRead} className="text-xs bg-white/20 px-3 py-1.5 rounded-lg font-semibold">
+                Прочитать все
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="max-w-md mx-auto px-4 mt-4 space-y-3">
+          {unread.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-amber-600 mb-2 uppercase tracking-wider">Новые ({unread.length})</p>
+              <div className="space-y-2">
+                {unread.map(n => <NotifCard key={n.id} n={n} isUnread={true} />)}
+              </div>
+            </div>
+          )}
+          {read.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-gray-400 mb-2 uppercase tracking-wider mt-4">Прочитанные</p>
+              <div className="space-y-2">
+                {read.slice(0, 30).map(n => <NotifCard key={n.id} n={n} isUnread={false} />)}
+              </div>
+            </div>
+          )}
+          {myNotifs.length === 0 && (
+            <div className="text-center py-16">
+              <Bell className="w-16 h-16 mx-auto text-gray-300 mb-3" />
+              <p className="text-gray-400 text-lg">Нет уведомлений</p>
+              <p className="text-gray-300 text-sm mt-1">Здесь будут достижения и важные события</p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -3488,27 +3594,38 @@ export default function LikeBirdApp() {
     };
     
     // Посчитать минуты смены
+    // Посчитать минуты смены (с поддержкой ночных смен через полночь)
     const getShiftMinutes = (shift) => {
       if (!shift?.openTime || !shift?.closeTime) return 0;
       const [oh, om] = shift.openTime.split(':').map(Number);
       const [ch, cm] = shift.closeTime.split(':').map(Number);
-      const mins = (ch * 60 + cm) - (oh * 60 + om);
-      return mins > 0 ? mins : 0;
+      let mins = (ch * 60 + cm) - (oh * 60 + om);
+      if (mins < 0) mins += 24 * 60; // Ночная смена через полночь
+      return mins;
     };
     
     // Сохранить отредактированное время смены
     const saveShiftEdit = (empName) => {
+      // Валидация
+      const openVal = editOpen.trim();
+      const closeVal = editClose.trim();
+      if (!openVal) { showNotification('Укажите время начала смены', 'error'); return; }
+      if (closeVal) {
+        // Проверка формата HH:MM
+        const timeRe = /^\d{1,2}:\d{2}$/;
+        if (!timeRe.test(openVal) || !timeRe.test(closeVal)) { showNotification('Неверный формат времени', 'error'); return; }
+      }
       const { key } = getEmployeeShift(empName);
       const existing = shiftsData[key] || {};
       const updated = { 
         ...shiftsData, 
         [key]: { 
           ...existing,
-          openTime: editOpen || existing.openTime, 
-          closeTime: editClose || existing.closeTime, 
-          status: (editClose || existing.closeTime) ? 'closed' : 'open',
+          openTime: openVal, 
+          closeTime: closeVal || undefined, 
+          status: closeVal ? 'closed' : 'open',
           openedAt: existing.openedAt || Date.now(),
-          closedAt: (editClose || existing.closeTime) ? (existing.closedAt || Date.now()) : undefined,
+          closedAt: closeVal ? (existing.closedAt || Date.now()) : undefined,
           editedInDayReport: true
         } 
       };
@@ -4496,11 +4613,12 @@ export default function LikeBirdApp() {
           {adminTab === 'employees' && (() => {
             // Читаем зарегистрированных пользователей из localStorage (синхронизируется Firebase)
             const [regUsers, setRegUsers] = React.useState(() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } });
-            const [editingUser, setEditingUser] = React.useState(null); // login редактируемого
+            const [editingUser, setEditingUser] = React.useState(null);
             const [editForm, setEditForm] = React.useState({});
             const [addForm, setAddForm] = React.useState({ login: '', name: '', password: '', role: 'seller', isAdmin: false });
             const [addMode, setAddMode] = React.useState(false);
             const [addError, setAddError] = React.useState('');
+            const [viewingProfile, setViewingProfile] = React.useState(null); // login сотрудника
 
             // Перечитывать при изменениях Firebase
             React.useEffect(() => {
@@ -4718,6 +4836,9 @@ export default function LikeBirdApp() {
                               </div>
                             </div>
                           )}
+                          <button onClick={() => setViewingProfile(user.login)} className="mt-2 w-full py-2 bg-indigo-50 text-indigo-600 rounded-lg text-sm font-semibold hover:bg-indigo-100 flex items-center justify-center gap-1">
+                            <Eye className="w-4 h-4" /> Подробный профиль
+                          </button>
                         </div>
 
                         {/* Форма редактирования */}
@@ -4787,6 +4908,136 @@ export default function LikeBirdApp() {
                     </div>
                   </div>
                 )}
+
+                {/* ════ Модальное окно профиля сотрудника ════ */}
+                {viewingProfile && (() => {
+                  const user = regUsers.find(u => u.login === viewingProfile);
+                  if (!user) return null;
+                  const empName = user.name || user.login;
+                  const emp = employees.find(e => e.name === empName);
+                  const profile = profilesData[user.login] || {};
+                  const roleInfo = ROLE_LABELS[user.role] || ROLE_LABELS.seller;
+                  
+                  // Отчёты сотрудника
+                  const empReports = reports.filter(r => r.employee === empName && !r.isUnrecognized);
+                  const now = new Date();
+                  const weekAgo = new Date(now.getTime() - 7 * 86400000);
+                  const monthAgo = new Date(now.getTime() - 30 * 86400000);
+                  
+                  const parseDate = (ds) => { try { const [dp] = ds.split(','); const [d,m,y] = dp.trim().split('.'); return new Date(parseYear(y), m-1, d); } catch { return new Date(0); } };
+                  
+                  const weekReports = empReports.filter(r => parseDate(r.date) >= weekAgo);
+                  const monthReports = empReports.filter(r => parseDate(r.date) >= monthAgo);
+                  
+                  // ЗП за неделю и месяц
+                  const weekSalary = weekReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+                  const weekRevenue = weekReports.reduce((s, r) => s + r.total, 0);
+                  const weekTips = weekReports.reduce((s, r) => s + (r.tips || 0), 0);
+                  const monthSalary = monthReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+                  const monthRevenue = monthReports.reduce((s, r) => s + r.total, 0);
+                  const monthTips = monthReports.reduce((s, r) => s + (r.tips || 0), 0);
+                  
+                  // Бонусы и штрафы
+                  const empBonusList = emp ? bonuses.filter(b => b.employeeId === emp.id) : [];
+                  const empPenaltiesList = emp ? penalties.filter(p => p.employeeId === emp.id) : [];
+                  const totalBonuses = empBonusList.reduce((s, b) => s + b.amount, 0);
+                  const totalPenalties = empPenaltiesList.reduce((s, p) => s + p.amount, 0);
+                  
+                  // Достижения
+                  const myAchievements = customAchievements.filter(a => (achievementsGranted[a.id] || []).includes(user.login));
+                  
+                  // Формула ЗП
+                  const byCat = weekReports.reduce((acc, r) => { const cat = r.category || 'Другое'; acc[cat] = (acc[cat] || 0) + 1; return acc; }, {});
+                  
+                  return (
+                    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto" onClick={() => setViewingProfile(null)}>
+                      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mt-8 mb-8 overflow-hidden" onClick={e => e.stopPropagation()}>
+                        {/* Шапка */}
+                        <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-5">
+                          <div className="flex items-center gap-4">
+                            <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center text-2xl font-black overflow-hidden">
+                              {profile.avatar ? <img src={profile.avatar} alt="" className="w-full h-full object-cover" /> : (empName[0] || '?').toUpperCase()}
+                            </div>
+                            <div className="flex-1">
+                              <h3 className="text-xl font-bold">{profile.displayName || empName}</h3>
+                              <p className="text-white/70 text-sm">@{user.login}</p>
+                              <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-white/20`}>{roleInfo.icon} {roleInfo.label}</span>
+                            </div>
+                            <button onClick={() => setViewingProfile(null)} className="text-white/70 hover:text-white p-1"><X className="w-6 h-6" /></button>
+                          </div>
+                          {profile.birthDate && <p className="text-white/80 text-sm mt-3">🎂 {profile.birthDate}</p>}
+                        </div>
+                        
+                        <div className="p-4 space-y-4">
+                          {/* ЗП за неделю */}
+                          <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4">
+                            <h4 className="font-bold text-green-700 mb-2">💰 Зарплата за неделю</h4>
+                            <p className="text-2xl font-black text-green-600">{weekSalary.toLocaleString()}₽</p>
+                            <div className="mt-2 text-xs text-green-700 space-y-1">
+                              <p>📦 Продаж: {weekReports.length} шт. → выручка {weekRevenue.toLocaleString()}₽</p>
+                              {weekTips > 0 && <p>⭐ Чаевые: {weekTips.toLocaleString()}₽</p>}
+                              {Object.entries(byCat).map(([cat, cnt]) => (
+                                <p key={cat}>{cat}: {cnt} шт.</p>
+                              ))}
+                              <p className="text-xs text-green-500 mt-1">ЗП = сумма комиссий от продаж + чаевые</p>
+                            </div>
+                          </div>
+                          
+                          {/* ЗП за месяц */}
+                          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                            <h4 className="font-bold text-blue-700 mb-1">📅 За месяц</h4>
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div><p className="text-lg font-black text-blue-600">{monthSalary.toLocaleString()}₽</p><p className="text-xs text-blue-400">ЗП</p></div>
+                              <div><p className="text-lg font-black text-blue-600">{monthRevenue.toLocaleString()}₽</p><p className="text-xs text-blue-400">Выручка</p></div>
+                              <div><p className="text-lg font-black text-blue-600">{monthReports.length}</p><p className="text-xs text-blue-400">Продаж</p></div>
+                            </div>
+                          </div>
+                          
+                          {/* Бонусы и штрафы */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                              <p className="text-xs text-green-600 font-semibold">🎁 Бонусы</p>
+                              <p className="text-lg font-black text-green-600">+{totalBonuses.toLocaleString()}₽</p>
+                              <p className="text-xs text-green-400">{empBonusList.length} шт.</p>
+                              {empBonusList.slice(-3).map(b => <p key={b.id} className="text-xs text-green-500 truncate">{b.reason}: +{b.amount}₽</p>)}
+                            </div>
+                            <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                              <p className="text-xs text-red-600 font-semibold">⚠️ Штрафы</p>
+                              <p className="text-lg font-black text-red-600">-{totalPenalties.toLocaleString()}₽</p>
+                              <p className="text-xs text-red-400">{empPenaltiesList.length} шт.</p>
+                              {empPenaltiesList.slice(-3).map(p => <p key={p.id} className="text-xs text-red-500 truncate">{p.reason}: -{p.amount}₽</p>)}
+                            </div>
+                          </div>
+                          
+                          {/* Достижения */}
+                          {myAchievements.length > 0 && (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                              <h4 className="font-bold text-yellow-700 mb-2">🏆 Достижения ({myAchievements.length})</h4>
+                              <div className="flex flex-wrap gap-2">
+                                {myAchievements.map(a => (
+                                  <div key={a.id} className="bg-white border border-yellow-300 rounded-lg px-3 py-1.5 flex items-center gap-1.5">
+                                    <span className="text-lg">{a.icon || '🏆'}</span>
+                                    <div>
+                                      <p className="text-xs font-bold">{a.title}</p>
+                                      {a.bonusAmount > 0 && <p className="text-xs text-green-600">+{a.bonusAmount}₽</p>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Итого */}
+                          <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl p-4">
+                            <h4 className="font-bold mb-1">📊 Итого за месяц</h4>
+                            <p className="text-2xl font-black">{(monthSalary + totalBonuses - totalPenalties).toLocaleString()}₽</p>
+                            <p className="text-xs text-white/70 mt-1">ЗП {monthSalary.toLocaleString()} + Бонусы {totalBonuses.toLocaleString()} - Штрафы {totalPenalties.toLocaleString()}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
@@ -4855,7 +5106,31 @@ export default function LikeBirdApp() {
                 )}
 
                 {/* Бонусы */}
-                {personnelTab === 'bonuses' && (
+                {personnelTab === 'bonuses' && (() => {
+                  const [editBonusId, setEditBonusId] = React.useState(null);
+                  const [editBonusForm, setEditBonusForm] = React.useState({ amount: '', reason: '' });
+                  
+                  const deleteBonus = (id) => {
+                    showConfirm('Удалить этот бонус?', () => {
+                      updateBonuses(bonuses.filter(b => b.id !== id));
+                      showNotification('Бонус удалён');
+                    });
+                  };
+                  
+                  const startEditBonus = (b) => {
+                    setEditBonusId(b.id);
+                    setEditBonusForm({ amount: String(b.amount), reason: b.reason });
+                  };
+                  
+                  const saveEditBonus = () => {
+                    const amt = parseInt(editBonusForm.amount);
+                    if (!amt || !editBonusForm.reason) { showNotification('Заполните поля', 'error'); return; }
+                    updateBonuses(bonuses.map(b => b.id === editBonusId ? { ...b, amount: amt, reason: editBonusForm.reason } : b));
+                    setEditBonusId(null);
+                    showNotification('Бонус обновлён');
+                  };
+                  
+                  return (
                   <div className="space-y-4">
                     <div className="bg-white rounded-xl p-4 shadow">
                       <h3 className="font-bold mb-3">➕ Добавить бонус</h3>
@@ -4877,17 +5152,40 @@ export default function LikeBirdApp() {
                     </div>
                     <div className="bg-white rounded-xl p-4 shadow">
                       <h3 className="font-bold mb-3">📋 История бонусов</h3>
-                      <div className="space-y-2 max-h-64 overflow-y-auto">
-                        {bonuses.slice().reverse().slice(0, 20).map(b => {
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {bonuses.slice().reverse().slice(0, 40).map(b => {
                           const emp = employees.find(e => e.id === b.employeeId);
+                          const isAchBonus = !!b.achievementId || (b.reason && b.reason.startsWith('Достижение:'));
+                          const isEditing = editBonusId === b.id;
+                          
                           return (
-                            <div key={b.id} className="flex justify-between items-center p-2 bg-green-50 rounded border border-green-200">
-                              <div>
-                                <p className="font-medium text-green-700">{emp?.name || 'Удалён'}</p>
-                                <p className="text-xs text-gray-500">{b.reason}</p>
-                                <p className="text-xs text-gray-400">{new Date(b.date).toLocaleDateString('ru-RU')}</p>
-                              </div>
-                              <span className="text-green-600 font-bold">+{b.amount}₽</span>
+                            <div key={b.id} className={`p-3 rounded-lg border ${isAchBonus ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200'}`}>
+                              {isEditing ? (
+                                <div className="space-y-2">
+                                  <input type="number" value={editBonusForm.amount} onChange={e => setEditBonusForm({...editBonusForm, amount: e.target.value})} className="w-full p-2 border rounded text-sm" placeholder="Сумма" />
+                                  <input type="text" value={editBonusForm.reason} onChange={e => setEditBonusForm({...editBonusForm, reason: e.target.value})} className="w-full p-2 border rounded text-sm" placeholder="Причина" />
+                                  <div className="flex gap-2">
+                                    <button onClick={() => setEditBonusId(null)} className="flex-1 py-1.5 bg-gray-200 rounded text-sm font-medium">Отмена</button>
+                                    <button onClick={saveEditBonus} className="flex-1 py-1.5 bg-green-500 text-white rounded text-sm font-medium">Сохранить</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex justify-between items-start">
+                                  <div className="flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-medium text-green-700">{emp?.name || b.employeeName || 'Удалён'}</p>
+                                      {isAchBonus && <span className="text-xs bg-yellow-200 text-yellow-800 px-1.5 py-0.5 rounded">🏆</span>}
+                                    </div>
+                                    <p className="text-xs text-gray-500">{b.reason}</p>
+                                    <p className="text-xs text-gray-400">{b.date ? new Date(b.date).toLocaleDateString('ru-RU') : ''}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="text-green-600 font-bold">+{b.amount}₽</span>
+                                    <button onClick={() => startEditBonus(b)} className="text-blue-400 hover:text-blue-600 p-1"><Edit3 className="w-3.5 h-3.5" /></button>
+                                    <button onClick={() => deleteBonus(b.id)} className="text-red-400 hover:text-red-600 p-1"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -4895,7 +5193,8 @@ export default function LikeBirdApp() {
                       </div>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
                 {/* Рейтинг */}
                 {personnelTab === 'ratings' && (
@@ -5533,7 +5832,7 @@ export default function LikeBirdApp() {
             };
 
             const sortedEvents = Object.entries(eventsCalendar).sort((a, b) => {
-              const parse = ([d, m, y]) => new Date(parseInt('20'+y), m-1, d);
+              const parse = ([d, m, y]) => new Date(parseInt(parseYear(y)), m-1, d);
               return parse(a[0].split('.')) - parse(b[0].split('.'));
             });
 
@@ -5945,42 +6244,64 @@ export default function LikeBirdApp() {
                 : [...current, userLogin];
               updateAchievementsGranted({ ...achievementsGranted, [achId]: updated });
 
-              // Если выдаём впервые — начислить бонус и отправить уведомление
-              if (!isRevoking) {
+              // ═══ СНЯТИЕ достижения — удалить бонус ═══
+              if (isRevoking) {
                 const ach = customAchievements.find(a => a.id === achId);
-                if (!ach) return;
-                // Уведомление в Firebase
-                const notifKey = 'likebird-notifications';
-                const existingNotifs = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
-                const newNotif = {
-                  id: Date.now(),
-                  type: 'achievement',
-                  targetLogin: userLogin,
-                  title: '🏆 Новое достижение!',
-                  body: `Вы получили достижение: «${ach.title}»${ach.bonusAmount > 0 ? ` + бонус ${Number(ach.bonusAmount).toLocaleString()}₽` : ''}`,
-                  bonusAmount: ach.bonusAmount || 0,
-                  achievementId: achId,
-                  createdAt: Date.now(),
-                  read: false,
-                };
-                const updatedNotifs = [newNotif, ...existingNotifs].slice(0, 100);
-                localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
-                fbSave(notifKey, updatedNotifs);
-
-                // Если бонус — добавить в bonuses
-                if (ach.bonusAmount > 0) {
+                if (ach && ach.bonusAmount > 0) {
                   const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
                   const user = regUsers.find(u => u.login === userLogin);
-                  const emp = employees.find(e => e.name === (user?.name || userLogin));
-                  if (emp) {
-                    const newBonus = { id: Date.now(), employeeId: emp.id, employeeName: emp.name, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
-                    const updatedBonuses = [newBonus, ...bonuses];
-                    setBonuses(updatedBonuses);
-                    save('likebird-bonuses', updatedBonuses);
+                  const empName = user?.name || userLogin;
+                  // Удаляем бонус с пометкой achievementId или по reason
+                  const updatedBonuses = bonuses.filter(b => {
+                    if (b.achievementId === achId && (b.employeeName === empName || b.employeeLogin === userLogin)) return false;
+                    if (b.reason === `Достижение: ${ach.title}` && (b.employeeName === empName || b.employeeLogin === userLogin)) return false;
+                    return true;
+                  });
+                  if (updatedBonuses.length !== bonuses.length) {
+                    updateBonuses(updatedBonuses);
+                    showNotification(`Достижение снято, бонус ${ach.bonusAmount}₽ удалён`);
+                  } else {
+                    showNotification('Достижение снято');
                   }
+                } else {
+                  showNotification('Достижение снято');
                 }
-                showNotification(`Достижение выдано${ach.bonusAmount > 0 ? ` + бонус ${ach.bonusAmount}₽` : ''}`);
+                return;
               }
+
+              // ═══ ВЫДАЧА достижения — начислить бонус и отправить уведомление ═══
+              const ach = customAchievements.find(a => a.id === achId);
+              if (!ach) return;
+              // Уведомление в Firebase
+              const notifKey = 'likebird-notifications';
+              const existingNotifs = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
+              const newNotif = {
+                id: Date.now(),
+                type: 'achievement',
+                targetLogin: userLogin,
+                title: '🏆 Новое достижение!',
+                body: `Вы получили достижение: «${ach.title}»${ach.bonusAmount > 0 ? ` + бонус ${Number(ach.bonusAmount).toLocaleString()}₽` : ''}`,
+                bonusAmount: ach.bonusAmount || 0,
+                achievementId: achId,
+                createdAt: Date.now(),
+                read: false,
+              };
+              const updatedNotifs = [newNotif, ...existingNotifs].slice(0, 100);
+              localStorage.setItem(notifKey, JSON.stringify(updatedNotifs));
+              fbSave(notifKey, updatedNotifs);
+
+              // Если бонус — добавить в bonuses (с achievementId для отката)
+              if (ach.bonusAmount > 0) {
+                const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+                const user = regUsers.find(u => u.login === userLogin);
+                const emp = employees.find(e => e.name === (user?.name || userLogin));
+                if (emp) {
+                  const newBonus = { id: Date.now(), employeeId: emp.id, employeeName: emp.name, employeeLogin: userLogin, achievementId: achId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
+                  const updatedBonuses = [newBonus, ...bonuses];
+                  updateBonuses(updatedBonuses);
+                }
+              }
+              showNotification(`Достижение выдано${ach.bonusAmount > 0 ? ` + бонус ${ach.bonusAmount}₽` : ''}`);
             };
 
             const users = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
@@ -6399,14 +6720,15 @@ export default function LikeBirdApp() {
                   // Проверяем что смена за последнюю неделю
                   const dateStr = key.replace(login + '_', ''); // DD.MM.YYYY
                   const [d, m, y] = dateStr.split('.');
-                  const shiftDate = y ? new Date(parseInt('20'+y), parseInt(m)-1, parseInt(d)) : new Date(0);
+                  const shiftDate = y ? new Date(parseInt(parseYear(y)), parseInt(m)-1, parseInt(d)) : new Date(0);
                   if (shiftDate.getTime() < weekAgoTs) return;
                   // Считаем минуты
                   if (shift.openTime && shift.closeTime) {
                     const [oh, om] = shift.openTime.split(':').map(Number);
                     const [ch, cm] = shift.closeTime.split(':').map(Number);
-                    const mins = (ch * 60 + cm) - (oh * 60 + om);
-                    if (mins > 0) totalMinutes += mins;
+                    let mins = (ch * 60 + cm) - (oh * 60 + om);
+                    if (mins < 0) mins += 24 * 60; // Ночная смена через полночь
+                    totalMinutes += mins;
                   } else if (shift.status === 'open') {
                     isCurrentlyOpen = true;
                   }
@@ -7930,6 +8252,7 @@ export default function LikeBirdApp() {
       {currentView === 'stock' && <StockView />}
       {currentView === 'reports' && <ReportsView />}
       {currentView === 'day-report' && <DayReportView />}
+      {currentView === 'notifications' && <NotificationsView />}
       {currentView === 'settings' && <SettingsView />}
       {currentView === 'admin' && <AdminView />}
       {currentView === 'team' && <TeamView />}
