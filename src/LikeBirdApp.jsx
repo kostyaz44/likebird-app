@@ -2152,507 +2152,719 @@ export default function LikeBirdApp() {
   const GameView = () => {
     const canvasRef = useRef(null);
     const gameRef = useRef(null);
-    const touchXRef = useRef(0.5); // 0..1 normalized
+    const touchXRef = useRef(0.5);
+    const scoreRef = useRef(0);
     const [gameState, setGameState] = useState('menu'); // menu | playing | over
-    const [score, setScore] = useState(0);
+    const [finalScore, setFinalScore] = useState(0);
     const [highScore, setHighScore] = useState(() => parseInt(localStorage.getItem('likebird-game-highscore') || '0'));
+    const [newRecord, setNewRecord] = useState(false);
 
-    // Товары, которые падают (emoji + цвет + очки)
-    const ITEMS = [
-      { emoji: '🐦', name: 'Птичка', points: 10, size: 32, color: '#f59e0b' },
-      { emoji: '🐦', name: 'Птичка', points: 10, size: 28, color: '#ef4444' },
-      { emoji: '🐦', name: 'Птичка', points: 10, size: 30, color: '#3b82f6' },
-      { emoji: '🧌', name: 'Йети', points: 20, size: 38, color: '#a78bfa' },
-      { emoji: '🦈', name: 'Акула', points: 15, size: 34, color: '#6366f1' },
-      { emoji: '🦎', name: 'Ящерица', points: 15, size: 30, color: '#10b981' },
-      { emoji: '🐙', name: 'Осьминог', points: 12, size: 32, color: '#ec4899' },
-      { emoji: '🦴', name: 'Скелет', points: 15, size: 28, color: '#f5f5f5' },
-      { emoji: '🧸', name: 'Медвежонок', points: 12, size: 34, color: '#d97706' },
-    ];
-
-    const startGame = () => {
-      setScore(0);
-      setGameState('playing');
+    // ═══ Рисование мультяшных фигурок на Canvas ═══
+    const drawBird = (ctx, x, y, size, color, rotation) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      const s = size;
+      // Тело — пухлый овал
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.45, s * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // Животик
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(0, s * 0.12, s * 0.28, s * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Глазки — большие мультяшные
+      const eyeOff = s * 0.14;
+      const eyeR = s * 0.13;
+      // Белки
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-eyeOff, -s * 0.18, eyeR, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(eyeOff, -s * 0.18, eyeR, 0, Math.PI * 2); ctx.fill();
+      // Зрачки
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(-eyeOff + 1, -s * 0.16, eyeR * 0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(eyeOff + 1, -s * 0.16, eyeR * 0.5, 0, Math.PI * 2); ctx.fill();
+      // Блики
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-eyeOff - 1, -s * 0.21, eyeR * 0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(eyeOff - 1, -s * 0.21, eyeR * 0.2, 0, Math.PI * 2); ctx.fill();
+      // Клювик
+      ctx.fillStyle = '#ff9500';
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.07, -s * 0.03);
+      ctx.lineTo(0, s * 0.08);
+      ctx.lineTo(s * 0.07, -s * 0.03);
+      ctx.closePath();
+      ctx.fill();
+      // Крылышки
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.ellipse(-s * 0.42, 0, s * 0.18, s * 0.28, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(s * 0.42, 0, s * 0.18, s * 0.28, 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // Хохолок
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.05, -s * 0.52);
+      ctx.quadraticCurveTo(-s * 0.15, -s * 0.75, 0, -s * 0.7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(s * 0.05, -s * 0.52);
+      ctx.quadraticCurveTo(s * 0.2, -s * 0.78, s * 0.05, -s * 0.68);
+      ctx.stroke();
+      ctx.restore();
     };
 
+    const drawYeti = (ctx, x, y, size, rotation) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      const s = size;
+      // Пушистое тело
+      ctx.fillStyle = '#e8e0d8';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.5, s * 0.58, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Шерсть — зигзаг по контуру
+      ctx.strokeStyle = '#d5ccc2';
+      ctx.lineWidth = 2;
+      for (let a = 0; a < Math.PI * 2; a += 0.4) {
+        const r1 = s * 0.48;
+        const r2 = s * 0.56;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
+        ctx.lineTo(Math.cos(a + 0.15) * r2, Math.sin(a + 0.15) * r2);
+        ctx.stroke();
+      }
+      // Мордочка
+      ctx.fillStyle = '#f5efe8';
+      ctx.beginPath();
+      ctx.ellipse(0, s * 0.05, s * 0.3, s * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Глаза
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-s * 0.12, -s * 0.08, s * 0.11, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.12, -s * 0.08, s * 0.11, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#4a3728';
+      ctx.beginPath(); ctx.arc(-s * 0.1, -s * 0.06, s * 0.055, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.14, -s * 0.06, s * 0.055, 0, Math.PI * 2); ctx.fill();
+      // Ротик
+      ctx.strokeStyle = '#8B7355';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, s * 0.1, s * 0.08, 0.2, Math.PI - 0.2);
+      ctx.stroke();
+      // Рожки
+      ctx.fillStyle = '#c9b89c';
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.22, -s * 0.42);
+      ctx.lineTo(-s * 0.3, -s * 0.65);
+      ctx.lineTo(-s * 0.12, -s * 0.48);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(s * 0.22, -s * 0.42);
+      ctx.lineTo(s * 0.3, -s * 0.65);
+      ctx.lineTo(s * 0.12, -s * 0.48);
+      ctx.fill();
+      ctx.restore();
+    };
+
+    const drawShark = (ctx, x, y, size, rotation) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      const s = size;
+      // Тело
+      ctx.fillStyle = '#6B7DB3';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.55, s * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Живот
+      ctx.fillStyle = '#e0e4ef';
+      ctx.beginPath();
+      ctx.ellipse(0, s * 0.08, s * 0.4, s * 0.18, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Плавник сверху
+      ctx.fillStyle = '#556699';
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.3);
+      ctx.lineTo(-s * 0.1, -s * 0.55);
+      ctx.lineTo(s * 0.12, -s * 0.3);
+      ctx.fill();
+      // Хвост
+      ctx.beginPath();
+      ctx.moveTo(s * 0.48, -s * 0.05);
+      ctx.lineTo(s * 0.72, -s * 0.25);
+      ctx.lineTo(s * 0.72, s * 0.18);
+      ctx.lineTo(s * 0.48, s * 0.05);
+      ctx.fill();
+      // Глаз
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-s * 0.25, -s * 0.08, s * 0.09, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(-s * 0.24, -s * 0.06, s * 0.045, 0, Math.PI * 2); ctx.fill();
+      // Улыбка
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(-s * 0.18, s * 0.04, s * 0.1, 0.3, Math.PI - 0.3);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    const drawLizard = (ctx, x, y, size, rotation) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      const s = size;
+      // Тело
+      ctx.fillStyle = '#4ade80';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.35, s * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Точки на спине
+      ctx.fillStyle = '#22c55e';
+      for (let i = 0; i < 5; i++) {
+        ctx.beginPath();
+        ctx.arc(Math.cos(i * 1.2) * s * 0.15, -s * 0.2 + i * s * 0.12, s * 0.05, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Глаза
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-s * 0.12, -s * 0.3, s * 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.12, -s * 0.3, s * 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(-s * 0.11, -s * 0.28, s * 0.05, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.13, -s * 0.28, s * 0.05, 0, Math.PI * 2); ctx.fill();
+      // Улыбка
+      ctx.strokeStyle = '#15803d';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, -s * 0.15, s * 0.08, 0.2, Math.PI - 0.2); ctx.stroke();
+      // Лапки
+      ctx.strokeStyle = '#4ade80';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([dx, dy]) => {
+        ctx.beginPath();
+        ctx.moveTo(dx * s * 0.28, dy * s * 0.22);
+        ctx.lineTo(dx * s * 0.42, dy * s * 0.35);
+        ctx.stroke();
+      });
+      ctx.restore();
+    };
+
+    const drawGenericToy = (ctx, x, y, size, color, label, rotation) => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      const s = size;
+      // Круглое тело
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // Мордочка
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-s * 0.12, -s * 0.08, s * 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.12, -s * 0.08, s * 0.1, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.arc(-s * 0.1, -s * 0.06, s * 0.05, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(s * 0.14, -s * 0.06, s * 0.05, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, s * 0.08, s * 0.08, 0.2, Math.PI - 0.2); ctx.stroke();
+      // Подпись
+      ctx.font = `bold ${Math.round(s * 0.35)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText(label, 0, s * 0.32);
+      ctx.restore();
+    };
+
+    // Фабрика рисования по типу
+    const drawItem = (ctx, item) => {
+      const rot = item.rotation * Math.PI / 180;
+      switch (item.type) {
+        case 'bird': drawBird(ctx, item.x, item.y, item.size * 1.4, item.color, rot); break;
+        case 'yeti': drawYeti(ctx, item.x, item.y, item.size * 1.4, rot); break;
+        case 'shark': drawShark(ctx, item.x, item.y, item.size * 1.4, rot); break;
+        case 'lizard': drawLizard(ctx, item.x, item.y, item.size * 1.4, rot); break;
+        default: drawGenericToy(ctx, item.x, item.y, item.size * 1.2, item.color, item.label, rot);
+      }
+    };
+
+    // Типы предметов
+    const ITEM_TYPES = [
+      { type: 'bird', name: 'Птичка', points: 10, size: 28, color: '#f59e0b', label: '' },
+      { type: 'bird', name: 'Птичка', points: 10, size: 26, color: '#ef4444', label: '' },
+      { type: 'bird', name: 'Птичка', points: 10, size: 24, color: '#3b82f6', label: '' },
+      { type: 'bird', name: 'Птичка', points: 10, size: 27, color: '#ec4899', label: '' },
+      { type: 'bird', name: 'Птичка', points: 10, size: 25, color: '#8b5cf6', label: '' },
+      { type: 'yeti', name: 'Йети', points: 20, size: 32, color: '#e8e0d8', label: '' },
+      { type: 'shark', name: 'Акула', points: 15, size: 30, color: '#6B7DB3', label: '' },
+      { type: 'lizard', name: 'Ящерица', points: 15, size: 26, color: '#4ade80', label: '' },
+      { type: 'generic', name: 'Осьминог', points: 12, size: 26, color: '#ec4899', label: '🐙' },
+      { type: 'generic', name: 'Мишка', points: 12, size: 28, color: '#d97706', label: '🧸' },
+    ];
+
+    const startGame = useCallback(() => {
+      setFinalScore(0);
+      setNewRecord(false);
+      scoreRef.current = 0;
+      setGameState('playing');
+    }, []);
+
+    // ═══ Главный игровой useEffect ═══
     useEffect(() => {
       if (gameState !== 'playing') return;
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext('2d');
 
-      // Размеры под мобильный
-      const W = canvas.width = canvas.offsetWidth * 2;
-      const H = canvas.height = canvas.offsetHeight * 2;
-      ctx.scale(1, 1);
+      let animId;
+      let cancelled = false;
 
-      const TABLE_Y = H * 0.18;      // Верх стола
-      const TABLE_H = H * 0.07;      // Высота стола
-      const GROUND_Y = H * 0.88;     // Земля
-      const CATCH_Y = H * 0.78;      // Зона ловли
-      const CATCHER_W = W * 0.22;    // Ширина "рук"
-      const CATCHER_H = H * 0.08;
+      // Задержка 1 кадр чтобы DOM отрисовал canvas с размерами
+      const initTimeout = setTimeout(() => {
+        if (cancelled) return;
+        const ctx = canvas.getContext('2d');
 
-      // Игровое состояние в ref (без re-render)
-      const g = {
-        items: [],            // Падающие предметы
-        particles: [],        // Частицы ветра
-        catchEffects: [],     // Эффекты ловли
-        missEffects: [],      // Эффекты промаха
-        score: 0,
-        lives: 3,
-        level: 1,
-        wind: 2,              // Сила ветра (пикселей/кадр)
-        windDir: 1,           // Направление (1=вправо, -1=влево)
-        windTimer: 0,
-        spawnTimer: 0,
-        spawnRate: 80,        // Кадров между спавнами
-        frame: 0,
-        running: true,
-      };
-      gameRef.current = g;
+        // Размеры — devicePixelRatio для чёткости
+        const dpr = window.devicePixelRatio || 2;
+        const rect = canvas.getBoundingClientRect();
+        const W = canvas.width = rect.width * dpr;
+        const H = canvas.height = rect.height * dpr;
+        ctx.scale(dpr / (dpr), dpr / (dpr)); // identity, sizes already in px*dpr
 
-      // Спавн предмета
-      const spawnItem = () => {
-        const template = ITEMS[Math.floor(Math.random() * ITEMS.length)];
-        const x = W * 0.15 + Math.random() * W * 0.7;
-        g.items.push({
-          ...template,
-          x, y: TABLE_Y + TABLE_H,
-          vx: g.windDir * (g.wind + Math.random() * 2),
-          vy: 1 + Math.random() * 2 + g.level * 0.3,
-          rotation: Math.random() * 360,
-          rotSpeed: (Math.random() - 0.5) * 8,
-          caught: false,
-        });
-      };
+        if (W < 10 || H < 10) return; // safety
 
-      // Спавн частиц ветра
-      const spawnWindParticle = () => {
-        g.particles.push({
-          x: g.windDir > 0 ? -10 : W + 10,
-          y: Math.random() * H * 0.7,
-          vx: g.windDir * (3 + Math.random() * 4 + g.wind),
-          vy: 0.5 + Math.random(),
-          life: 60 + Math.random() * 40,
-          maxLife: 100,
-          size: 1 + Math.random() * 2,
-        });
-      };
+        const TABLE_Y = H * 0.16;
+        const TABLE_H = H * 0.065;
+        const GROUND_Y = H * 0.87;
+        const CATCH_Y = H * 0.76;
+        const CATCHER_W = W * 0.24;
+        const CATCHER_H = H * 0.07;
 
-      // Рисуем фон — набережная
-      const drawBackground = () => {
-        // Небо
-        const skyGrad = ctx.createLinearGradient(0, 0, 0, H * 0.5);
-        skyGrad.addColorStop(0, '#87ceeb');
-        skyGrad.addColorStop(1, '#b8e4f9');
-        ctx.fillStyle = skyGrad;
-        ctx.fillRect(0, 0, W, H * 0.5);
+        const g = {
+          items: [], particles: [], catchEffects: [], missEffects: [],
+          score: 0, lives: 3, level: 1,
+          wind: 2, windDir: 1, windTimer: 0,
+          spawnTimer: 0, spawnRate: 75,
+          frame: 0, running: true,
+        };
+        gameRef.current = g;
 
-        // Море на горизонте
-        const seaGrad = ctx.createLinearGradient(0, H * 0.08, 0, H * 0.14);
-        seaGrad.addColorStop(0, '#3b82f6');
-        seaGrad.addColorStop(1, '#60a5fa');
-        ctx.fillStyle = seaGrad;
-        ctx.fillRect(0, H * 0.08, W, H * 0.06);
+        // ═══ Спавн предмета со стола ═══
+        const spawnItem = () => {
+          const tmpl = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
+          g.items.push({
+            ...tmpl,
+            x: W * 0.15 + Math.random() * W * 0.7,
+            y: TABLE_Y + TABLE_H + 5,
+            vx: g.windDir * (g.wind * 0.5 + Math.random() * 1.5),
+            vy: 1.2 + Math.random() * 1.8 + g.level * 0.25,
+            rotation: Math.random() * 360,
+            rotSpeed: (Math.random() - 0.5) * 6,
+          });
+        };
 
-        // Волны
-        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-        ctx.lineWidth = 2;
-        for (let w = 0; w < 5; w++) {
+        // ═══ Частицы ветра ═══
+        const spawnWindParticle = () => {
+          g.particles.push({
+            x: g.windDir > 0 ? -10 : W + 10,
+            y: Math.random() * H * 0.65,
+            vx: g.windDir * (3 + Math.random() * 4 + g.wind),
+            vy: 0.3 + Math.random() * 0.5,
+            life: 60 + Math.random() * 40, maxLife: 100,
+            size: 1 + Math.random() * 2,
+          });
+        };
+
+        // ═══ Рисование фона — набережная ═══
+        const drawBackground = () => {
+          // Небо
+          const sky = ctx.createLinearGradient(0, 0, 0, H * 0.45);
+          sky.addColorStop(0, '#7ec8e3');
+          sky.addColorStop(1, '#bde4f4');
+          ctx.fillStyle = sky;
+          ctx.fillRect(0, 0, W, H * 0.45);
+
+          // Облака
+          ctx.fillStyle = 'rgba(255,255,255,0.6)';
+          const cloudX = ((g.frame * 0.3) % (W + 200)) - 100;
+          ctx.beginPath(); ctx.arc(cloudX, H * 0.06, 25, 0, Math.PI * 2); ctx.arc(cloudX + 25, H * 0.04, 30, 0, Math.PI * 2); ctx.arc(cloudX + 55, H * 0.06, 22, 0, Math.PI * 2); ctx.fill();
+          const cloudX2 = ((g.frame * 0.15 + 300) % (W + 300)) - 150;
+          ctx.beginPath(); ctx.arc(cloudX2, H * 0.1, 20, 0, Math.PI * 2); ctx.arc(cloudX2 + 22, H * 0.085, 26, 0, Math.PI * 2); ctx.arc(cloudX2 + 48, H * 0.1, 18, 0, Math.PI * 2); ctx.fill();
+
+          // Море
+          const sea = ctx.createLinearGradient(0, H * 0.07, 0, H * 0.14);
+          sea.addColorStop(0, '#2563eb');
+          sea.addColorStop(1, '#60a5fa');
+          ctx.fillStyle = sea;
+          ctx.fillRect(0, H * 0.07, W, H * 0.07);
+          // Волны
+          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+          ctx.lineWidth = 1.5;
+          for (let w = 0; w < 4; w++) {
+            ctx.beginPath();
+            for (let x = 0; x < W; x += 3) {
+              ctx.lineTo(x, H * 0.08 + w * H * 0.013 + Math.sin((x + g.frame * 1.5 + w * 40) / 25) * 3);
+            }
+            ctx.stroke();
+          }
+
+          // Набережная плитка
+          const tile = ctx.createLinearGradient(0, H * 0.14, 0, H);
+          tile.addColorStop(0, '#c9b494');
+          tile.addColorStop(0.5, '#b5a07a');
+          tile.addColorStop(1, '#9a845f');
+          ctx.fillStyle = tile;
+          ctx.fillRect(0, H * 0.14, W, H);
+          // Текстура плитки
+          ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+          ctx.lineWidth = 1;
+          const ts = W / 7;
+          for (let x = 0; x < W; x += ts) { ctx.beginPath(); ctx.moveTo(x, H * 0.14); ctx.lineTo(x, H); ctx.stroke(); }
+          for (let y = H * 0.14; y < H; y += ts * 0.55) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+        };
+
+        // ═══ Стол ═══
+        const drawTable = () => {
+          // Тень
+          ctx.fillStyle = 'rgba(0,0,0,0.12)';
           ctx.beginPath();
-          const waveY = H * 0.09 + w * H * 0.01;
-          for (let x = 0; x < W; x += 4) {
-            ctx.lineTo(x, waveY + Math.sin((x + g.frame * 2 + w * 50) / 30) * 3);
-          }
+          ctx.ellipse(W * 0.5, TABLE_Y + TABLE_H + 6, W * 0.42, 6, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Столешница — трапеция
+          const tGrad = ctx.createLinearGradient(0, TABLE_Y, 0, TABLE_Y + TABLE_H);
+          tGrad.addColorStop(0, '#5d3a1a');
+          tGrad.addColorStop(0.5, '#4a2e14');
+          tGrad.addColorStop(1, '#3d2410');
+          ctx.fillStyle = tGrad;
+          ctx.beginPath();
+          ctx.moveTo(W * 0.08, TABLE_Y + TABLE_H);
+          ctx.lineTo(W * 0.92, TABLE_Y + TABLE_H);
+          ctx.lineTo(W * 0.85, TABLE_Y);
+          ctx.lineTo(W * 0.15, TABLE_Y);
+          ctx.closePath();
+          ctx.fill();
+          // Белая каёмка
+          ctx.strokeStyle = '#e8ddd0';
+          ctx.lineWidth = 2.5;
           ctx.stroke();
-        }
 
-        // Плитка набережной
-        const tileGrad = ctx.createLinearGradient(0, H * 0.14, 0, H);
-        tileGrad.addColorStop(0, '#c4a882');
-        tileGrad.addColorStop(0.3, '#b89f7a');
-        tileGrad.addColorStop(1, '#a08060');
-        ctx.fillStyle = tileGrad;
-        ctx.fillRect(0, H * 0.14, W, H);
+          // Декоративные мини-птички на столе (покачиваются)
+          const colors = ['#f59e0b','#ef4444','#3b82f6','#ec4899','#8b5cf6','#4ade80','#f59e0b','#6B7DB3'];
+          colors.forEach((c, i) => {
+            const ix = W * 0.18 + i * (W * 0.64 / colors.length);
+            const wobble = Math.sin((g.frame * 0.04 + i * 1.3) * Math.max(1, g.wind * 0.4)) * (g.wind * 0.7);
+            drawBird(ctx, ix + wobble, TABLE_Y + TABLE_H * 0.15, 10, c, wobble * 0.02);
+          });
+        };
 
-        // Линии плитки
-        ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-        ctx.lineWidth = 1;
-        const tileSize = W / 8;
-        for (let x = 0; x < W; x += tileSize) {
-          ctx.beginPath(); ctx.moveTo(x, H * 0.14); ctx.lineTo(x, H); ctx.stroke();
-        }
-        for (let y = H * 0.14; y < H; y += tileSize * 0.6) {
-          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-        }
-      };
+        // ═══ Частицы ветра ═══
+        const drawWind = () => {
+          g.particles.forEach(p => {
+            const a = Math.max(0, p.life / p.maxLife) * 0.35;
+            ctx.fillStyle = `rgba(255,255,255,${a})`;
+            ctx.fillRect(p.x, p.y, p.size * 7, p.size * 0.8);
+          });
+        };
 
-      // Рисуем стол
-      const drawTable = () => {
-        // Тень стола
-        ctx.fillStyle = 'rgba(0,0,0,0.15)';
-        ctx.fillRect(W * 0.06, TABLE_Y + TABLE_H + 4, W * 0.88, 8);
+        // ═══ Ловец (руки/корзина) ═══
+        const drawCatcher = () => {
+          const cx = touchXRef.current * W;
+          const hw = CATCHER_W / 2;
+          // Тень
+          ctx.fillStyle = 'rgba(0,0,0,0.1)';
+          ctx.beginPath();
+          ctx.ellipse(cx, CATCH_Y + CATCHER_H + 3, hw * 0.9, 5, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // Руки — чаша
+          ctx.fillStyle = '#fcd9b6';
+          ctx.beginPath();
+          ctx.moveTo(cx - hw, CATCH_Y + CATCHER_H);
+          ctx.quadraticCurveTo(cx - hw * 0.2, CATCH_Y - CATCHER_H * 0.3, cx - hw * 0.9, CATCH_Y - CATCHER_H * 0.5);
+          ctx.lineTo(cx - hw * 1.05, CATCH_Y - CATCHER_H * 0.2);
+          ctx.lineTo(cx - hw, CATCH_Y + CATCHER_H);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(cx + hw, CATCH_Y + CATCHER_H);
+          ctx.quadraticCurveTo(cx + hw * 0.2, CATCH_Y - CATCHER_H * 0.3, cx + hw * 0.9, CATCH_Y - CATCHER_H * 0.5);
+          ctx.lineTo(cx + hw * 1.05, CATCH_Y - CATCHER_H * 0.2);
+          ctx.lineTo(cx + hw, CATCH_Y + CATCHER_H);
+          ctx.fill();
+          // Ладони-чаша снизу
+          ctx.beginPath();
+          ctx.moveTo(cx - hw, CATCH_Y + CATCHER_H);
+          ctx.quadraticCurveTo(cx, CATCH_Y + CATCHER_H * 1.6, cx + hw, CATCH_Y + CATCHER_H);
+          ctx.strokeStyle = '#e8b88a';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          ctx.fillStyle = '#fcd9b6';
+          ctx.fill();
+          // Рукава
+          ctx.fillStyle = '#3b82f6';
+          ctx.fillRect(cx - hw - 6, CATCH_Y + CATCHER_H * 0.2, 14, CATCHER_H * 0.9);
+          ctx.fillRect(cx + hw - 8, CATCH_Y + CATCHER_H * 0.2, 14, CATCHER_H * 0.9);
+        };
 
-        // Столешница (тёмно-коричневая как на фото)
-        const tableGrad = ctx.createLinearGradient(0, TABLE_Y, 0, TABLE_Y + TABLE_H);
-        tableGrad.addColorStop(0, '#5d3a1a');
-        tableGrad.addColorStop(0.5, '#4a2e14');
-        tableGrad.addColorStop(1, '#3d2410');
-        ctx.fillStyle = tableGrad;
+        // ═══ Зона падения ═══
+        const drawGround = () => {
+          ctx.fillStyle = 'rgba(239,68,68,0.08)';
+          ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+          ctx.setLineDash([8, 8]);
+          ctx.strokeStyle = 'rgba(239,68,68,0.25)';
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(0, GROUND_Y); ctx.lineTo(W, GROUND_Y); ctx.stroke();
+          ctx.setLineDash([]);
+        };
 
-        // Перспектива — трапеция
-        ctx.beginPath();
-        ctx.moveTo(W * 0.08, TABLE_Y + TABLE_H);
-        ctx.lineTo(W * 0.92, TABLE_Y + TABLE_H);
-        ctx.lineTo(W * 0.85, TABLE_Y);
-        ctx.lineTo(W * 0.15, TABLE_Y);
-        ctx.closePath();
-        ctx.fill();
+        // ═══ Эффекты ═══
+        const drawEffects = () => {
+          g.catchEffects.forEach(e => {
+            const a = e.life / 30;
+            const rise = (30 - e.life) * 2.5;
+            ctx.font = `bold ${Math.round(22 + (30 - e.life))}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillStyle = `rgba(34,197,94,${a})`;
+            ctx.fillText(`+${e.points}`, e.x, e.y - rise);
+            // Звёздочки
+            ctx.font = '14px serif';
+            ctx.fillStyle = `rgba(250,204,21,${a})`;
+            for (let i = 0; i < 3; i++) {
+              const angle = (i / 3) * Math.PI * 2 + e.life * 0.15;
+              const dist = (30 - e.life) * 2.5;
+              ctx.fillText('✦', e.x + Math.cos(angle) * dist, e.y - rise + Math.sin(angle) * dist);
+            }
+          });
+          g.missEffects.forEach(e => {
+            const a = e.life / 25;
+            ctx.font = `bold ${20}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillStyle = `rgba(239,68,68,${a})`;
+            ctx.fillText('✗', e.x, e.y - (25 - e.life) * 1.5);
+          });
+        };
 
-        // Белая окантовка как на фото
-        ctx.strokeStyle = '#e8ddd0';
-        ctx.lineWidth = 3;
-        ctx.stroke();
+        // ═══ HUD ═══
+        const drawHUD = () => {
+          const pad = W * 0.03;
+          const fs = Math.round(W * 0.038);
+          // Фон
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          const hh = fs * 2.4;
+          ctx.beginPath();
+          ctx.moveTo(pad + 10, pad); ctx.lineTo(W - pad - 10, pad);
+          ctx.arcTo(W - pad, pad, W - pad, pad + 10, 10);
+          ctx.lineTo(W - pad, pad + hh - 10);
+          ctx.arcTo(W - pad, pad + hh, W - pad - 10, pad + hh, 10);
+          ctx.lineTo(pad + 10, pad + hh);
+          ctx.arcTo(pad, pad + hh, pad, pad + hh - 10, 10);
+          ctx.lineTo(pad, pad + 10);
+          ctx.arcTo(pad, pad, pad + 10, pad, 10);
+          ctx.fill();
 
-        // Товары на столе (декоративные, не интерактивные)
-        const tableItems = ['🐦','🐦','🐦','🧌','🦈','🐦','🐦','🦎','🐦'];
-        const itemSpacing = W * 0.7 / tableItems.length;
-        ctx.font = `${Math.round(W * 0.04)}px serif`;
-        ctx.textAlign = 'center';
-        tableItems.forEach((item, i) => {
-          const ix = W * 0.18 + i * itemSpacing;
-          const iy = TABLE_Y + TABLE_H * 0.3;
-          // Лёгкое покачивание от ветра
-          const wobble = Math.sin((g.frame * 0.05 + i) * g.wind * 0.3) * (g.wind * 0.5);
-          ctx.fillText(item, ix + wobble, iy);
-        });
-      };
-
-      // Рисуем частицы ветра
-      const drawWind = () => {
-        g.particles.forEach(p => {
-          const alpha = Math.max(0, p.life / p.maxLife) * 0.4;
-          ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-          ctx.fillRect(p.x, p.y, p.size * 8, p.size);
-        });
-      };
-
-      // Рисуем ловца (руки)
-      const drawCatcher = () => {
-        const cx = touchXRef.current * W;
-        const left = cx - CATCHER_W / 2;
-
-        // Тень
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
-        ctx.beginPath();
-        ctx.ellipse(cx, CATCH_Y + CATCHER_H + 4, CATCHER_W * 0.5, 6, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Руки — дуга
-        ctx.fillStyle = '#fcd9b6';
-        ctx.beginPath();
-        ctx.moveTo(left, CATCH_Y + CATCHER_H);
-        ctx.quadraticCurveTo(left, CATCH_Y, cx - CATCHER_W * 0.3, CATCH_Y - 10);
-        ctx.lineTo(cx - CATCHER_W * 0.1, CATCH_Y - 20);
-        ctx.lineTo(cx + CATCHER_W * 0.1, CATCH_Y - 20);
-        ctx.lineTo(cx + CATCHER_W * 0.3, CATCH_Y - 10);
-        ctx.quadraticCurveTo(left + CATCHER_W, CATCH_Y, left + CATCHER_W, CATCH_Y + CATCHER_H);
-        ctx.closePath();
-        ctx.fill();
-        ctx.strokeStyle = '#e8b88a';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Рукава
-        ctx.fillStyle = '#3b82f6';
-        ctx.fillRect(left - 8, CATCH_Y + CATCHER_H * 0.5, 20, CATCHER_H * 0.7);
-        ctx.fillRect(left + CATCHER_W - 12, CATCH_Y + CATCHER_H * 0.5, 20, CATCHER_H * 0.7);
-      };
-
-      // Рисуем падающие предметы
-      const drawItems = () => {
-        g.items.forEach(item => {
-          ctx.save();
-          ctx.translate(item.x, item.y);
-          ctx.rotate(item.rotation * Math.PI / 180);
-          ctx.font = `${item.size * 2}px serif`;
-          ctx.textAlign = 'center';
+          const midY = pad + hh / 2;
+          ctx.font = `bold ${fs}px sans-serif`;
           ctx.textBaseline = 'middle';
-          ctx.fillText(item.emoji, 0, 0);
-          ctx.restore();
-        });
-      };
-
-      // Рисуем эффекты
-      const drawEffects = () => {
-        g.catchEffects.forEach(e => {
-          const alpha = e.life / 30;
-          ctx.font = `bold ${Math.round(24 + (30 - e.life) * 1.5)}px sans-serif`;
+          // Очки
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#fbbf24';
+          ctx.fillText(`⭐ ${g.score}`, pad * 2.5, midY);
+          // Уровень
           ctx.textAlign = 'center';
-          ctx.fillStyle = `rgba(34,197,94,${alpha})`;
-          ctx.fillText(`+${e.points}`, e.x, e.y - (30 - e.life) * 2);
-          // Звёздочки
-          for (let i = 0; i < 4; i++) {
-            const angle = (i / 4) * Math.PI * 2 + e.life * 0.2;
-            const dist = (30 - e.life) * 3;
-            ctx.fillStyle = `rgba(250,204,21,${alpha})`;
-            ctx.font = `${16}px serif`;
-            ctx.fillText('✨', e.x + Math.cos(angle) * dist, e.y + Math.sin(angle) * dist);
+          ctx.fillStyle = '#93c5fd';
+          ctx.fillText(`Ур.${g.level}`, W * 0.5, midY);
+          // Жизни
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#fca5a5';
+          let h = '';
+          for (let i = 0; i < 3; i++) h += i < g.lives ? '❤' : '♡';
+          ctx.fillText(h, W - pad * 2.5, midY);
+          // Ветер
+          ctx.font = `${Math.round(fs * 0.6)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          const arr = g.windDir > 0 ? '→' : '←';
+          ctx.fillText(`💨 ${arr}${'~'.repeat(Math.min(4, Math.round(g.wind)))}`, W * 0.5, pad + hh + fs * 0.7);
+        };
+
+        // ═══ Физика ═══
+        const update = () => {
+          g.frame++;
+          // Ветер
+          g.windTimer++;
+          if (g.windTimer > 180 + Math.random() * 220) {
+            g.windTimer = 0;
+            g.windDir = Math.random() > 0.5 ? 1 : -1;
+            g.wind = 1.5 + Math.random() * 2 + g.level * 0.4;
           }
-        });
-        g.missEffects.forEach(e => {
-          const alpha = e.life / 30;
-          ctx.font = `bold ${22}px sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.fillStyle = `rgba(239,68,68,${alpha})`;
-          ctx.fillText('💨', e.x, e.y - (30 - e.life));
-        });
-      };
+          g.wind += Math.sin(g.frame * 0.008) * 0.08;
 
-      // Рисуем HUD
-      const drawHUD = () => {
-        const pad = W * 0.03;
-        const fontSize = Math.round(W * 0.04);
+          // Спавн
+          g.spawnTimer++;
+          if (g.spawnTimer >= g.spawnRate) { g.spawnTimer = 0; spawnItem(); }
+          if (g.frame % 3 === 0) spawnWindParticle();
 
-        // Фон HUD
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        const hudR = 12, hudX = pad, hudY2 = pad, hudW = W - pad * 2, hudH2 = fontSize * 2.2;
-        ctx.beginPath();
-        ctx.moveTo(hudX + hudR, hudY2);
-        ctx.lineTo(hudX + hudW - hudR, hudY2);
-        ctx.arcTo(hudX + hudW, hudY2, hudX + hudW, hudY2 + hudR, hudR);
-        ctx.lineTo(hudX + hudW, hudY2 + hudH2 - hudR);
-        ctx.arcTo(hudX + hudW, hudY2 + hudH2, hudX + hudW - hudR, hudY2 + hudH2, hudR);
-        ctx.lineTo(hudX + hudR, hudY2 + hudH2);
-        ctx.arcTo(hudX, hudY2 + hudH2, hudX, hudY2 + hudH2 - hudR, hudR);
-        ctx.lineTo(hudX, hudY2 + hudR);
-        ctx.arcTo(hudX, hudY2, hudX + hudR, hudY2, hudR);
-        ctx.closePath();
-        ctx.fill();
+          // Частицы
+          g.particles = g.particles.filter(p => { p.x += p.vx; p.y += p.vy; p.life--; return p.life > 0; });
 
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.textBaseline = 'middle';
-        const hudY = pad + fontSize * 1.1;
+          // Предметы
+          const cx = touchXRef.current * W;
+          g.items = g.items.filter(item => {
+            item.x += item.vx + g.windDir * g.wind * 0.25;
+            item.y += item.vy;
+            item.rotation += item.rotSpeed;
 
-        // Очки
-        ctx.textAlign = 'left';
-        ctx.fillStyle = '#fbbf24';
-        ctx.fillText(`⭐ ${g.score}`, pad * 2, hudY);
-
-        // Уровень
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#60a5fa';
-        ctx.fillText(`🌊 Ур.${g.level}`, W / 2, hudY);
-
-        // Жизни
-        ctx.textAlign = 'right';
-        ctx.fillStyle = '#f87171';
-        let hearts = '';
-        for (let i = 0; i < 3; i++) hearts += i < g.lives ? '❤️' : '🖤';
-        ctx.fillText(hearts, W - pad * 2, hudY);
-
-        // Индикатор ветра
-        const windArrow = g.windDir > 0 ? '→' : '←';
-        const windStrength = '~'.repeat(Math.min(5, Math.round(g.wind)));
-        ctx.font = `${Math.round(fontSize * 0.7)}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(255,255,255,0.6)';
-        ctx.fillText(`💨 ${windArrow} ${windStrength}`, W / 2, pad + fontSize * 2.5 + 10);
-      };
-
-      // Рисуем землю/границу
-      const drawGround = () => {
-        ctx.fillStyle = 'rgba(239,68,68,0.15)';
-        ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
-        ctx.setLineDash([10, 10]);
-        ctx.strokeStyle = 'rgba(239,68,68,0.3)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, GROUND_Y);
-        ctx.lineTo(W, GROUND_Y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      };
-
-      // Обновление физики
-      const update = () => {
-        g.frame++;
-
-        // Ветер меняет направление и силу
-        g.windTimer++;
-        if (g.windTimer > 200 + Math.random() * 200) {
-          g.windTimer = 0;
-          g.windDir = Math.random() > 0.5 ? 1 : -1;
-          g.wind = 1.5 + Math.random() * 2 + g.level * 0.5;
-        }
-        // Плавное изменение ветра
-        g.wind += (Math.sin(g.frame * 0.01) * 0.1);
-
-        // Спавн предметов
-        g.spawnTimer++;
-        if (g.spawnTimer >= g.spawnRate) {
-          g.spawnTimer = 0;
-          spawnItem();
-        }
-
-        // Спавн частиц
-        if (g.frame % 3 === 0) spawnWindParticle();
-
-        // Обновление частиц
-        g.particles = g.particles.filter(p => {
-          p.x += p.vx;
-          p.y += p.vy;
-          p.life--;
-          return p.life > 0;
-        });
-
-        // Обновление предметов
-        const cx = touchXRef.current * W;
-        g.items = g.items.filter(item => {
-          item.x += item.vx + g.windDir * g.wind * 0.3;
-          item.y += item.vy;
-          item.rotation += item.rotSpeed;
-
-          // Проверка ловли
-          if (item.y >= CATCH_Y - 20 && item.y <= CATCH_Y + CATCHER_H) {
-            if (Math.abs(item.x - cx) < CATCHER_W * 0.55) {
-              // Поймал!
-              g.score += item.points;
-              g.catchEffects.push({ x: item.x, y: item.y, points: item.points, life: 30 });
+            // Ловля
+            if (item.y >= CATCH_Y - 15 && item.y <= CATCH_Y + CATCHER_H + 5) {
+              if (Math.abs(item.x - cx) < CATCHER_W * 0.55) {
+                g.score += item.points;
+                scoreRef.current = g.score;
+                g.catchEffects.push({ x: item.x, y: item.y, points: item.points, life: 30 });
+                return false;
+              }
+            }
+            // Упал
+            if (item.y > GROUND_Y) {
+              g.lives--;
+              g.missEffects.push({ x: item.x, y: GROUND_Y, life: 25 });
               return false;
             }
+            // Улетел
+            if (item.x < -60 || item.x > W + 60) return false;
+            return true;
+          });
+
+          // Эффекты
+          g.catchEffects = g.catchEffects.filter(e => { e.life--; return e.life > 0; });
+          g.missEffects = g.missEffects.filter(e => { e.life--; return e.life > 0; });
+
+          // Уровень
+          const nl = Math.floor(g.score / 80) + 1;
+          if (nl > g.level) { g.level = nl; g.spawnRate = Math.max(28, 75 - g.level * 6); }
+
+          // Game over
+          if (g.lives <= 0) {
+            g.running = false;
+            const s = g.score;
+            const hs = parseInt(localStorage.getItem('likebird-game-highscore') || '0');
+            const isNew = s > hs;
+            if (isNew) localStorage.setItem('likebird-game-highscore', String(s));
+            // Обновляем React state ОДИН раз при конце
+            setFinalScore(s);
+            setHighScore(isNew ? s : hs);
+            setNewRecord(isNew);
+            setGameState('over');
           }
+        };
 
-          // Упал на землю
-          if (item.y > GROUND_Y) {
-            g.lives--;
-            g.missEffects.push({ x: item.x, y: GROUND_Y, life: 30 });
-            return false;
-          }
-
-          // Улетел за экран
-          if (item.x < -50 || item.x > W + 50) return false;
-
-          return true;
-        });
-
-        // Обновление эффектов
-        g.catchEffects = g.catchEffects.filter(e => { e.life--; return e.life > 0; });
-        g.missEffects = g.missEffects.filter(e => { e.life--; return e.life > 0; });
-
-        // Повышение уровня
-        const newLevel = Math.floor(g.score / 100) + 1;
-        if (newLevel > g.level) {
-          g.level = newLevel;
-          g.spawnRate = Math.max(25, 80 - g.level * 7);
-        }
-
-        // Конец игры
-        if (g.lives <= 0) {
-          g.running = false;
-          const finalScore = g.score;
-          const hs = parseInt(localStorage.getItem('likebird-game-highscore') || '0');
-          if (finalScore > hs) {
-            localStorage.setItem('likebird-game-highscore', String(finalScore));
-            setHighScore(finalScore);
-          }
-          setScore(finalScore);
-          setGameState('over');
-        }
-      };
-
-      // Главный цикл
-      let animId;
-      const loop = () => {
-        if (!g.running) return;
-        update();
-
-        ctx.clearRect(0, 0, W, H);
-        drawBackground();
-        drawTable();
-        drawGround();
-        drawWind();
-        drawItems();
-        drawCatcher();
-        drawEffects();
-        drawHUD();
-
-        setScore(g.score);
+        // ═══ Render loop ═══
+        const loop = () => {
+          if (!g.running) return;
+          update();
+          ctx.clearRect(0, 0, W, H);
+          drawBackground();
+          drawTable();
+          drawGround();
+          drawWind();
+          g.items.forEach(item => drawItem(ctx, item));
+          drawCatcher();
+          drawEffects();
+          drawHUD();
+          animId = requestAnimationFrame(loop);
+        };
         animId = requestAnimationFrame(loop);
-      };
+      }, 50); // 50ms задержка для DOM paint
 
-      animId = requestAnimationFrame(loop);
-      return () => { g.running = false; cancelAnimationFrame(animId); };
+      return () => {
+        cancelled = true;
+        clearTimeout(initTimeout);
+        if (gameRef.current) gameRef.current.running = false;
+        cancelAnimationFrame(animId);
+      };
     }, [gameState]);
 
-    // Touch/mouse handling
+    // Touch/mouse
     const handleMove = useCallback((clientX) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
-      touchXRef.current = Math.max(0.1, Math.min(0.9, (clientX - rect.left) / rect.width));
+      touchXRef.current = Math.max(0.08, Math.min(0.92, (clientX - rect.left) / rect.width));
     }, []);
 
     return (
-      <div className="min-h-screen bg-gray-900 flex flex-col" style={{touchAction:'none', userSelect:'none'}}>
-        {/* Header */}
+      <div className="fixed inset-0 bg-gray-900 flex flex-col" style={{touchAction:'none', userSelect:'none', WebkitUserSelect:'none'}}>
+        {/* Header — всегда видим */}
         <div className="bg-gradient-to-r from-cyan-600 to-sky-700 text-white p-3 flex items-center gap-3 shrink-0" style={{paddingTop: "max(0.75rem, env(safe-area-inset-top))"}}>
-          <button onClick={() => { if (gameRef.current) gameRef.current.running = false; setGameState('menu'); setCurrentView('menu'); }}><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => { if (gameRef.current) gameRef.current.running = false; setGameState('menu'); setCurrentView('menu'); }}>
+            <ArrowLeft className="w-6 h-6" />
+          </button>
           <h2 className="font-bold flex-1">🌊 Ветер на набережной</h2>
-          <span className="text-amber-300 font-bold">⭐ {score}</span>
+          {gameState === 'playing' && <span className="text-amber-300 font-bold text-sm">⭐ {scoreRef.current}</span>}
         </div>
 
+        {/* Canvas — ВСЕГДА смонтирован, скрыт когда не playing */}
+        <canvas
+          ref={canvasRef}
+          className="flex-1 w-full"
+          style={{touchAction:'none', display: gameState === 'playing' ? 'block' : 'none'}}
+          onTouchMove={(e) => { e.preventDefault(); if (e.touches[0]) handleMove(e.touches[0].clientX); }}
+          onTouchStart={(e) => { e.preventDefault(); if (e.touches[0]) handleMove(e.touches[0].clientX); }}
+          onMouseMove={(e) => handleMove(e.clientX)}
+        />
+
         {gameState === 'menu' && (
-          <div className="flex-1 flex items-center justify-center p-6">
-            <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center">
-              <div className="text-6xl mb-4">🌊🐦💨</div>
+          <div className="flex-1 flex items-center justify-center p-6 overflow-y-auto">
+            <div className="bg-white rounded-3xl p-7 max-w-sm w-full shadow-2xl text-center">
+              <div className="text-5xl mb-3">🌊🐦💨</div>
               <h2 className="text-2xl font-black text-gray-800 mb-2">Ветер на набережной</h2>
-              <p className="text-gray-500 text-sm mb-6">Ветер сдувает товар со стола! Двигай палец по экрану и лови всё, что падает. Не дай разбиться!</p>
-              <div className="bg-amber-50 rounded-xl p-4 mb-6 text-left space-y-2 text-sm">
-                <p>🐦 <b>Птичка</b> — 10 очков</p>
+              <p className="text-gray-500 text-sm mb-5">Ветер сдувает товар со стола! Двигай палец по экрану и лови фигурки, не дай им разбиться!</p>
+              <div className="bg-amber-50 rounded-xl p-4 mb-5 text-left space-y-1.5 text-sm">
+                <p>🐦 <b>Птички</b> — 10 очков</p>
                 <p>🧌 <b>Йети</b> — 20 очков</p>
-                <p>🦈 <b>Акула</b> — 15 очков</p>
-                <p>🦎 <b>Ящерица</b> — 15 очков</p>
-                <p>❤️ <b>3 жизни</b> — каждый промах = -1</p>
+                <p>🦈 <b>Акула</b> / 🦎 <b>Ящерка</b> — 15 очков</p>
+                <p>🐙🧸 <b>Другие</b> — 12 очков</p>
+                <p className="text-red-500">❤️ <b>3 жизни</b> — промах = потеря жизни</p>
               </div>
-              {highScore > 0 && <p className="text-amber-600 font-bold mb-4">🏆 Рекорд: {highScore}</p>}
-              <button onClick={startGame} className="w-full py-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white rounded-2xl font-black text-lg shadow-lg hover:shadow-xl active:scale-95 transition-transform">
+              {highScore > 0 && <p className="text-amber-600 font-bold mb-3">🏆 Рекорд: {highScore}</p>}
+              <button onClick={startGame} className="w-full py-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white rounded-2xl font-black text-lg shadow-lg active:scale-95 transition-transform">
                 ▶ Начать игру
               </button>
             </div>
           </div>
         )}
 
-        {gameState === 'playing' && (
-          <canvas
-            ref={canvasRef}
-            className="flex-1 w-full"
-            style={{touchAction:'none'}}
-            onTouchMove={(e) => { e.preventDefault(); handleMove(e.touches[0].clientX); }}
-            onTouchStart={(e) => { e.preventDefault(); handleMove(e.touches[0].clientX); }}
-            onMouseMove={(e) => handleMove(e.clientX)}
-          />
-        )}
-
         {gameState === 'over' && (
-          <div className="flex-1 flex items-center justify-center p-6">
-            <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center">
-              <div className="text-6xl mb-4">💨😅</div>
-              <h2 className="text-2xl font-black text-gray-800 mb-2">Ветер победил!</h2>
-              <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white rounded-2xl p-5 my-4">
-                <p className="text-sm opacity-80">Ваш результат</p>
-                <p className="text-4xl font-black">{score}</p>
+          <div className="flex-1 flex items-center justify-center p-6 overflow-y-auto">
+            <div className="bg-white rounded-3xl p-7 max-w-sm w-full shadow-2xl text-center">
+              <div className="text-5xl mb-3">{newRecord ? '🎉🏆🎉' : '💨😅'}</div>
+              <h2 className="text-2xl font-black text-gray-800 mb-2">{newRecord ? 'Новый рекорд!' : 'Ветер победил!'}</h2>
+              <div className={`rounded-2xl p-5 my-4 text-white ${newRecord ? 'bg-gradient-to-r from-yellow-400 to-amber-500' : 'bg-gradient-to-r from-amber-400 to-orange-500'}`}>
+                <p className="text-sm opacity-80">Результат</p>
+                <p className="text-4xl font-black">{finalScore}</p>
               </div>
-              {score >= highScore && score > 0 && (
-                <p className="text-amber-600 font-bold text-lg mb-2">🎉 Новый рекорд!</p>
-              )}
-              {highScore > 0 && <p className="text-gray-400 text-sm mb-4">Лучший результат: {highScore}</p>}
-              <div className="space-y-3">
+              {highScore > 0 && !newRecord && <p className="text-gray-400 text-sm mb-3">Лучший: {highScore}</p>}
+              <div className="space-y-2.5">
                 <button onClick={startGame} className="w-full py-4 bg-gradient-to-r from-cyan-500 to-sky-600 text-white rounded-2xl font-black text-lg shadow-lg active:scale-95 transition-transform">
                   🔄 Ещё раз
                 </button>
-                <button onClick={() => setCurrentView('menu')} className="w-full py-3 bg-gray-100 text-gray-600 rounded-2xl font-bold">
+                <button onClick={() => { setGameState('menu'); setCurrentView('menu'); }} className="w-full py-3 bg-gray-100 text-gray-600 rounded-2xl font-bold">
                   На главную
                 </button>
               </div>
