@@ -42,6 +42,7 @@ const SyncManager = {
     'likebird-achievements-granted', 'likebird-shifts', 'likebird-profiles',
     'likebird-users', 'likebird-notifications', 'likebird-product-photos',
     'likebird-system-notifications',
+    'likebird-custom-aliases', 'likebird-notif-settings',
   ],
 
   // Экспорт всех данных
@@ -250,8 +251,22 @@ const parseWorkTime = (text) => {
   return { openTime: open, closeTime: close, workHours: hours };
 };
 
+// Загружаем кастомные алиасы при инициализации
+let CUSTOM_ALIASES = {};
+try {
+  const saved = localStorage.getItem('likebird-custom-aliases');
+  if (saved) CUSTOM_ALIASES = JSON.parse(saved);
+} catch {}
+
 const findProductByPrice = (text, price) => {
   const l = text.toLowerCase().trim();
+  // Сначала проверяем кастомные алиасы
+  for (const [alias, productName] of Object.entries(CUSTOM_ALIASES)) {
+    if (l.includes(alias.toLowerCase())) {
+      const found = DYNAMIC_ALL_PRODUCTS.find(p => p.name === productName);
+      if (found) return found;
+    }
+  }
   for (const [keyword, rule] of Object.entries(AMBIGUOUS_PRODUCTS)) {
     if (l.includes(keyword)) {
       if (price >= rule.above) return DYNAMIC_ALL_PRODUCTS.find(p => p.name === rule.nameAbove);
@@ -693,7 +708,7 @@ export default function LikeBirdApp() {
   // НОВОЕ: Расширенные состояния для админ-панели
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
-  const [adminTab, setAdminTab] = useState('analytics');
+  const [adminTab, setAdminTab] = useState('today');
   const [teamTab, setTeamTab] = useState('online');
   const [employees, setEmployees] = useState([
     { id: 1, name: 'Лена', role: 'seller', salaryMultiplier: 1.0, active: true },
@@ -750,11 +765,20 @@ export default function LikeBirdApp() {
   
   // KPI и цели сотрудников
   const [employeeKPI, setEmployeeKPI] = useState({});
+  // Пользовательские алиасы для распознавания товаров
+  const [customAliases, setCustomAliases] = useState({});
   // Онлайн-присутствие сотрудников { login: { displayName, lastSeen, online } }
   const [presenceData, setPresenceData] = useState({});
 
   // Системные уведомления для пользователей (Firebase-synced)
   const [userNotifications, setUserNotifications] = useState([]);
+  
+  // Настройки умных уведомлений
+  const [notifSettings, setNotifSettings] = useState({
+    shiftReminder: true,
+    lowStockAlert: true,
+    stockThreshold: 3,
+  });
 
   // FIX: Коды приглашения — перенесено из AdminView в глобальное состояние для Firebase-синхронизации
   const [inviteCodes, setInviteCodes] = useState([]);
@@ -851,7 +875,25 @@ export default function LikeBirdApp() {
     loadJson('likebird-partners', setPartnerStock, {});
     loadJson('likebird-totalbirds', setTotalBirds, 0);
     loadJson('likebird-schedule', setScheduleData, {});
-    loadJson('likebird-events', setEventsCalendar, {});
+    // Загрузка событий с миграцией: старый формат { date: eventObj } → новый { date: [eventObj, ...] }
+    try {
+      const savedEvents = localStorage.getItem('likebird-events');
+      if (savedEvents) {
+        const parsed = JSON.parse(savedEvents);
+        let migrated = false;
+        const result = {};
+        Object.entries(parsed).forEach(([key, val]) => {
+          if (Array.isArray(val)) {
+            result[key] = val;
+          } else if (val && typeof val === 'object') {
+            result[key] = [val];
+            migrated = true;
+          }
+        });
+        setEventsCalendar(result);
+        if (migrated) localStorage.setItem('likebird-events', JSON.stringify(result));
+      }
+    } catch { setEventsCalendar({}); }
     // Загружаем мануалы (если есть кастомные)
     try {
       const savedManuals = localStorage.getItem('likebird-manuals');
@@ -902,7 +944,13 @@ export default function LikeBirdApp() {
     loadJson('likebird-writeoffs', setWriteOffs, []);
     loadJson('likebird-autoorder', setAutoOrderList, []);
     loadJson('likebird-kpi', setEmployeeKPI, {});
+    // Загрузка пользовательских алиасов
+    try {
+      const savedAliases = localStorage.getItem('likebird-custom-aliases');
+      if (savedAliases) setCustomAliases(JSON.parse(savedAliases));
+    } catch {}
     loadJson('likebird-invite-codes', setInviteCodes, []);
+    loadJson('likebird-notif-settings', setNotifSettings, { shiftReminder: true, lowStockAlert: true, stockThreshold: 3 });
     loadJson('likebird-notifications', setUserNotifications, []);
     loadJson('likebird-custom-achievements', setCustomAchievements, []);
     loadJson('likebird-shifts', setShiftsData, {});
@@ -952,7 +1000,18 @@ export default function LikeBirdApp() {
       guardedSubscribe('likebird-partners', (val) => { setPartnerStock(val); localStorage.setItem('likebird-partners', JSON.stringify(val)); }),
       guardedSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); }),
       guardedSubscribe('likebird-schedule', (val) => { setScheduleData(val); localStorage.setItem('likebird-schedule', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-events', (val) => { setEventsCalendar(val); localStorage.setItem('likebird-events', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-events', (val) => {
+        // Миграция: старый формат { date: eventObj } → новый { date: [eventObj, ...] }
+        if (val && typeof val === 'object') {
+          const migrated = {};
+          Object.entries(val).forEach(([key, v]) => {
+            if (Array.isArray(v)) migrated[key] = v;
+            else if (v && typeof v === 'object') migrated[key] = [v];
+          });
+          setEventsCalendar(migrated);
+          localStorage.setItem('likebird-events', JSON.stringify(migrated));
+        }
+      }),
       guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); localStorage.setItem('likebird-manuals', JSON.stringify(val)); } }),
       guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); }),
       guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); localStorage.setItem('likebird-admin-password', JSON.stringify(val)); }),
@@ -1179,6 +1238,33 @@ export default function LikeBirdApp() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reports, customAchievements]);
 
+  // ===== УМНЫЕ УВЕДОМЛЕНИЯ: Проверка смены и остатков =====
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const checkShiftReminder = () => {
+      try {
+        const settings = JSON.parse(localStorage.getItem('likebird-notif-settings') || '{}');
+        if (!settings.shiftReminder) return;
+        const now = new Date();
+        if (now.getHours() < 10) return; // До 10:00 не проверяем
+        const login = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
+        if (!login) return;
+        const todayStr = formatDate(now);
+        const shiftKey = `${login}_${todayStr}`;
+        const shifts = JSON.parse(localStorage.getItem('likebird-shifts') || '{}');
+        if (!shifts[shiftKey] || !shifts[shiftKey].status) {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            try { new Notification('LikeBird 🐦', { body: '⏰ Смена ещё не открыта! Не забудьте начать работу.', icon: '/favicon.ico' }); } catch {}
+          }
+        }
+      } catch {}
+    };
+    // Проверяем сразу и каждый час
+    const timer = setTimeout(checkShiftReminder, 5000);
+    const interval = setInterval(checkShiftReminder, 60 * 60 * 1000);
+    return () => { clearTimeout(timer); clearInterval(interval); };
+  }, [isAuthenticated]);
+
   // ===== Реф для блокировки Firebase-обновлений пока мы сами пишем =====
   const fbWriting = useRef(false);
   const fbWriteKeys = useRef(new Set());
@@ -1196,7 +1282,24 @@ export default function LikeBirdApp() {
     }, 500);
   };
   const updateReports = (r) => { setReports(r); save('likebird-reports', r); };
-  const updateStock = (s) => { setStock(s); save('likebird-stock', s); };
+  const updateStock = (s) => { 
+    setStock(s); 
+    save('likebird-stock', s);
+    // Проверка низких остатков
+    try {
+      const settings = JSON.parse(localStorage.getItem('likebird-notif-settings') || '{}');
+      if (settings.lowStockAlert) {
+        const threshold = settings.stockThreshold || 3;
+        Object.entries(s).forEach(([name, data]) => {
+          if (data.count > 0 && data.count <= threshold && data.count <= (data.minStock || threshold)) {
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              try { new Notification('LikeBird — Низкий остаток', { body: `⚠️ ${name}: осталось ${data.count} шт`, icon: '/favicon.ico' }); } catch {}
+            }
+          }
+        });
+      }
+    } catch {}
+  };
   const updateSalaryDecision = (id, dec) => { const u = {...salaryDecisions, [id]: dec}; setSalaryDecisions(u); save('likebird-salary-decisions', u); };
   const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings);
   // FIX #56: showNotification через DOM — НЕ вызывает parent re-render, 
@@ -1998,12 +2101,13 @@ export default function LikeBirdApp() {
     
     // Подсчёт предстоящих событий
     const today = new Date();
-    const upcomingEventsCount = Object.entries(eventsCalendar).filter(([date]) => {
+    const upcomingEventsCount = Object.entries(eventsCalendar).reduce((count, [date, evArr]) => {
       const [d, m, y] = date.split('.');
       const eventDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
       const daysUntil = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
-      return daysUntil >= 0 && daysUntil <= 7;
-    }).length;
+      if (daysUntil >= 0 && daysUntil <= 7) return count + (Array.isArray(evArr) ? evArr.length : 1);
+      return count;
+    }, 0);
 
     // Мои непрочитанные уведомления
     const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
@@ -2641,7 +2745,33 @@ export default function LikeBirdApp() {
         <div className="bg-white rounded-xl p-4 shadow">
           <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-green-500" />Экспорт данных</h3>
           <p className="text-sm text-gray-500 mb-3">Полный бэкап всех данных приложения</p>
-          <button onClick={exportData} className="w-full py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600">📥 Скачать полный бэкап</button>
+          <button onClick={exportData} className="w-full py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 mb-2">📥 Скачать полный бэкап</button>
+          <button onClick={() => {
+            const BOM = '\uFEFF';
+            // Reports CSV
+            const reportHeaders = 'Дата;Сотрудник;Товар;Категория;Количество;Цена;Сумма;Чаевые;ЗП;Тип оплаты';
+            const reportRows = reports.map(r => [
+              r.date?.split(',')[0] || '', r.employee || '', getProductName(r.product), r.category || '',
+              r.quantity || 1, r.salePrice || 0, r.total || 0, r.tips || 0,
+              getEffectiveSalary(r), r.paymentType === 'cashless' ? 'Безнал' : 'Наличные'
+            ].join(';'));
+            const reportsCSV = BOM + reportHeaders + '\n' + reportRows.join('\n');
+            const blob1 = new Blob([reportsCSV], { type: 'text/csv;charset=utf-8' });
+            const url1 = URL.createObjectURL(blob1);
+            const a1 = document.createElement('a'); a1.href = url1; a1.download = `reports-${formatDate(new Date())}.csv`; a1.click();
+            URL.revokeObjectURL(url1);
+            // Stock CSV
+            const stockHeaders = 'Товар;Категория;Количество;Мин. остаток;Цена';
+            const stockRows = Object.entries(stock).map(([name, data]) => [
+              name, data.category || '', data.count || 0, data.minStock || 3, data.price || 0
+            ].join(';'));
+            const stockCSV = BOM + stockHeaders + '\n' + stockRows.join('\n');
+            const blob2 = new Blob([stockCSV], { type: 'text/csv;charset=utf-8' });
+            const url2 = URL.createObjectURL(blob2);
+            const a2 = document.createElement('a'); a2.href = url2; a2.download = `stock-${formatDate(new Date())}.csv`; a2.click();
+            URL.revokeObjectURL(url2);
+            showNotification('📊 CSV файлы скачаны');
+          }} className="w-full py-3 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600">📊 Экспорт CSV (отчёты + остатки)</button>
         </div>
 
         <div className="bg-white rounded-xl p-4 shadow border-2 border-blue-100">
@@ -2653,6 +2783,45 @@ export default function LikeBirdApp() {
             <input type="file" accept=".json" onChange={(e) => { if (e.target.files[0]) importData(e.target.files[0]); }} className="hidden" />
           </label>
           <p className="text-xs text-gray-400 mt-2 text-center">После загрузки страница перезагрузится автоматически</p>
+        </div>
+
+        {/* Уведомления */}
+        <div className="bg-white rounded-xl p-4 shadow">
+          <h3 className="font-bold mb-3 flex items-center gap-2"><Bell className="w-5 h-5 text-purple-500" />🔔 Уведомления</h3>
+          {typeof Notification !== 'undefined' && Notification.permission !== 'granted' && (
+            <button onClick={() => Notification.requestPermission().then(p => { if (p === 'granted') showNotification('Уведомления включены!'); })} className="w-full py-2 bg-purple-500 text-white rounded-lg font-semibold hover:bg-purple-600 mb-3">
+              🔔 Разрешить push-уведомления
+            </button>
+          )}
+          <div className="space-y-3">
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-sm font-medium">⏰ Напоминание об открытии смены (после 10:00)</span>
+              <input type="checkbox" checked={notifSettings.shiftReminder} onChange={(e) => {
+                const updated = { ...notifSettings, shiftReminder: e.target.checked };
+                setNotifSettings(updated);
+                save('likebird-notif-settings', updated);
+              }} className="w-5 h-5 accent-purple-500" />
+            </label>
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-sm font-medium">⚠️ Уведомление о низком остатке товара</span>
+              <input type="checkbox" checked={notifSettings.lowStockAlert} onChange={(e) => {
+                const updated = { ...notifSettings, lowStockAlert: e.target.checked };
+                setNotifSettings(updated);
+                save('likebird-notif-settings', updated);
+              }} className="w-5 h-5 accent-purple-500" />
+            </label>
+            {notifSettings.lowStockAlert && (
+              <div className="flex items-center gap-2 pl-2">
+                <span className="text-xs text-gray-500">Порог остатка:</span>
+                <input type="number" value={notifSettings.stockThreshold} onChange={(e) => {
+                  const updated = { ...notifSettings, stockThreshold: parseInt(e.target.value) || 3 };
+                  setNotifSettings(updated);
+                  save('likebird-notif-settings', updated);
+                }} className="w-20 p-1.5 border rounded text-sm text-center" min="1" max="50" />
+                <span className="text-xs text-gray-500">шт</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Аккаунт */}
@@ -2679,8 +2848,22 @@ export default function LikeBirdApp() {
     const [editName, setEditName] = useState('');
     const [suggestions, setSuggestions] = useState([]);
     const [localName, setLocalName] = useState(() => employeeName || ''); // Локальное состояние для имени
+    const [teachingIdx, setTeachingIdx] = useState(null); // Индекс нераспознанной позиции для обучения
+    const [teachAlias, setTeachAlias] = useState('');
+    const [teachProduct, setTeachProduct] = useState('');
+    const [teachSuggestions, setTeachSuggestions] = useState([]);
     const fmt = (base, withTips) => withTips > base ? `${base.toLocaleString()}(${withTips.toLocaleString()})` : base.toLocaleString();
     const handleSearch = (value) => { setEditName(value); if (value.length >= 2) setSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
+    const handleTeachSearch = (value) => { setTeachProduct(value); if (value.length >= 2) setTeachSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setTeachSuggestions([]); };
+    const saveTeachAlias = (alias, productName) => {
+      if (!alias.trim() || !productName) { showNotification('Заполните алиас и товар', 'error'); return; }
+      const updated = { ...customAliases, [alias.toLowerCase().trim()]: productName };
+      setCustomAliases(updated);
+      localStorage.setItem('likebird-custom-aliases', JSON.stringify(updated));
+      CUSTOM_ALIASES = updated; // Обновляем глобальную переменную для parseTextReport
+      showNotification(`Алиас «${alias}» → ${productName} сохранён`);
+      setTeachingIdx(null); setTeachAlias(''); setTeachProduct(''); setTeachSuggestions([]);
+    };
     const fixUnrecognizedInImport = (idx, newName) => {
       const sale = unrecognizedSales[idx];
       const product = findProductByPrice(newName, sale.price);
@@ -2821,7 +3004,7 @@ export default function LikeBirdApp() {
             {(Object.keys(parsedInventory.start).length > 0 || Object.keys(parsedInventory.end).length > 0) && (<div className="bg-indigo-50 rounded-xl p-4 border border-indigo-200"><h4 className="font-bold text-indigo-700 mb-3">📋 Пересчёт товара</h4><div className="grid grid-cols-2 gap-4">{Object.keys(parsedInventory.start).length > 0 && (<div><p className="text-xs font-semibold text-indigo-600 mb-2">🌅 Начало смены</p>{Object.entries(parsedInventory.start).map(([name, count]) => { const product = DYNAMIC_ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between text-xs bg-white rounded px-2 py-1 mb-1"><span>{product?.emoji} {name}</span><span className="font-bold">{count}</span></div>); })}</div>)}{Object.keys(parsedInventory.end).length > 0 && (<div><p className="text-xs font-semibold text-indigo-600 mb-2">🌙 Конец смены</p>{Object.entries(parsedInventory.end).map(([name, count]) => { const product = DYNAMIC_ALL_PRODUCTS.find(p => p.name === name); return (<div key={name} className="flex justify-between text-xs bg-white rounded px-2 py-1 mb-1"><span>{product?.emoji} {name}</span><span className="font-bold">{count}</span></div>); })}</div>)}</div></div>)}
             {inventoryDiscrepancies.length > 0 && (<div className="bg-orange-50 rounded-xl p-4 border-2 border-orange-400"><h4 className="font-bold text-orange-700 mb-3">⚠️ Расхождения ({inventoryDiscrepancies.length})</h4>{inventoryDiscrepancies.map((d, i) => (<div key={i} className="bg-white rounded-lg p-3 border border-orange-300 mb-2"><div className="flex justify-between items-center mb-2"><span className="font-semibold">{d.emoji} {d.name}</span><span className={`font-bold px-2 py-1 rounded ${d.difference > 0 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{d.difference > 0 ? '+' : ''}{d.difference}</span></div><div className="grid grid-cols-3 gap-2 text-xs"><div className="text-center"><p className="text-gray-500">Было</p><p className="font-bold">{d.startCount}</p></div><div className="text-center"><p className="text-gray-500">Стало</p><p className="font-bold">{d.endCount}</p></div><div className="text-center"><p className="text-gray-500">По остаткам</p><p className="font-bold text-indigo-600">{d.expectedSold}</p></div></div><div className="mt-2 pt-2 border-t flex justify-between text-sm"><span>Записано:</span><span className="font-bold text-cyan-600">{d.actualSold}</span></div></div>))}</div>)}
             {(Object.keys(parsedInventory.start).length > 0 || Object.keys(parsedInventory.end).length > 0) && inventoryDiscrepancies.length === 0 && (<div className="bg-green-50 rounded-xl p-4 border border-green-300 text-center"><p className="text-green-700 font-bold">✅ Сверка сходится!</p></div>)}
-            {unrecognizedSales.length > 0 && (<div className="bg-red-50 border-2 border-red-300 rounded-xl p-4"><h4 className="font-bold text-red-700 mb-3"><AlertTriangle className="w-4 h-4 inline" /> Нераспознанные ({unrecognizedSales.length})</h4>{unrecognizedSales.map((s, i) => (<div key={i} className="p-3 bg-white rounded-lg border border-red-200 mb-2"><div className="flex justify-between items-center"><div><span className="text-red-700 font-medium">❓ {s.extractedName}</span><p className="text-xs text-gray-400">{s.originalText}</p></div><div className="flex items-center gap-2"><span className="font-bold">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><button onClick={() => setUnrecognizedSales(p => p.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600"><X className="w-5 h-5" /></button></div></div>{editingIdx === i ? (<div className="mt-3 space-y-2"><div className="flex gap-2"><input type="text" value={editName} onChange={(e) => handleSearch(e.target.value)} placeholder="Название товара" className="flex-1 px-3 py-2 border-2 border-blue-300 rounded-lg text-sm" autoFocus /><button onClick={() => fixUnrecognizedInImport(i, editName)} className="px-4 py-2 bg-green-500 text-white rounded-lg font-bold">✓</button><button onClick={() => { setEditingIdx(null); setEditName(''); setSuggestions([]); }} className="px-4 py-2 bg-gray-400 text-white rounded-lg">✕</button></div>{suggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{suggestions.map((p, j) => (<button key={j} onClick={() => fixUnrecognizedInImport(i, p.name)} className="w-full text-left px-3 py-2 hover:bg-amber-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-amber-600 font-semibold">{p.price}₽</span></button>))}</div>}</div>) : (<button onClick={() => { setEditingIdx(i); setEditName(''); setSuggestions([]); }} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить</button>)}</div>))}</div>)}
+            {unrecognizedSales.length > 0 && (<div className="bg-red-50 border-2 border-red-300 rounded-xl p-4"><h4 className="font-bold text-red-700 mb-3"><AlertTriangle className="w-4 h-4 inline" /> Нераспознанные ({unrecognizedSales.length})</h4>{unrecognizedSales.map((s, i) => (<div key={i} className="p-3 bg-white rounded-lg border border-red-200 mb-2"><div className="flex justify-between items-center"><div><span className="text-red-700 font-medium">❓ {s.extractedName}</span><p className="text-xs text-gray-400">{s.originalText}</p></div><div className="flex items-center gap-2"><span className="font-bold">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><button onClick={() => setUnrecognizedSales(p => p.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600"><X className="w-5 h-5" /></button></div></div>{editingIdx === i ? (<div className="mt-3 space-y-2"><div className="flex gap-2"><input type="text" value={editName} onChange={(e) => handleSearch(e.target.value)} placeholder="Название товара" className="flex-1 px-3 py-2 border-2 border-blue-300 rounded-lg text-sm" autoFocus /><button onClick={() => fixUnrecognizedInImport(i, editName)} className="px-4 py-2 bg-green-500 text-white rounded-lg font-bold">✓</button><button onClick={() => { setEditingIdx(null); setEditName(''); setSuggestions([]); }} className="px-4 py-2 bg-gray-400 text-white rounded-lg">✕</button></div>{suggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{suggestions.map((p, j) => (<button key={j} onClick={() => fixUnrecognizedInImport(i, p.name)} className="w-full text-left px-3 py-2 hover:bg-amber-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-amber-600 font-semibold">{p.price}₽</span></button>))}</div>}</div>) : (<button onClick={() => { setEditingIdx(i); setEditName(''); setSuggestions([]); }} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить</button><button onClick={() => { setTeachingIdx(i); setTeachAlias(s.extractedName || ''); setTeachProduct(''); setTeachSuggestions([]); setEditingIdx(null); }} className="flex items-center gap-1 text-purple-600 bg-purple-50 hover:bg-purple-100 border border-purple-300 py-2 px-3 rounded-lg text-sm font-semibold mt-2 ml-2">➕ Обучить</button></div>)}{teachingIdx === i && (<div className="mt-3 space-y-2 bg-purple-50 border border-purple-200 rounded-lg p-3"><p className="text-xs text-purple-700 font-semibold mb-1">Привязать алиас к товару:</p><input type="text" value={teachAlias} onChange={(e) => setTeachAlias(e.target.value)} placeholder="Алиас (как пишут в отчёте)" className="w-full px-3 py-2 border-2 border-purple-300 rounded-lg text-sm mb-2" /><div className="flex gap-2"><input type="text" value={teachProduct} onChange={(e) => handleTeachSearch(e.target.value)} placeholder="Выберите товар..." className="flex-1 px-3 py-2 border-2 border-purple-300 rounded-lg text-sm" /><button onClick={() => saveTeachAlias(teachAlias, teachProduct)} className="px-4 py-2 bg-purple-500 text-white rounded-lg font-bold">✓</button><button onClick={() => setTeachingIdx(null)} className="px-3 py-2 bg-gray-200 rounded-lg">✕</button></div>{teachSuggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{teachSuggestions.map((p, j) => (<button key={j} onClick={() => { setTeachProduct(p.name); setTeachSuggestions([]); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-purple-600 font-semibold">{p.price}₽</span></button>))}</div>}</div>)}</div>))}</div>)}
             {parsedSales.length > 0 && (<div className="bg-white rounded-xl p-4 shadow"><h4 className="font-bold text-green-700 mb-2"><Check className="w-4 h-4 inline" /> Распознанные ({parsedSales.length})</h4><div className="space-y-1 max-h-64 overflow-y-auto">{parsedSales.map((s, i) => (<div key={i} className="p-2 rounded-lg flex justify-between items-center text-sm bg-green-50 border border-green-200"><span>{s.product.emoji} {s.product.name}</span><div className="flex items-center gap-2"><span className="font-bold text-green-600">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><span className="text-xs text-amber-600">ЗП:{s.salary}₽</span>{s.tips > 0 && <span className="text-xs text-orange-500">(+{s.tips})</span>}<button onClick={() => { setParsedSales(p => p.filter((_, j) => j !== i)); recalculateTotals(parsedSales.filter((_, j) => j !== i), unrecognizedSales); }} className="text-gray-400 hover:text-red-500"><X className="w-4 h-4" /></button></div></div>))}</div></div>)}
             <button onClick={() => {
               if (!localName.trim()) {
@@ -3898,24 +4081,49 @@ export default function LikeBirdApp() {
     const [searchQuery, setSearchQuery] = useState('');
     const [filterEmployee, setFilterEmployee] = useState('');
     const [filterLocation, setFilterLocation] = useState('');
+    const [filterDateFrom, setFilterDateFrom] = useState('');
+    const [filterDateTo, setFilterDateTo] = useState('');
     const [showFilters, setShowFilters] = useState(false);
     
     const dates = getAllDates();
-    const dateReports = getReportsByDate(selectedDate);
     const idx = dates.indexOf(selectedDate);
-    const dateTotal = dateReports.reduce((s, r) => s + r.total, 0);
-    const dateTips = dateReports.reduce((s, r) => s + (r.tips || 0), 0);
     
-    // Фильтрация отчётов
-    const filteredReports = dateReports.filter(r => {
-      if (searchQuery && !getProductName(r.product).toLowerCase().includes(searchQuery.toLowerCase())) return false;
-      if (filterEmployee && r.employee !== filterEmployee) return false;
-      if (filterLocation && r.location !== filterLocation) return false;
-      return true;
-    });
+    const uniqueEmployees = useMemo(() => [...new Set(reports.map(r => r.employee))], [reports]);
+    const uniqueLocations = useMemo(() => [...new Set(reports.filter(r => r.location).map(r => r.location))], [reports]);
     
-    const uniqueEmployees = [...new Set(reports.map(r => r.employee))];
-    const uniqueLocations = [...new Set(reports.filter(r => r.location).map(r => r.location))];
+    // Фильтрация отчётов с useMemo
+    const filteredReports = useMemo(() => {
+      let baseReports;
+      // Если фильтры по дате активны — фильтруем по диапазону дат, иначе по выбранной дате
+      if (filterDateFrom || filterDateTo) {
+        baseReports = reports.filter(r => {
+          const [datePart] = r.date.split(',');
+          const [d, m, y] = datePart.trim().split('.');
+          const reportDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
+          if (filterDateFrom) {
+            const from = new Date(filterDateFrom);
+            if (reportDate < from) return false;
+          }
+          if (filterDateTo) {
+            const to = new Date(filterDateTo);
+            to.setHours(23, 59, 59);
+            if (reportDate > to) return false;
+          }
+          return true;
+        });
+      } else {
+        baseReports = getReportsByDate(selectedDate);
+      }
+      return baseReports.filter(r => {
+        if (searchQuery && !getProductName(r.product).toLowerCase().includes(searchQuery.toLowerCase())) return false;
+        if (filterEmployee && r.employee !== filterEmployee) return false;
+        if (filterLocation && r.location !== filterLocation) return false;
+        return true;
+      });
+    }, [reports, selectedDate, searchQuery, filterEmployee, filterLocation, filterDateFrom, filterDateTo]);
+    
+    const dateTotal = filteredReports.reduce((s, r) => s + r.total, 0);
+    const dateTips = filteredReports.reduce((s, r) => s + (r.tips || 0), 0);
     
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
@@ -3947,7 +4155,20 @@ export default function LikeBirdApp() {
                   {uniqueLocations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
                 </select>
               )}
-              <button onClick={() => { setFilterEmployee(''); setFilterLocation(''); setSearchQuery(''); }} className="w-full text-amber-600 text-sm">Сбросить фильтры</button>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-gray-500 font-semibold">От даты</label>
+                  <input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} className="w-full p-2 border rounded text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 font-semibold">До даты</label>
+                  <input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} className="w-full p-2 border rounded text-sm" />
+                </div>
+              </div>
+              {(filterDateFrom || filterDateTo) && (
+                <p className="text-xs text-blue-600 text-center font-medium">📅 Фильтр по диапазону дат активен</p>
+              )}
+              <button onClick={() => { setFilterEmployee(''); setFilterLocation(''); setSearchQuery(''); setFilterDateFrom(''); setFilterDateTo(''); }} className="w-full text-amber-600 text-sm">Сбросить фильтры</button>
             </div>
           )}
           
@@ -4274,6 +4495,7 @@ export default function LikeBirdApp() {
     const [showEventForm, setShowEventForm] = useState(false);
     const [newDate, setNewDate] = useState('');
     const [newEvent, setNewEvent] = useState({ title: '', description: '', type: 'info', emoji: '📅' });
+    const [editingEventRef, setEditingEventRef] = useState(null); // { dateKey, index }
     const [achForm, setAchForm] = useState({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '', bonusAmount: '' });
     const [editingAch, setEditingAch] = useState(null);
 
@@ -4406,6 +4628,7 @@ export default function LikeBirdApp() {
     const ScheduleEditor = () => {
       const [weekRange, setWeekRange] = useState(scheduleData.week || '');
       const [shifts, setShifts] = useState(scheduleData.shifts || {});
+      const [scheduleViewMode, setScheduleViewMode] = useState('list');
       const activeEmployees = employees.filter(e => e.active).map(e => e.name);
       
       // Функция расчёта часов из времени
@@ -4508,9 +4731,15 @@ export default function LikeBirdApp() {
 
       return (
         <div className="space-y-4">
-          {/* Период */}
+          {/* Период + Вид */}
           <div className="bg-white rounded-xl p-4 shadow">
-            <h3 className="font-bold mb-3 flex items-center gap-2"><Calendar className="w-5 h-5 text-blue-600" />Период графика</h3>
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold flex items-center gap-2"><Calendar className="w-5 h-5 text-blue-600" />Период графика</h3>
+              <div className="flex bg-gray-100 rounded-lg p-0.5">
+                <button onClick={() => setScheduleViewMode('list')} className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${scheduleViewMode === 'list' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>Список</button>
+                <button onClick={() => setScheduleViewMode('table')} className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${scheduleViewMode === 'table' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>Таблица</button>
+              </div>
+            </div>
             <input type="text" value={weekRange} onChange={(e) => setWeekRange(e.target.value)} placeholder="27.01.26 - 02.02.26" className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" />
           </div>
 
@@ -4525,8 +4754,101 @@ export default function LikeBirdApp() {
             </div>
           </div>
 
-          {/* Смены по сотрудникам */}
-          {activeEmployees.map(emp => (
+          {/* Табличный вид */}
+          {scheduleViewMode === 'table' && (() => {
+            const now = new Date();
+            const startOfWeek = new Date(now);
+            startOfWeek.setDate(now.getDate() - ((now.getDay() + 6) % 7)); // Понедельник
+            const days = Array.from({ length: 7 }, (_, i) => {
+              const d = new Date(startOfWeek);
+              d.setDate(startOfWeek.getDate() + i);
+              return d;
+            });
+            const dayLabels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+            const todayDateStr = now.toISOString().split('T')[0];
+
+            const getShiftForDay = (emp, day) => {
+              const dayStr = day.toISOString().split('T')[0];
+              const empShifts = shifts[emp] || [];
+              return empShifts.find(s => s.date === dayStr);
+            };
+
+            const toggleShiftType = (emp, day, type) => {
+              const dayStr = day.toISOString().split('T')[0];
+              const newShifts = { ...shifts };
+              if (!newShifts[emp]) newShifts[emp] = [];
+              const existingIdx = newShifts[emp].findIndex(s => s.date === dayStr);
+              
+              const templates = {
+                'morning': { startTime: '09:00', endTime: '15:00', breakStart: '', breakEnd: '', hours: 6 },
+                'evening': { startTime: '15:00', endTime: '21:00', breakStart: '', breakEnd: '', hours: 6 },
+                'full': { startTime: '10:00', endTime: '19:00', breakStart: '13:00', breakEnd: '14:00', hours: 8 },
+              };
+
+              if (existingIdx >= 0) {
+                const existing = newShifts[emp][existingIdx];
+                if (existing.startTime === templates[type].startTime && existing.endTime === templates[type].endTime) {
+                  newShifts[emp].splice(existingIdx, 1);
+                  if (newShifts[emp].length === 0) delete newShifts[emp];
+                } else {
+                  newShifts[emp][existingIdx] = { date: dayStr, ...templates[type] };
+                }
+              } else {
+                newShifts[emp].push({ date: dayStr, ...templates[type] });
+              }
+              setShifts(newShifts);
+            };
+
+            return (
+              <div className="bg-white rounded-xl shadow overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-2 font-bold text-gray-700 min-w-[80px]">Сотрудник</th>
+                      {days.map((d, i) => {
+                        const isToday = d.toISOString().split('T')[0] === todayDateStr;
+                        return (
+                          <th key={i} className={`p-2 text-center min-w-[60px] ${isToday ? 'bg-blue-50 text-blue-700 font-black' : 'text-gray-500'}`}>
+                            <div>{dayLabels[i]}</div>
+                            <div className="text-[10px]">{d.getDate()}.{String(d.getMonth() + 1).padStart(2, '0')}</div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeEmployees.map(emp => (
+                      <tr key={emp} className="border-b last:border-0">
+                        <td className="p-2 font-semibold text-gray-700">{emp}</td>
+                        {days.map((d, i) => {
+                          const isToday = d.toISOString().split('T')[0] === todayDateStr;
+                          const shift = getShiftForDay(emp, d);
+                          const shiftType = shift ? (shift.startTime === '09:00' ? 'morning' : shift.startTime === '15:00' ? 'evening' : 'full') : null;
+                          return (
+                            <td key={i} className={`p-1 text-center ${isToday ? 'bg-blue-50' : ''}`}>
+                              <div className="flex flex-col gap-0.5">
+                                <button onClick={() => toggleShiftType(emp, d, 'morning')} className={`px-1 py-0.5 rounded text-[10px] font-bold transition-all ${shiftType === 'morning' ? 'bg-yellow-400 text-white' : 'bg-gray-100 text-gray-400 hover:bg-yellow-100'}`}>☀</button>
+                                <button onClick={() => toggleShiftType(emp, d, 'evening')} className={`px-1 py-0.5 rounded text-[10px] font-bold transition-all ${shiftType === 'evening' ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-indigo-100'}`}>🌙</button>
+                                <button onClick={() => toggleShiftType(emp, d, 'full')} className={`px-1 py-0.5 rounded text-[10px] font-bold transition-all ${shiftType === 'full' ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-green-100'}`}>∎</button>
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="p-2 flex gap-3 text-[10px] text-gray-500 border-t">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-yellow-400 rounded"></span> Утро (09-15)</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-indigo-500 rounded"></span> Вечер (15-21)</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500 rounded"></span> Полная (10-19)</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Список смен (оригинальный вид) */}
+          {scheduleViewMode === 'list' && activeEmployees.map(emp => (
             <div key={emp} className="bg-white rounded-xl p-4 shadow">
               <div className="flex justify-between items-center mb-3">
                 <h3 className="font-bold text-lg">{emp}</h3>
@@ -4630,7 +4952,8 @@ export default function LikeBirdApp() {
     };
 
     const tabs = [
-      { id: 'analytics', label: '📊 Аналитика', icon: BarChart3 },
+      { id: 'today', label: '📊 Сегодня', icon: BarChart3 },
+      { id: 'analytics', label: '📈 Аналитика', icon: BarChart3 },
       { id: 'review', label: '✅ Проверка', icon: CheckCircle },
       { id: 'employees', label: '👥 Сотрудники', icon: Users },
       { id: 'personnel', label: '🏆 Персонал+', icon: Award },
@@ -4696,6 +5019,90 @@ export default function LikeBirdApp() {
         </div>
 
         <div className="max-w-4xl mx-auto px-4 mt-4">
+          {/* ВКЛАДКА: Сегодня (дашборд) */}
+          {adminTab === 'today' && (() => {
+            const todayTopProducts = todayReports.reduce((acc, r) => {
+              const n = getProductName(r.product);
+              acc[n] = (acc[n] || 0) + 1;
+              return acc;
+            }, {});
+            const topToday = Object.entries(todayTopProducts).sort((a, b) => b[1] - a[1])[0];
+            const onShiftNow = Object.entries(shiftsData).filter(([key, s]) => {
+              return key.endsWith(`_${todayStr}`) && s.status === 'open';
+            }).map(([key]) => {
+              const login = key.replace(`_${todayStr}`, '');
+              const user = employees.find(e => e.name === login) || { name: login };
+              try { const users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); const u = users.find(u => u.login === login); if (u) return { name: u.name || login }; } catch {}
+              return { name: login };
+            });
+            const lowStockItems = Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= (data.minStock || 3));
+
+            return (
+              <div className="space-y-4">
+                {/* KPI виджеты */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gradient-to-br from-green-400 to-emerald-500 rounded-xl p-4 text-white">
+                    <p className="text-white/70 text-xs">💰 Выручка сегодня</p>
+                    <p className="text-2xl font-black">{todayRevenue.toLocaleString()}₽</p>
+                    <p className="text-white/60 text-xs mt-1">{todayReports.length} продаж</p>
+                  </div>
+                  <div className="bg-gradient-to-br from-blue-400 to-indigo-500 rounded-xl p-4 text-white">
+                    <p className="text-white/70 text-xs">👤 На смене сейчас</p>
+                    <p className="text-2xl font-black">{onShiftNow.length}</p>
+                    <p className="text-white/60 text-xs mt-1 truncate">{onShiftNow.map(e => e.name).join(', ') || 'Никого'}</p>
+                  </div>
+                  <div className="bg-gradient-to-br from-amber-400 to-orange-500 rounded-xl p-4 text-white">
+                    <p className="text-white/70 text-xs">🏆 Топ-товар дня</p>
+                    <p className="text-lg font-black truncate">{topToday ? topToday[0] : '—'}</p>
+                    <p className="text-white/60 text-xs mt-1">{topToday ? `${topToday[1]} шт` : 'Нет продаж'}</p>
+                  </div>
+                  <div className={`rounded-xl p-4 text-white ${lowStockItems.length > 0 ? 'bg-gradient-to-br from-red-400 to-rose-500' : 'bg-gradient-to-br from-gray-400 to-gray-500'}`}>
+                    <p className="text-white/70 text-xs">⚠️ Мало на складе</p>
+                    <p className="text-2xl font-black">{lowStockItems.length}</p>
+                    <p className="text-white/60 text-xs mt-1">{lowStockItems.length > 0 ? 'позиций' : 'Всё в норме'}</p>
+                  </div>
+                </div>
+
+                {/* Детали низких остатков */}
+                {lowStockItems.length > 0 && (
+                  <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4">
+                    <h4 className="font-bold text-red-700 mb-2 text-sm">⚠️ Остатки ниже нормы</h4>
+                    <div className="space-y-1">
+                      {lowStockItems.slice(0, 8).map(([name, data]) => (
+                        <div key={name} className="flex justify-between items-center text-sm py-1 border-b border-red-100 last:border-0">
+                          <span>{data.emoji} {name}</span>
+                          <span className="font-bold text-red-600">{data.count} / {data.minStock || 3}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Продажи сегодня по сотрудникам */}
+                {todayReports.length > 0 && (
+                  <div className="bg-white rounded-xl p-4 shadow">
+                    <h4 className="font-bold text-gray-700 mb-3 text-sm">👥 Продажи сегодня по сотрудникам</h4>
+                    <div className="space-y-2">
+                      {Object.entries(todayReports.reduce((acc, r) => {
+                        if (!acc[r.employee]) acc[r.employee] = { count: 0, revenue: 0 };
+                        acc[r.employee].count++;
+                        acc[r.employee].revenue += r.total;
+                        return acc;
+                      }, {})).sort((a, b) => b[1].revenue - a[1].revenue).map(([emp, data]) => (
+                        <div key={emp} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                          <span className="font-medium text-sm">{emp}</span>
+                          <div className="text-right">
+                            <span className="font-bold text-green-600 text-sm">{data.revenue.toLocaleString()}₽</span>
+                            <span className="text-xs text-gray-400 ml-2">{data.count} шт</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {/* ВКЛАДКА: Дашборд */}
           {/* Аналитика (объединённая) */}
           {adminTab === 'analytics' && (() => {
@@ -6260,26 +6667,54 @@ export default function LikeBirdApp() {
 
             const saveEvent = () => {
               if (!newDate || !newEvent.title) { showNotification('Заполните дату и название', 'error'); return; }
-              const updated = { ...eventsCalendar, [newDate]: { ...newEvent, createdAt: Date.now() } };
+              const [y, m, d] = newDate.split('-');
+              const dateKey = `${d}.${m}.${y}`;
+              const updated = { ...eventsCalendar };
+              if (!updated[dateKey]) updated[dateKey] = [];
+              if (editingEventRef) {
+                // Удаляем старое событие (дата могла измениться)
+                const oldKey = editingEventRef.dateKey;
+                const oldIdx = editingEventRef.index;
+                if (updated[oldKey]) {
+                  updated[oldKey] = updated[oldKey].filter((_, i) => i !== oldIdx);
+                  if (updated[oldKey].length === 0) delete updated[oldKey];
+                }
+                if (!updated[dateKey]) updated[dateKey] = [];
+              }
+              updated[dateKey] = [...(updated[dateKey] || []), { ...newEvent, createdAt: Date.now() }];
               setEventsCalendar(updated);
               save('likebird-events', updated);
               setNewDate(''); setNewEvent({ title: '', description: '', type: 'info', emoji: '📅' });
+              setEditingEventRef(null);
               setShowEventForm(false);
-              showNotification('Событие добавлено');
+              showNotification(editingEventRef ? 'Событие обновлено' : 'Событие добавлено');
             };
-            const deleteEvent = (date) => {
+            const deleteEvent = (date, index) => {
               showConfirm('Удалить событие?', () => {
                 const updated = { ...eventsCalendar };
-                delete updated[date];
+                if (updated[date]) {
+                  updated[date] = updated[date].filter((_, i) => i !== index);
+                  if (updated[date].length === 0) delete updated[date];
+                }
                 setEventsCalendar(updated);
                 save('likebird-events', updated);
               });
             };
+            const startEditEvent = (date, index, ev) => {
+              const [d, m, y] = date.split('.');
+              setNewDate(`${y}-${m}-${d}`);
+              setNewEvent({ title: ev.title, description: ev.description || '', type: ev.type || 'info', emoji: ev.emoji || '📅' });
+              setEditingEventRef({ dateKey: date, index });
+              setShowEventForm(true);
+            };
 
-            const sortedEvents = Object.entries(eventsCalendar).sort((a, b) => {
-              const parse = ([d, m, y]) => new Date(parseInt(parseYear(y)), m-1, d);
-              return parse(a[0].split('.')) - parse(b[0].split('.'));
-            });
+            // Flatten: [{date, ev, index}, ...] sorted by date
+            const sortedEvents = Object.entries(eventsCalendar)
+              .flatMap(([date, evArr]) => (Array.isArray(evArr) ? evArr : [evArr]).map((ev, i) => ({ date, ev, index: i })))
+              .sort((a, b) => {
+                const parse = (d) => { const [dd, mm, yy] = d.split('.'); return new Date(parseInt(parseYear(yy)), mm - 1, dd); };
+                return parse(a.date) - parse(b.date);
+              });
 
             return (
               <div className="space-y-4">
@@ -6290,7 +6725,7 @@ export default function LikeBirdApp() {
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="font-bold flex items-center gap-2">
                       <Calendar className="w-5 h-5 text-red-500" />
-                      События и даты ({Object.keys(eventsCalendar).length})
+                      События и даты ({sortedEvents.length})
                     </h3>
                     <button onClick={() => setShowEventForm(!showEventForm)}
                       className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-semibold ${showEventForm ? 'bg-gray-100 text-gray-600' : 'bg-red-500 text-white hover:bg-red-600'}`}>
@@ -6305,9 +6740,7 @@ export default function LikeBirdApp() {
                         <div>
                           <label className="text-xs text-gray-500 font-semibold block mb-1">Дата *</label>
                           <input type="date" value={newDate} onChange={e => {
-                            const d = new Date(e.target.value);
-                            const fmt = d.toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'2-digit'}).replace(/\//g,'.');
-                            setNewDate(fmt);
+                            setNewDate(e.target.value);
                           }} className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-red-400 focus:outline-none" />
                         </div>
                         <div>
@@ -6328,22 +6761,31 @@ export default function LikeBirdApp() {
                         rows={2} className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm focus:border-red-400 focus:outline-none resize-none" />
                       <button onClick={saveEvent}
                         className="w-full py-2.5 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-all">
-                        ✅ Сохранить событие
+                        {editingEventRef ? '✏️ Обновить событие' : '✅ Сохранить событие'}
                       </button>
+                      {editingEventRef && (
+                        <button onClick={() => { setEditingEventRef(null); setShowEventForm(false); setNewDate(''); setNewEvent({ title: '', description: '', type: 'info', emoji: '📅' }); }}
+                          className="w-full py-2 bg-gray-200 text-gray-600 rounded-xl font-bold hover:bg-gray-300 mt-2">
+                          Отмена редактирования
+                        </button>
+                      )}
                     </div>
                   )}
 
                   <div className="space-y-2 max-h-80 overflow-y-auto">
                     {sortedEvents.length === 0 ? (
                       <p className="text-gray-400 text-center py-6">Нет событий</p>
-                    ) : sortedEvents.map(([date, ev]) => (
-                      <div key={date} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border">
+                    ) : sortedEvents.map(({ date, ev, index }) => (
+                      <div key={`${date}_${index}`} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border">
                         <span className="text-2xl flex-shrink-0">{ev.emoji || '📅'}</span>
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-sm truncate">{ev.title}</p>
                           <p className="text-xs text-gray-400">{date}{ev.description && ` • ${ev.description}`}</p>
                         </div>
-                        <button onClick={() => deleteEvent(date)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg flex-shrink-0">
+                        <button onClick={() => startEditEvent(date, index, ev)} className="p-1.5 text-blue-400 hover:bg-blue-50 rounded-lg flex-shrink-0">
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => deleteEvent(date, index)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg flex-shrink-0">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -6960,20 +7402,21 @@ export default function LikeBirdApp() {
       return emp;
     }).sort((a, b) => b.shifts - a.shifts);
 
-    // Данные для событий
+    // Данные для событий — flatten array-based eventsCalendar
     const today = new Date();
-    const sortedEvents = Object.entries(eventsCalendar).sort((a, b) => {
-      const [dA, mA, yA] = a[0].split('.');
-      const [dB, mB, yB] = b[0].split('.');
-      return new Date(parseYear(yA), parseInt(mA) - 1, parseInt(dA)) - new Date(parseYear(yB), parseInt(mB) - 1, parseInt(dB));
-    });
+    const sortedEvents = Object.entries(eventsCalendar)
+      .flatMap(([date, evArr]) => (Array.isArray(evArr) ? evArr : [evArr]).map((ev, i) => ({ date, ev, index: i })))
+      .sort((a, b) => {
+        const parse = (d) => { const [dd, mm, yy] = d.split('.'); return new Date(parseYear(yy), parseInt(mm) - 1, parseInt(dd)); };
+        return parse(a.date) - parse(b.date);
+      });
 
-    const upcomingEvents = sortedEvents.filter(([date]) => {
+    const upcomingEvents = sortedEvents.filter(({ date }) => {
       const [d, m, y] = date.split('.');
       return new Date(parseYear(y), parseInt(m) - 1, parseInt(d)) >= today;
     });
 
-    const pastEvents = sortedEvents.filter(([date]) => {
+    const pastEvents = sortedEvents.filter(({ date }) => {
       const [d, m, y] = date.split('.');
       return new Date(parseYear(y), parseInt(m) - 1, parseInt(d)) < today;
     });
@@ -7235,12 +7678,12 @@ export default function LikeBirdApp() {
                 <div>
                   <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">📅 Предстоящие события</h3>
                   <div className="space-y-3">
-                    {upcomingEvents.map(([date, event]) => {
+                    {upcomingEvents.map(({ date, ev, index }) => {
                       const [d, m, y] = date.split('.');
                       const eventDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
                       const daysUntil = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
                       return (
-                        <div key={date} className="bg-white rounded-xl p-4 shadow border-l-4 border-red-500">
+                        <div key={`${date}_${index}`} className="bg-white rounded-xl p-4 shadow border-l-4 border-red-500">
                           <div className="flex justify-between items-start">
                             <div>
                               <p className="text-xl font-bold text-red-600">{date}</p>
@@ -7250,9 +7693,10 @@ export default function LikeBirdApp() {
                                 </span>
                               )}
                             </div>
-                            <span className="text-2xl">🎉</span>
+                            <span className="text-2xl">{ev.emoji || '🎉'}</span>
                           </div>
-                          <p className="text-lg font-medium text-gray-800 mt-2">{event}</p>
+                          <p className="text-lg font-medium text-gray-800 mt-2">{ev.title}</p>
+                          {ev.description && <p className="text-sm text-gray-500 mt-1">{ev.description}</p>}
                         </div>
                       );
                     })}
@@ -7264,12 +7708,12 @@ export default function LikeBirdApp() {
                 <div>
                   <h3 className="text-lg font-bold text-gray-500 mb-3">📋 Прошедшие события</h3>
                   <div className="space-y-2">
-                    {pastEvents.slice(0, 5).map(([date, event]) => (
-                      <div key={date} className="bg-gray-50 rounded-lg p-3 opacity-60">
+                    {pastEvents.slice(0, 5).map(({ date, ev, index }) => (
+                      <div key={`${date}_${index}`} className="bg-gray-50 rounded-lg p-3 opacity-60">
                         <div className="flex justify-between items-center">
                           <div>
                             <p className="font-bold text-gray-600">{date}</p>
-                            <p className="text-sm text-gray-500">{event}</p>
+                            <p className="text-sm text-gray-500">{ev.title}</p>
                           </div>
                           <CheckCircle className="w-5 h-5 text-gray-400" />
                         </div>
@@ -7435,10 +7879,20 @@ export default function LikeBirdApp() {
 
     const closeShift = (time) => {
       const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      const updated = { ...shiftsData, [shiftKey]: { ...myShift, closeTime: t, status: 'closed', closedAt: Date.now() } };
-      updateShiftsData(updated);
+      // Показываем сводку перед закрытием
+      const topProduct = myTodayReports.reduce((acc, r) => {
+        const name = getProductName(r.product);
+        acc[name] = (acc[name] || 0) + 1;
+        return acc;
+      }, {});
+      const topEntry = Object.entries(topProduct).sort((a, b) => b[1] - a[1])[0];
+      const summary = `Закрыть смену в ${t}?\n\n📊 Сводка:\n• Продаж: ${myTodayReports.length}\n• Выручка: ${myTotal.toLocaleString()}₽\n• Топ-товар: ${topEntry ? `${topEntry[0]} (${topEntry[1]} шт)` : '—'}`;
+      showConfirm(summary, () => {
+        const updated = { ...shiftsData, [shiftKey]: { ...myShift, closeTime: t, status: 'closed', closedAt: Date.now() } };
+        updateShiftsData(updated);
+        showNotification(`Смена закрыта в ${t}`);
+      });
       setShowTimeModal(null);
-      showNotification(`Смена закрыта в ${t}`);
     };
 
     const submitMyReport = () => {
