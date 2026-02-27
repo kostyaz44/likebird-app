@@ -4260,6 +4260,30 @@ export default function LikeBirdApp() {
     const [editingManual, setEditingManual] = useState(null);
     const [newManual, setNewManual] = useState({ title: '', category: 'sales', content: '', isPinned: false });
     const [personnelTab, setPersonnelTab] = useState('penalties');
+    const [editBonusId, setEditBonusId] = useState(null);
+    const [editBonusForm, setEditBonusForm] = useState({ amount: '', reason: '' });
+    const [regUsers, setRegUsers] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } });
+    const [editingUser, setEditingUser] = useState(null);
+    const [editForm, setEditForm] = useState({});
+    const [addForm, setAddForm] = useState({ login: '', name: '', password: '', role: 'seller', isAdmin: false });
+    const [addMode, setAddMode] = useState(false);
+    const [addError, setAddError] = useState('');
+    const [viewingProfile, setViewingProfile] = useState(null);
+    const [expandedEdit, setExpandedEdit] = useState(null);
+    const [adminEditForm, setAdminEditForm] = useState({});
+    const [showEventForm, setShowEventForm] = useState(false);
+    const [newDate, setNewDate] = useState('');
+    const [newEvent, setNewEvent] = useState({ title: '', description: '', type: 'info', emoji: '📅' });
+    const [achForm, setAchForm] = useState({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '', bonusAmount: '' });
+    const [editingAch, setEditingAch] = useState(null);
+
+    // Refresh regUsers from localStorage (was inside IIFE)
+    useEffect(() => {
+      const interval = setInterval(() => {
+        try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch {}
+      }, 2000);
+      return () => clearInterval(interval);
+    }, []);
     const [kpiEditMode, setKpiEditMode] = useState(null);
     const [kpiEditValue, setKpiEditValue] = useState('');
     // States moved from IIFEs to fix input focus bug
@@ -4906,8 +4930,6 @@ export default function LikeBirdApp() {
                             
                             {/* Продажи — с редактированием */}
                             {(() => {
-                              const [expandedEdit, setExpandedEdit] = React.useState(null);
-                              const [adminEditForm, setAdminEditForm] = React.useState({});
                               return (
                                 <div className="space-y-1 mb-3 max-h-64 overflow-y-auto">
                                   {empReports.map((r, idx) => (
@@ -5058,25 +5080,7 @@ export default function LikeBirdApp() {
 
           {/* ВКЛАДКА: Сотрудники */}
           {adminTab === 'employees' && (() => {
-            // Читаем зарегистрированных пользователей из localStorage (синхронизируется Firebase)
-            const [regUsers, setRegUsers] = React.useState(() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } });
-            const [editingUser, setEditingUser] = React.useState(null);
-            const [editForm, setEditForm] = React.useState({});
-            const [addForm, setAddForm] = React.useState({ login: '', name: '', password: '', role: 'seller', isAdmin: false });
-            const [addMode, setAddMode] = React.useState(false);
-            const [addError, setAddError] = React.useState('');
-            const [viewingProfile, setViewingProfile] = React.useState(null); // login сотрудника
-
-            // Перечитывать при изменениях Firebase
-            React.useEffect(() => {
-              const interval = setInterval(() => {
-                try {
-                  const fresh = JSON.parse(localStorage.getItem('likebird-users') || '[]');
-                  setRegUsers(fresh);
-                } catch {}
-              }, 2000);
-              return () => clearInterval(interval);
-            }, []);
+            // regUsers refreshed via useEffect at AdminView top level
 
             const saveUsers = (updated) => {
               setRegUsers(updated);
@@ -5554,9 +5558,6 @@ export default function LikeBirdApp() {
 
                 {/* Бонусы */}
                 {personnelTab === 'bonuses' && (() => {
-                  const [editBonusId, setEditBonusId] = React.useState(null);
-                  const [editBonusForm, setEditBonusForm] = React.useState({ amount: '', reason: '' });
-                  
                   const deleteBonus = (id) => {
                     showConfirm('Удалить этот бонус?', () => {
                       updateBonuses(bonuses.filter(b => b.id !== id));
@@ -6249,9 +6250,6 @@ export default function LikeBirdApp() {
 
           {/* ВКЛАДКА: График работы */}
           {adminTab === 'schedule' && (() => {
-            const [showEventForm, setShowEventForm] = React.useState(false);
-            const [newDate, setNewDate] = React.useState('');
-            const [newEvent, setNewEvent] = React.useState({ title: '', description: '', type: 'info', emoji: '📅' });
             const EVENT_TYPES = [
               { id: 'sale', label: '🎁 Акция', emoji: '🎁' },
               { id: 'holiday', label: '🎉 Праздник', emoji: '🎉' },
@@ -6647,8 +6645,6 @@ export default function LikeBirdApp() {
 
           {/* ===== ВКЛАДКА: ДОСТИЖЕНИЯ ===== */}
           {adminTab === 'achievements-admin' && (() => {
-            const [achForm, setAchForm] = React.useState({ icon: '🏆', title: '', desc: '', condType: 'manual', condValue: '', bonusAmount: '' });
-            const [editingAch, setEditingAch] = React.useState(null);
             const COND_TYPES = [
               { id: 'manual', label: '🎖️ Выдать вручную' },
               { id: 'sales_count', label: '🛒 Кол-во продаж' },
@@ -6921,6 +6917,7 @@ export default function LikeBirdApp() {
     const activeEmployees = employees.filter(e => e.active).map(e => e.name);
     const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
     const [manualFilter, setManualFilter] = useState('all');
+    const [manualSearch, setManualSearch] = useState('');
 
     // Онлайн-статус: онлайн если lastSeen < 5 минут назад
     const ONLINE_THRESHOLD = 5 * 60 * 1000;
@@ -7300,7 +7297,6 @@ export default function LikeBirdApp() {
               { id: 'info', label: '💰 Финансы', color: 'green' },
               { id: 'faq', label: '❓ FAQ', color: 'orange' },
             ];
-            const [manualSearch, setManualSearch] = React.useState('');
             const filteredManuals = manuals.filter(m => {
               const matchCat = manualFilter === 'all' || m.category === manualFilter;
               const matchSearch = !manualSearch.trim() || m.title.toLowerCase().includes(manualSearch.toLowerCase()) || (m.content && m.content.toLowerCase().includes(manualSearch.toLowerCase()));
