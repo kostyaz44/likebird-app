@@ -1656,7 +1656,12 @@ export default function LikeBirdApp() {
   const updateChallenges = (c) => { setChallenges(c); save('likebird-challenges', c); };
 
   // === BLOCK 4: Product Photos update ===
-  const updateProductPhotos = (p) => { setProductPhotos(p); save('likebird-product-photos-data', p); };
+  const updateProductPhotos = (p) => {
+    setProductPhotos(p);
+    // Явно сохраняем в localStorage + Firebase
+    try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(p)); } catch {}
+    fbSave('likebird-product-photos-data', p);
+  };
 
   // === BLOCK 8: Role-based access ===
   const ROLE_ACCESS = {
@@ -1684,8 +1689,8 @@ export default function LikeBirdApp() {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         let result = canvas.toDataURL('image/jpeg', quality);
-        // Если > 200KB — пережимаем агрессивнее
-        if (result.length > 200000) {
+        // Если > 80KB — пережимаем агрессивнее
+        if (result.length > 80000) {
           const s = Math.min(maxSize * 0.5, 400);
           let w2 = img.width, h2 = img.height;
           if (w2 > h2) { if (w2 > s) { h2 = h2 * s / w2; w2 = s; } } else { if (h2 > s) { w2 = w2 * s / h2; h2 = s; } }
@@ -4676,7 +4681,7 @@ export default function LikeBirdApp() {
                       <Camera className="w-4 h-4" />
                       <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
                         const file = e.target.files?.[0]; if (!file) return;
-                        try { const compressed = await compressImage(file, 600, 0.8); if (!compressed) { showNotification('Формат не поддерживается', 'error'); return; } updateProductPhotos({...productPhotos, [p.name]: compressed}); showNotification('📷 Фото добавлено'); } catch { showNotification('Ошибка сохранения', 'error'); }
+                        try { const compressed = await compressImage(file, 400, 0.6); if (!compressed) { showNotification('Формат не поддерживается', 'error'); return; } updateProductPhotos({...productPhotos, [p.name]: compressed}); showNotification('📷 Фото добавлено'); } catch { showNotification('Ошибка сохранения', 'error'); }
                       }} />
                     </label>
                   </div>); })}</div>
@@ -7550,7 +7555,7 @@ export default function LikeBirdApp() {
                     <label className="text-sm text-gray-600 mb-1 block">Фото товара</label>
                     <label className="flex items-center justify-center h-16 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-purple-400 hover:bg-purple-50">
                       <span className="text-sm text-gray-500">{productPhoto ? '✅ Фото загружено' : '📷 Нажмите для загрузки'}</span>
-                      <input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 600, 0.8); if (compressed) { setProductPhoto(compressed); showNotification('📷 Фото загружено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" />
+                      <input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 400, 0.6); if (compressed) { setProductPhoto(compressed); showNotification('📷 Фото загружено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" />
                     </label>
                     {productPhoto && <div className="mt-2 relative"><img src={productPhoto} className="w-36 h-36 object-cover rounded-xl border border-gray-200 shadow-sm" /><button onClick={() => setProductPhoto(null)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">×</button></div>}
                   </div>
@@ -7592,7 +7597,7 @@ export default function LikeBirdApp() {
                             <span className="text-gray-500">{prod.price}₽</span>
                             <div className="flex gap-1">
                               {/* Загрузка фото */}
-                              <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-4 h-4" /><input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 600, 0.8); if (compressed) { updateProductPhotos({...productPhotos, [prod.name]: compressed}); showNotification('📷 Фото добавлено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" /></label>
+                              <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-4 h-4" /><input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 400, 0.6); if (compressed) { updateProductPhotos({...productPhotos, [prod.name]: compressed}); showNotification('📷 Фото добавлено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" /></label>
                               {!prod.isBase && <button onClick={() => { setEditingProduct(prod.name); setEditProductData({ name: prod.name, price: prod.price, emoji: prod.emoji, category: prod.category }); }} className="text-gray-400 hover:text-blue-500"><Edit3 className="w-3.5 h-3.5" /></button>}
                               {!prod.isBase && <button onClick={() => showConfirm(`Удалить ${prod.name}?`, () => removeCustomProduct(prod.id))} className="text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>}
                               {productPhotos[prod.name] && <button onClick={() => { const photos = {...productPhotos}; delete photos[prod.name]; updateProductPhotos(photos); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
@@ -8148,8 +8153,21 @@ export default function LikeBirdApp() {
                       <div>Расходов: <span className="font-bold">{expenses.length}</span></div>
                       <div>Товаров: <span className="font-bold">{ALL_PRODUCTS.length + customProducts.length}</span></div>
                       <div>Дней: <span className="font-bold">{getAllDates().length}</span></div>
+                      <div>Фото товаров: <span className="font-bold">{Object.keys(productPhotos).length}</span></div>
+                      <div>Размер фото: <span className="font-bold">{Math.round(JSON.stringify(productPhotos).length / 1024)} КБ</span></div>
                     </div>
                   </div>
+                  {Object.keys(productPhotos).length > 0 && (
+                    <div className="p-3 bg-blue-50 rounded-lg space-y-2">
+                      <p className="font-medium text-blue-700">📷 Фото товаров</p>
+                      <button onClick={() => {
+                        fbSave('likebird-product-photos-data', productPhotos);
+                        showNotification(`☁️ ${Object.keys(productPhotos).length} фото отправлено в облако`);
+                      }} className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 text-sm flex items-center justify-center gap-2">
+                        <Upload className="w-4 h-4" />Синхронизировать фото в облако
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
