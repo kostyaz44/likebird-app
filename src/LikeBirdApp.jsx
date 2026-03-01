@@ -1100,7 +1100,7 @@ export default function LikeBirdApp() {
       guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
       guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } }),
       guardedSubscribe('likebird-challenges', (val) => { if (Array.isArray(val)) { setChallenges(val); localStorage.setItem('likebird-challenges', JSON.stringify(val)); } }),
-      guardedSubscribe('likebird-product-photos-data', (val) => { if (val && typeof val === 'object') { setProductPhotos(val); localStorage.setItem('likebird-product-photos-data', JSON.stringify(val)); } }),
+      guardedSubscribe('likebird-product-photos-data', (val) => { if (val && typeof val === 'object') { setProductPhotos(val); try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(val)); } catch {} } }),
       guardedSubscribe('likebird-notifications', (val) => {
         if (!Array.isArray(val)) return;
         localStorage.setItem('likebird-notifications', JSON.stringify(val));
@@ -1331,7 +1331,7 @@ export default function LikeBirdApp() {
   const save = (key, data) => {
     fbWriteKeys.current.add(key);
     fbWriting.current = true;
-    localStorage.setItem(key, JSON.stringify(data));
+    try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* localStorage full — OK, Firebase is primary */ }
     fbSave(key, data);
     setTimeout(() => {
       fbWriteKeys.current.delete(key);
@@ -1672,29 +1672,45 @@ export default function LikeBirdApp() {
 
   // === BLOCK 4: Image compression utility ===
   const compressImage = (file, maxSize = 800, quality = 0.7) => new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result;
-      const img = new window.Image();
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          let w = img.width, h = img.height;
-          if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
-          else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
-          canvas.width = Math.round(w); canvas.height = Math.round(h);
-          const ctx = canvas.getContext('2d');
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(img, 0, 0, Math.round(w), Math.round(h));
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        } catch { resolve(dataUrl); } // если canvas не смог — возвращаем как есть
-      };
-      img.onerror = () => resolve(dataUrl); // если Image не смог — возвращаем raw base64
-      img.src = dataUrl;
+    const drawToCanvas = (img) => {
+      try {
+        const canvas = document.createElement('canvas');
+        let w = img.width, h = img.height;
+        if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
+        else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
+        canvas.width = Math.round(w); canvas.height = Math.round(h);
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        let result = canvas.toDataURL('image/jpeg', quality);
+        // Если > 200KB — пережимаем агрессивнее
+        if (result.length > 200000) {
+          const s = Math.min(maxSize * 0.5, 400);
+          let w2 = img.width, h2 = img.height;
+          if (w2 > h2) { if (w2 > s) { h2 = h2 * s / w2; w2 = s; } } else { if (h2 > s) { w2 = w2 * s / h2; h2 = s; } }
+          canvas.width = Math.round(w2); canvas.height = Math.round(h2);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          result = canvas.toDataURL('image/jpeg', 0.5);
+        }
+        resolve(result);
+      } catch { resolve(''); }
     };
-    reader.onerror = () => resolve(''); // крайний случай
-    reader.readAsDataURL(file);
+    // Основной способ: createObjectURL
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new window.Image();
+      img.onload = () => { URL.revokeObjectURL(url); drawToCanvas(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); tryReader(); };
+      img.src = url;
+    } catch { tryReader(); }
+    // Фолбэк: FileReader
+    function tryReader() {
+      const r = new FileReader();
+      r.onload = () => { const img = new window.Image(); img.onload = () => drawToCanvas(img); img.onerror = () => resolve(''); img.src = r.result; };
+      r.onerror = () => resolve('');
+      r.readAsDataURL(file);
+    }
   });
 
   // === BLOCK 10: Demand prediction ===
@@ -4660,7 +4676,7 @@ export default function LikeBirdApp() {
                       <Camera className="w-4 h-4" />
                       <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
                         const file = e.target.files?.[0]; if (!file) return;
-                        try { const compressed = await compressImage(file, 600, 0.8); updateProductPhotos({...productPhotos, [p.name]: compressed}); showNotification('📷 Фото добавлено'); } catch { showNotification('Ошибка', 'error'); }
+                        try { const compressed = await compressImage(file, 600, 0.8); if (!compressed) { showNotification('Формат не поддерживается', 'error'); return; } updateProductPhotos({...productPhotos, [p.name]: compressed}); showNotification('📷 Фото добавлено'); } catch { showNotification('Ошибка сохранения', 'error'); }
                       }} />
                     </label>
                   </div>); })}</div>
@@ -7534,7 +7550,7 @@ export default function LikeBirdApp() {
                     <label className="text-sm text-gray-600 mb-1 block">Фото товара</label>
                     <label className="flex items-center justify-center h-16 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-purple-400 hover:bg-purple-50">
                       <span className="text-sm text-gray-500">{productPhoto ? '✅ Фото загружено' : '📷 Нажмите для загрузки'}</span>
-                      <input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { try { const compressed = await compressImage(f, 600, 0.8); setProductPhoto(compressed); showNotification('📷 Фото загружено'); } catch { showNotification('Ошибка загрузки', 'error'); } }}} className="hidden" />
+                      <input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 600, 0.8); if (compressed) { setProductPhoto(compressed); showNotification('📷 Фото загружено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" />
                     </label>
                     {productPhoto && <div className="mt-2 relative"><img src={productPhoto} className="w-36 h-36 object-cover rounded-xl border border-gray-200 shadow-sm" /><button onClick={() => setProductPhoto(null)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">×</button></div>}
                   </div>
@@ -7576,7 +7592,7 @@ export default function LikeBirdApp() {
                             <span className="text-gray-500">{prod.price}₽</span>
                             <div className="flex gap-1">
                               {/* Загрузка фото */}
-                              <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-4 h-4" /><input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { try { const compressed = await compressImage(f, 600, 0.8); updateProductPhotos({...productPhotos, [prod.name]: compressed}); showNotification('📷 Фото добавлено'); } catch(err) { console.error(err); showNotification('Ошибка загрузки', 'error'); } }}} className="hidden" /></label>
+                              <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-4 h-4" /><input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 600, 0.8); if (compressed) { updateProductPhotos({...productPhotos, [prod.name]: compressed}); showNotification('📷 Фото добавлено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" /></label>
                               {!prod.isBase && <button onClick={() => { setEditingProduct(prod.name); setEditProductData({ name: prod.name, price: prod.price, emoji: prod.emoji, category: prod.category }); }} className="text-gray-400 hover:text-blue-500"><Edit3 className="w-3.5 h-3.5" /></button>}
                               {!prod.isBase && <button onClick={() => showConfirm(`Удалить ${prod.name}?`, () => removeCustomProduct(prod.id))} className="text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>}
                               {productPhotos[prod.name] && <button onClick={() => { const photos = {...productPhotos}; delete photos[prod.name]; updateProductPhotos(photos); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
