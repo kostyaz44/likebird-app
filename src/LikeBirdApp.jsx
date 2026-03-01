@@ -1671,52 +1671,30 @@ export default function LikeBirdApp() {
   };
 
   // === BLOCK 4: Image compression utility ===
-  const compressImage = (file, maxSize = 800, quality = 0.7) => new Promise((resolve, reject) => {
-    // Timeout: если загрузка зависнет (HEIC на старых браузерах и т.п.)
-    const timeout = setTimeout(() => { cleanup(); reject(new Error('Timeout')); }, 15000);
-    const img = new window.Image();
-    const url = URL.createObjectURL(file);
-    const cleanup = () => { clearTimeout(timeout); try { URL.revokeObjectURL(url); } catch {} };
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        let w = img.width, h = img.height;
-        if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
-        else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
-        canvas.width = Math.round(w); canvas.height = Math.round(h);
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, Math.round(w), Math.round(h));
-        const result = canvas.toDataURL('image/jpeg', quality);
-        cleanup();
-        resolve(result);
-      } catch (e) { cleanup(); reject(e); }
-    };
-    img.onerror = () => {
-      cleanup();
-      // Фолбэк: пробуем через FileReader (иногда помогает с HEIC/WebP)
-      const reader = new FileReader();
-      reader.onload = () => {
-        const img2 = new window.Image();
-        img2.onload = () => {
-          try {
-            const canvas = document.createElement('canvas');
-            let w = img2.width, h = img2.height;
-            if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
-            else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
-            canvas.width = Math.round(w); canvas.height = Math.round(h);
-            canvas.getContext('2d').drawImage(img2, 0, 0, Math.round(w), Math.round(h));
-            resolve(canvas.toDataURL('image/jpeg', quality));
-          } catch (e2) { reject(e2); }
-        };
-        img2.onerror = () => reject(new Error('Image format not supported'));
-        img2.src = reader.result;
+  const compressImage = (file, maxSize = 800, quality = 0.7) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const img = new window.Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          let w = img.width, h = img.height;
+          if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
+          else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
+          canvas.width = Math.round(w); canvas.height = Math.round(h);
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, Math.round(w), Math.round(h));
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch { resolve(dataUrl); } // если canvas не смог — возвращаем как есть
       };
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      reader.readAsDataURL(file);
+      img.onerror = () => resolve(dataUrl); // если Image не смог — возвращаем raw base64
+      img.src = dataUrl;
     };
-    img.src = url;
+    reader.onerror = () => resolve(''); // крайний случай
+    reader.readAsDataURL(file);
   });
 
   // === BLOCK 10: Demand prediction ===
@@ -4675,7 +4653,7 @@ export default function LikeBirdApp() {
                 <div key={price} className="mb-4">
                   <div className="bg-amber-500 rounded-lg p-2 mb-2 shadow"><span className="text-white text-lg font-bold">{price}₽</span></div>
                   <div className="bg-white rounded-xl shadow overflow-hidden">{grouped[price].map((p, i) => { const photo = productPhotos[p.name]; return (<div key={i} className="p-3 border-b last:border-0 flex items-center gap-3 text-sm">
-                    {photo ? <img src={photo} className="w-20 h-20 rounded-xl object-cover flex-shrink-0 border border-gray-100 shadow-sm" /> : <span className="text-2xl flex-shrink-0 w-20 h-20 bg-amber-50 rounded-xl flex items-center justify-center text-3xl">{p.emoji}</span>}
+                    {photo ? <img src={photo} className="w-24 h-24 rounded-xl object-cover flex-shrink-0 border border-gray-100 shadow-sm" /> : <span className="text-2xl flex-shrink-0 w-24 h-24 bg-amber-50 rounded-xl flex items-center justify-center text-4xl">{p.emoji}</span>}
                     <span className="flex-1">{p.name}</span>
                     {localSearch && <span className="text-xs text-gray-400">{CAT_ICONS[p.category]}</span>}
                     <label className="cursor-pointer p-1 text-gray-300 hover:text-amber-500">
@@ -7558,7 +7536,7 @@ export default function LikeBirdApp() {
                       <span className="text-sm text-gray-500">{productPhoto ? '✅ Фото загружено' : '📷 Нажмите для загрузки'}</span>
                       <input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { try { const compressed = await compressImage(f, 600, 0.8); setProductPhoto(compressed); showNotification('📷 Фото загружено'); } catch { showNotification('Ошибка загрузки', 'error'); } }}} className="hidden" />
                     </label>
-                    {productPhoto && <div className="mt-2 relative"><img src={productPhoto} className="w-32 h-32 object-cover rounded-xl border border-gray-200 shadow-sm" /><button onClick={() => setProductPhoto(null)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">×</button></div>}
+                    {productPhoto && <div className="mt-2 relative"><img src={productPhoto} className="w-36 h-36 object-cover rounded-xl border border-gray-200 shadow-sm" /><button onClick={() => setProductPhoto(null)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">×</button></div>}
                   </div>
                   <button onClick={() => {
                     if (newProduct.name && newProduct.price) {
@@ -7581,9 +7559,9 @@ export default function LikeBirdApp() {
                     {[...items.map(p => ({...p, category: cat, isBase: true})), ...customProducts.filter(p => p.category === cat).map(p => ({...p, isBase: false}))].map((prod, i) => (
                       <div key={prod.name + i} className={`flex items-center gap-2 p-2 rounded-lg text-sm ${prod.isBase ? 'bg-gray-50' : 'bg-purple-50'}`}>
                         {productPhotos[prod.name] ? (
-                          <img src={productPhotos[prod.name]} className="w-16 h-16 rounded-xl object-cover flex-shrink-0 border border-gray-200 shadow-sm" />
+                          <img src={productPhotos[prod.name]} className="w-20 h-20 rounded-xl object-cover flex-shrink-0 border border-gray-200 shadow-sm" />
                         ) : (
-                          <span className="text-2xl flex-shrink-0 w-16 h-16 bg-gray-50 rounded-xl flex items-center justify-center text-3xl">{prod.emoji}</span>
+                          <span className="text-2xl flex-shrink-0 w-20 h-20 bg-gray-50 rounded-xl flex items-center justify-center text-4xl">{prod.emoji}</span>
                         )}
                         {editingProduct === prod.name ? (
                           <div className="flex-1 flex gap-1">
