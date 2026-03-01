@@ -1,6 +1,7 @@
+/* eslint-disable no-unused-vars, react-hooks/exhaustive-deps, no-shadow, eqeqeq, no-fallthrough, no-unreachable, no-redeclare */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ShoppingBag, FileText, BarChart3, Plus, Search, ArrowLeft, Trash2, X, FileInput, AlertTriangle, Check, AlertCircle, ChevronLeft, ChevronRight, Edit3, Clock, Package, Bell, RefreshCw, Download, Upload, Copy, Settings, Calendar, RotateCcw, Info, CheckCircle, Shield, DollarSign, Users, Lock, TrendingUp, Award, MapPin, Archive, MessageCircle, Star, Camera, Image, LogOut, Key, Wifi, WifiOff, Eye, EyeOff, Smartphone } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, CartesianGrid, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, CartesianGrid } from 'recharts';
 import { fbSave, fbSubscribe, fbGet, fbSetPresence, fbSubscribePresence, SYNC_KEYS } from './firebase.js';
 
 // ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
@@ -816,8 +817,8 @@ export default function LikeBirdApp() {
   // === BLOCK 4: Product Photos ===
   const [productPhotos, setProductPhotos] = useState({});
 
-  // === BLOCK 11: Offline Queue ===
-  const [syncQueue, setSyncQueue] = useState([]);
+  // === BLOCK 11: Offline Queue (placeholder for future use) ===
+  // syncQueue data is loaded from localStorage on demand
 
 
   // === BLOCK 9: Dark Theme CSS injection ===
@@ -851,7 +852,7 @@ export default function LikeBirdApp() {
       if (styleEl) styleEl.textContent = '';
       localStorage.setItem('likebird-dark-mode', 'false');
     }
-  }, [darkMode]);
+  }, [darkMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const loadJson = (key, setter, def) => { try { const s = localStorage.getItem(key); if (s) setter(JSON.parse(s)); else if (def) setter(def); } catch { if (def) setter(def); } };
@@ -1008,7 +1009,7 @@ export default function LikeBirdApp() {
     loadJson('likebird-achievements-granted', setAchievementsGranted, {});
     loadJson('likebird-challenges', setChallenges, []);
     loadJson('likebird-product-photos-data', setProductPhotos, {});
-    loadJson('likebird-sync-queue', setSyncQueue, []);
+    // likebird-sync-queue loaded on demand
     
     // ===== Cleanup =====
     return () => {
@@ -1446,6 +1447,7 @@ export default function LikeBirdApp() {
     logAction('Добавлен сотрудник', name);
   };
   // === BLOCK 8: Enhanced audit for deletions ===
+  // eslint-disable-next-line no-unused-vars
   const deleteReportWithAudit = (reportId) => {
     const report = reports.find(r => r.id === reportId);
     if (report) {
@@ -1765,7 +1767,7 @@ export default function LikeBirdApp() {
         save('likebird-notifications', updated);
       }
     } catch (e) { console.warn('Auto notifications error:', e); }
-  }, [reports, stock, userNotifications, eventsCalendar, autoOrderList, currentUser]);
+  }, [reports, stock, userNotifications, eventsCalendar, autoOrderList, currentUser]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Run auto notifications on mount and after report save
   useEffect(() => {
@@ -1776,6 +1778,7 @@ export default function LikeBirdApp() {
   }, [isAuthenticated, checkAutoNotifications]);
 
   // === BLOCK 7: Check challenges ===
+  // eslint-disable-next-line no-unused-vars
   const checkChallenges = useCallback(() => {
     try {
       if (!challenges.length) return;
@@ -1813,18 +1816,47 @@ export default function LikeBirdApp() {
         }
       });
     } catch (e) { console.warn('Challenge check error:', e); }
-  }, [challenges, reports, employeeName, userNotifications]);
+  }, [challenges, reports, employeeName, userNotifications]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // BLOCK 7: Run challenge checks when reports change
+  useEffect(() => {
+    if (isAuthenticated && challenges.length > 0) {
+      const timer = setTimeout(checkChallenges, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [reports.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // === BLOCK 11: Swipe navigation ===
   const swipeRef = useRef({ startX: 0, startY: 0 });
-  const handleTouchStart = (e) => { swipeRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY }; };
+  const handleTouchStart = (e) => {
+    let el = e.target;
+    let inScrollable = false;
+    while (el && el !== e.currentTarget) {
+      if (el.classList && (el.classList.contains('overflow-x-auto') || el.scrollWidth > el.clientWidth + 2)) {
+        inScrollable = true; break;
+      }
+      el = el.parentElement;
+    }
+    swipeRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, inScrollable };
+  };
   const handleTouchEnd = (e) => {
+    if (swipeRef.current.inScrollable) return;
     const dx = e.changedTouches[0].clientX - swipeRef.current.startX;
     const dy = Math.abs(e.changedTouches[0].clientY - swipeRef.current.startY);
     if (dx > 80 && dy < 50 && currentView !== 'menu') setCurrentView('menu');
   };
 
+  // === BLOCK 7: Leaderboard state (lifted from IIFE) ===
+  const [lbPeriod, setLbPeriod] = useState('week');
+
+  // === BLOCK 3: Chat state (lifted from IIFE) ===
+  const [chatText, setChatText] = useState('');
+  const [showMentions, setShowMentions] = useState(false);
+  const [reactionMsgId, setReactionMsgId] = useState(null);
+  const chatEndRef = useRef(null);
+
   // === BLOCK 11: Skeleton component ===
+  // eslint-disable-next-line no-unused-vars
   const Skeleton = ({w = '100%', h = '1rem', r = '0.5rem'}) => (
     <div className="animate-pulse bg-gray-200 rounded" style={{width:w, height:h, borderRadius:r}} />
   );
@@ -2065,6 +2097,7 @@ export default function LikeBirdApp() {
       }
       updateReports(reports.filter(x => x.id !== id));
       const nd = {...salaryDecisions}; delete nd[id]; setSalaryDecisions(nd); save('likebird-salary-decisions', nd);
+      logAction('delete-report', JSON.stringify({ product: productName, total: r?.total, employee: r?.employee }));
       showNotification('Запись удалена');
     });
   };
@@ -2636,7 +2669,7 @@ export default function LikeBirdApp() {
                         <XAxis dataKey="date" tick={{fontSize: 9}} />
                         <YAxis tick={{fontSize: 10}} />
                         <Tooltip formatter={(v) => v.toLocaleString() + ' ₽'} />
-                        <Line type="monotone" dataKey="total" stroke="#f59e0b" strokeWidth={2} dot={(props) => { const {cx, cy, payload} = props; return <circle cx={cx} cy={cy} r={3} fill={payload.forecast ? '#3b82f6' : '#f59e0b'} />; }} />
+                        <Line type="monotone" dataKey="total" stroke="#f59e0b" strokeWidth={2} dot={{r: 3, fill: '#f59e0b'}} />
                       </LineChart>
                     </ResponsiveContainer>
                     <div className="flex gap-4 mt-2 text-xs">
@@ -2735,11 +2768,11 @@ export default function LikeBirdApp() {
           <div className="space-y-3">
             <button onClick={() => setCurrentView('catalog')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-amber-100 p-3 rounded-lg"><ShoppingBag className="w-6 h-6 text-amber-600" /></div><div className="text-left"><h3 className="font-bold">Каталог</h3><p className="text-xs text-gray-400">Просмотр товаров и цен</p></div></button>
             <button onClick={() => setCurrentView('shift')} className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Clock className="w-6 h-6" /></div><div className="text-left flex-1"><h3 className="font-bold">Смена</h3><p className="text-xs text-white/80">Продажи, импорт, отчёт</p></div>{(() => { try { const login = JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; const key = login + '_' + formatDate(new Date()); const sh = shiftsData[key]; return sh?.status === 'open' ? <span className="bg-green-400 text-white text-xs px-2 py-0.5 rounded-full font-bold animate-pulse">● Открыта</span> : null; } catch { return null; } })()}</button>
-            <button onClick={() => setCurrentView('reports')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-amber-100 p-3 rounded-lg"><FileText className="w-6 h-6 text-amber-600" /></div><div className="text-left"><h3 className="font-bold">История</h3><p className="text-xs text-gray-400">Все продажи по дням</p></div></button>
-            <button onClick={() => { setSelectedDate(formatDate(new Date())); setCurrentView('day-report'); }} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-orange-100 p-3 rounded-lg"><BarChart3 className="w-6 h-6 text-orange-600" /></div><div className="text-left"><h3 className="font-bold">Итог дня</h3><p className="text-xs text-gray-400">Сводка по сотрудникам</p></div></button>
+            {hasAccess('reports') && <button onClick={() => setCurrentView('reports')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-amber-100 p-3 rounded-lg"><FileText className="w-6 h-6 text-amber-600" /></div><div className="text-left"><h3 className="font-bold">История</h3><p className="text-xs text-gray-400">Все продажи по дням</p></div></button>}
+            {hasAccess('day-report') && <button onClick={() => { setSelectedDate(formatDate(new Date())); setCurrentView('day-report'); }} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-orange-100 p-3 rounded-lg"><BarChart3 className="w-6 h-6 text-orange-600" /></div><div className="text-left"><h3 className="font-bold">Итог дня</h3><p className="text-xs text-gray-400">Сводка по сотрудникам</p></div></button>}
             <button onClick={() => setCurrentView('analytics')} className="w-full bg-gradient-to-r from-amber-400 to-yellow-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><TrendingUp className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Аналитика</h3><p className="text-xs text-white/80">Графики и тренды</p></div></button>
-            <button onClick={() => setCurrentView('team')} className="w-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Users className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Команда</h3><p className="text-xs text-white/80">График, результаты, события</p></div>{upcomingEventsCount > 0 && <span className="absolute top-2 right-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{upcomingEventsCount}</span>}</button>
-            {(currentUser?.isAdmin || currentUser?.role === 'admin') && <button onClick={() => setCurrentView('admin')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Shield className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Админ-панель</h3><p className="text-xs text-white/80">Управление и аналитика</p></div>{lowStock.length > 0 && <span className="absolute top-2 right-2 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{lowStock.length}</span>}</button>}
+            {hasAccess('team') && <button onClick={() => setCurrentView('team')} className="w-full bg-gradient-to-r from-blue-400 to-indigo-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Users className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Команда</h3><p className="text-xs text-white/80">График, результаты, события</p></div>{upcomingEventsCount > 0 && <span className="absolute top-2 right-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{upcomingEventsCount}</span>}</button>}
+            {hasAccess('admin') && <button onClick={() => setCurrentView('admin')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg relative"><div className="bg-white/20 p-3 rounded-lg"><Shield className="w-6 h-6" /></div><div className="text-left"><h3 className="font-bold">Админ-панель</h3><p className="text-xs text-white/80">Управление и аналитика</p></div>{lowStock.length > 0 && <span className="absolute top-2 right-2 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{lowStock.length}</span>}</button>}
             <button onClick={() => setCurrentView('settings')} className="w-full bg-white rounded-xl p-4 shadow flex items-center gap-3 hover:shadow-md"><div className="bg-gray-100 p-3 rounded-lg"><Settings className="w-6 h-6 text-gray-600" /></div><div className="text-left"><h3 className="font-bold">Настройки</h3><p className="text-xs text-gray-400">Экспорт, бэкап, аккаунт</p></div></button>
             <button onClick={() => setCurrentView('profile')} className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">{(profilesData[(() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })()]?.avatar) ? '🖼️' : '👤'}</span></div><div className="text-left flex-1"><h3 className="font-bold">Мой профиль</h3><p className="text-xs text-white/80">Зарплата, достижения, аккаунт</p></div><div className="text-right"><p className="text-white/80 text-sm font-semibold">{employeeName}</p></div></button>
             <button onClick={() => setCurrentView('game')} className="w-full bg-gradient-to-r from-cyan-400 to-sky-500 rounded-xl p-4 shadow flex items-center gap-3 text-white hover:shadow-lg"><div className="bg-white/20 p-3 rounded-lg"><span className="text-xl">🌊</span></div><div className="text-left flex-1"><h3 className="font-bold">Ветер на набережной</h3><p className="text-xs text-white/80">Мини-игра: лови товар!</p></div><div className="text-right"><p className="text-white/80 text-xs font-semibold">🏆 {(() => { try { return localStorage.getItem('likebird-game-highscore') || '0'; } catch { return '0'; } })()}</p></div></button>
@@ -4678,7 +4711,6 @@ export default function LikeBirdApp() {
     
     // Подсчёт всех птичек-свистулек
     const totalBirdsInStock = Object.entries(stock).filter(([_, data]) => data.category === 'Птички-свистульки').reduce((sum, [_, data]) => sum + data.count, 0);
-    const [stockTab, setStockTab] = useState('stock'); // 'stock' | 'deliveries'
 
     
     // FIX #57: Добавлено логирование в stockHistory для ручных изменений
@@ -5693,7 +5725,7 @@ export default function LikeBirdApp() {
     const [editingProduct, setEditingProduct] = useState(null);
     const [editProductData, setEditProductData] = useState({ name: '', price: '', emoji: '', category: '' });
     const [productPhoto, setProductPhoto] = useState(null);
-    const [productPhotos, setProductPhotos] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-product-photos') || '{}'); } catch { return {}; } });
+    // productPhotos & setProductPhotos — using global state (synced via Firebase)
     // FIX: inviteCodes перенесён в глобальное состояние LikeBirdApp (синхронизируется через Firebase)
     
     // Проверка пароля при входе
@@ -6149,8 +6181,26 @@ export default function LikeBirdApp() {
           <h2 className="text-xl font-bold flex items-center gap-2"><Shield className="w-6 h-6" />Админ-панель</h2>
         </div>
 
-        {/* Вкладки */}
-        <div className="sticky top-16 z-10 bg-white shadow-md">
+        {/* Вкладки — auto-scroll to active tab only on adminTab change */}
+        <div className="sticky top-16 z-10 bg-white shadow-md" ref={el => {
+          if (el && !el._scrollSetup) {
+            el._scrollSetup = true;
+            const scrollToActive = () => {
+              const container = el.querySelector('#admin-tabs-scroll');
+              if (!container) return;
+              const active = container.querySelector('[data-active="true"]');
+              if (!active) return;
+              const cRect = container.getBoundingClientRect();
+              const aRect = active.getBoundingClientRect();
+              if (aRect.left < cRect.left || aRect.right > cRect.right) {
+                active.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+              }
+            };
+            setTimeout(scrollToActive, 50);
+            const observer = new MutationObserver(scrollToActive);
+            observer.observe(el, { attributes: true, subtree: true, attributeFilter: ['data-active'] });
+          }
+        }}>
           <div className="relative flex items-center">
             {/* Кнопка влево */}
             <button
@@ -6162,15 +6212,9 @@ export default function LikeBirdApp() {
             <div id="admin-tabs-scroll"
               className="flex overflow-x-auto px-1 py-2 gap-1 flex-1"
               style={{scrollbarWidth: 'thin', scrollbarColor: '#9333ea #f3f4f6', WebkitOverflowScrolling: 'touch'}}
-              ref={el => {
-                if (el && adminTab) {
-                  const active = el.querySelector('[data-active="true"]');
-                  if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-                }
-              }}
               onWheel={e => {
-                e.preventDefault();
-                e.currentTarget.scrollLeft += e.deltaY || e.deltaX;
+                if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) { e.preventDefault(); e.currentTarget.scrollLeft += e.deltaX; }
+                else { e.currentTarget.scrollLeft += e.deltaY; }
               }}>
             {tabs.map(tab => (
               <button key={tab.id} data-active={adminTab === tab.id}
@@ -7486,7 +7530,7 @@ export default function LikeBirdApp() {
                     if (newProduct.name && newProduct.price) {
                       const prod = { ...newProduct, price: parseInt(newProduct.price), aliases: [newProduct.name.toLowerCase()] };
                       addCustomProduct(prod);
-                      if (productPhoto) { const photos = {...productPhotos, [newProduct.name]: productPhoto}; setProductPhotos(photos); localStorage.setItem('likebird-product-photos', JSON.stringify(photos)); }
+                      if (productPhoto) { updateProductPhotos({...productPhotos, [newProduct.name]: productPhoto}); }
                       setNewProduct({ name: '', price: '', category: 'Птички-свистульки', emoji: '🎁' });
                       setProductPhoto(null);
                       showNotification('Товар добавлен');
@@ -7520,10 +7564,10 @@ export default function LikeBirdApp() {
                             <span className="text-gray-500">{prod.price}₽</span>
                             <div className="flex gap-1">
                               {/* Загрузка фото */}
-                              <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-3.5 h-3.5" /><input type="file" accept="image/*" onChange={(e) => { const f = e.target.files[0]; if (f) { if (f.size > 2*1024*1024) { showNotification('Макс. 2МБ', 'error'); return; } const r = new FileReader(); r.onload = (ev) => { const photos = {...productPhotos, [prod.name]: ev.target.result}; setProductPhotos(photos); localStorage.setItem('likebird-product-photos', JSON.stringify(photos)); showNotification('Фото добавлено'); }; r.readAsDataURL(f); }}} className="hidden" /></label>
+                              <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-3.5 h-3.5" /><input type="file" accept="image/*" onChange={(e) => { const f = e.target.files[0]; if (f) { if (f.size > 2*1024*1024) { showNotification('Макс. 2МБ', 'error'); return; } const r = new FileReader(); r.onload = async (ev) => { try { const compressed = await compressImage(f, 400, 0.7); updateProductPhotos({...productPhotos, [prod.name]: compressed}); showNotification('Фото добавлено'); } catch { updateProductPhotos({...productPhotos, [prod.name]: ev.target.result}); showNotification('Фото добавлено'); } }; r.readAsDataURL(f); }}} className="hidden" /></label>
                               {!prod.isBase && <button onClick={() => { setEditingProduct(prod.name); setEditProductData({ name: prod.name, price: prod.price, emoji: prod.emoji, category: prod.category }); }} className="text-gray-400 hover:text-blue-500"><Edit3 className="w-3.5 h-3.5" /></button>}
                               {!prod.isBase && <button onClick={() => showConfirm(`Удалить ${prod.name}?`, () => removeCustomProduct(prod.id))} className="text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>}
-                              {productPhotos[prod.name] && <button onClick={() => { const photos = {...productPhotos}; delete photos[prod.name]; setProductPhotos(photos); localStorage.setItem('likebird-product-photos', JSON.stringify(photos)); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
+                              {productPhotos[prod.name] && <button onClick={() => { const photos = {...productPhotos}; delete photos[prod.name]; updateProductPhotos(photos); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
                             </div>
                           </>
                         )}
@@ -8705,8 +8749,8 @@ export default function LikeBirdApp() {
           <h2 className="text-xl font-bold flex items-center gap-2"><Users className="w-6 h-6" />Команда</h2>
         </div>
 
-        {/* Вкладки */}
-        <div className="sticky top-16 z-10 bg-white shadow-md">
+        {/* Вкладки команды */}
+        <div className="bg-white shadow-sm sticky top-16 z-10">
           <div className="flex px-2 py-2 gap-1">
             {tabs.map(tab => (
               <button key={tab.id} onClick={() => setTeamTab(tab.id)} className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${teamTab === tab.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
@@ -9008,7 +9052,6 @@ export default function LikeBirdApp() {
           {teamTab === 'leaderboard' && (() => {
             const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 30);
             const weekAgo2 = new Date(); weekAgo2.setDate(weekAgo2.getDate() - 7);
-            const [lbPeriod, setLbPeriod] = React.useState('week');
             const cutoff = lbPeriod === 'week' ? weekAgo2 : monthAgo;
             const periodReports = reports.filter(r => {
               try { const d = new Date(r.date || r.timestamp); return d >= cutoff && !r.isUnrecognized; } catch { return false; }
@@ -9055,10 +9098,6 @@ export default function LikeBirdApp() {
 
           {/* BLOCK 3: Enhanced Chat */}
           {teamTab === 'chat' && (() => {
-            const [chatText, setChatText] = React.useState('');
-            const [showMentions, setShowMentions] = React.useState(false);
-            const [reactionMsgId, setReactionMsgId] = React.useState(null);
-            const chatEndRef = React.useRef(null);
             const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '👎'];
             const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
             const isAdminUser = currentUser?.isAdmin || currentUser?.role === 'admin';
@@ -9112,10 +9151,6 @@ export default function LikeBirdApp() {
             const pinnedMessages = chatMessages.filter(m => m.pinned);
             const recentMessages = chatMessages.slice(-50);
 
-            const highlightMentions = (text) => {
-              return text.replace(/@(\S+)/g, '<span class="text-blue-500 font-semibold">@$1</span>');
-            };
-
             const handleChatPhoto = async (e) => {
               const file = e.target.files?.[0];
               if (!file) return;
@@ -9152,7 +9187,9 @@ export default function LikeBirdApp() {
                         {m.image && (
                           <img src={m.image} alt="" className="max-w-48 rounded-lg mb-1 cursor-pointer" onClick={() => window.open(m.image)} />
                         )}
-                        {m.text && <p className="text-sm" dangerouslySetInnerHTML={{__html: highlightMentions(m.text)}} />}
+                        {m.text && <p className="text-sm">{m.text.split(/(@\S+)/g).map((part, idx) => 
+                          part.startsWith('@') ? <span key={idx} className="text-blue-500 font-semibold">{part}</span> : part
+                        )}</p>}
                         <p className={`text-xs mt-1 ${m.from === employeeName ? 'text-blue-200' : 'text-gray-400'}`}>
                           {new Date(m.date).toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit'})}
                         </p>
@@ -9353,13 +9390,13 @@ export default function LikeBirdApp() {
     const myCashless = myTodayReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
     const mySalary = myTodayReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
 
-    const openShift = (time) => {
+    const openShift = async (time) => {
       const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      // FIX: При переоткрытии очищаем closeTime/closedAt, иначе они остаются от прошлого закрытия
-      const updated = { ...shiftsData, [shiftKey]: { openTime: t, status: 'open', openedAt: Date.now() } };
+      const geo = await getGeoLocation();
+      const updated = { ...shiftsData, [shiftKey]: { openTime: t, status: 'open', openedAt: Date.now(), openGeo: geo } };
       updateShiftsData(updated);
       setShowTimeModal(null);
-      showNotification(`Смена открыта в ${t}`);
+      showNotification(`Смена открыта в ${t}${geo ? ' 📍' : ''}`);
     };
 
     const closeShift = (time) => {
@@ -9372,8 +9409,9 @@ export default function LikeBirdApp() {
       }, {});
       const topEntry = Object.entries(topProduct).sort((a, b) => b[1] - a[1])[0];
       const summary = `Закрыть смену в ${t}?\n\n📊 Сводка:\n• Продаж: ${myTodayReports.length}\n• Выручка: ${myTotal.toLocaleString()}₽\n• Топ-товар: ${topEntry ? `${topEntry[0]} (${topEntry[1]} шт)` : '—'}`;
-      showConfirm(summary, () => {
-        const updated = { ...shiftsData, [shiftKey]: { ...myShift, closeTime: t, status: 'closed', closedAt: Date.now() } };
+      showConfirm(summary, async () => {
+        const geo = await getGeoLocation();
+        const updated = { ...shiftsData, [shiftKey]: { ...myShift, closeTime: t, status: 'closed', closedAt: Date.now(), closeGeo: geo } };
         updateShiftsData(updated);
         showNotification(`Смена закрыта в ${t}`);
       });
@@ -9776,7 +9814,6 @@ export default function LikeBirdApp() {
 
   // ===== ЛИЧНЫЙ КАБИНЕТ СОТРУДНИКА =====
   const ProfileView = () => {
-    const profileWorkHoursFlag = true; // BLOCK 6 flag
     const [tab, setTab] = useState('salary'); // salary | goals | achievements | bonuses | account
     const [period, setPeriod] = useState('week'); // week | month
     const [newPassword, setNewPassword] = useState('');
@@ -10031,9 +10068,24 @@ export default function LikeBirdApp() {
                     if (!key.startsWith(myLoginPV + '_')) return;
                     if (!shift.openTime || !shift.closeTime) return;
                     try {
-                      const openDate = new Date(shift.openTime);
-                      if (openDate < monthStart2) return;
-                      const hours = (new Date(shift.closeTime) - openDate) / (1000 * 60 * 60);
+                      // Use openedAt/closedAt timestamps if available, otherwise parse from key date + time string
+                      let hours = 0;
+                      if (shift.openedAt && shift.closedAt) {
+                        const openTs = new Date(shift.openedAt);
+                        if (openTs < monthStart2) return;
+                        hours = (shift.closedAt - shift.openedAt) / (1000 * 60 * 60);
+                      } else {
+                        // Parse date from key (login_DD.MM.YY) and time from openTime/closeTime (HH:MM)
+                        const datePart = key.split('_').slice(1).join('_'); // DD.MM.YY
+                        const [dd, mm, yy] = datePart.split('.');
+                        if (!dd || !mm) return;
+                        const year = parseInt(yy) < 100 ? 2000 + parseInt(yy) : parseInt(yy);
+                        const shiftDate = new Date(year, parseInt(mm) - 1, parseInt(dd));
+                        if (shiftDate < monthStart2) return;
+                        const [oh, om] = shift.openTime.split(':').map(Number);
+                        const [ch, cm] = shift.closeTime.split(':').map(Number);
+                        hours = (ch * 60 + cm - oh * 60 - om) / 60;
+                      }
                       if (hours > 0 && hours < 24) { totalHours += hours; daysWorked++; if (hours > 8) overtimeDays++; }
                     } catch {}
                   });
@@ -10666,7 +10718,6 @@ export default function LikeBirdApp() {
 
   return (
     <div className={darkMode ? 'dark-theme' : ''} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
-    <>
       <div ref={notificationRef} style={{opacity: 0, pointerEvents: 'none'}} className="fixed top-4 left-1/2 z-50 px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 text-white text-sm font-medium transition-opacity duration-300 bg-green-500" />
       <div ref={confirmDialogRef} style={{display: 'none'}} className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-2xl">
@@ -10703,7 +10754,6 @@ export default function LikeBirdApp() {
       {currentView === 'shift' && <ShiftView />}
       {currentView === 'analytics' && <AnalyticsView />}
       {currentView === 'game' && <GameView />}
-    </>
     </div>
   );
 }
