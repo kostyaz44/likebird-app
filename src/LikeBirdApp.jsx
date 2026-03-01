@@ -10094,7 +10094,7 @@ export default function LikeBirdApp() {
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between"><span className="text-gray-500">Дней отработано:</span><span className="font-bold">{daysWorked}</span></div>
                       <div className="flex justify-between"><span className="text-gray-500">Часов всего:</span><span className="font-bold">{totalHours} ч</span></div>
-                      {overtimeDays > 0 && <div className="flex justify-between"><span className="text-gray-500">Переработки (>8ч):</span><span className="font-bold text-red-500">{overtimeDays} дн</span></div>}
+                      {overtimeDays > 0 && <div className="flex justify-between"><span className="text-gray-500">Переработки (&gt;8ч):</span><span className="font-bold text-red-500">{overtimeDays} дн</span></div>}
                       <div className="flex justify-between"><span className="text-gray-500">Ср. часов/день:</span><span className="font-bold">{daysWorked > 0 ? (totalHours / daysWorked).toFixed(1) : 0} ч</span></div>
                     </div>
                   );
