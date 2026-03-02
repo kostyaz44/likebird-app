@@ -50,7 +50,7 @@ const SyncManager = {
 
   // Экспорт всех данных
   exportAll: () => {
-    const data = { _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _syncId: SyncManager.getSyncId() };
+    const data = { _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _syncId: SyncManager.getSyncId(), _mediaPhotos: productPhotos, _shiftPhotos: shiftPhotos, _mediaIndex: [...(mediaKeysRef.current || [])] };
     SyncManager.ALL_KEYS.forEach(key => {
       try { const v = localStorage.getItem(key); if (v) data[key] = JSON.parse(v); } catch { const v = localStorage.getItem(key); if (v) data[key] = v; }
     });
@@ -814,8 +814,10 @@ export default function LikeBirdApp() {
   // === BLOCK 7: Gamification — Challenges ===
   const [challenges, setChallenges] = useState([]);
 
-  // === BLOCK 4: Product Photos ===
+  // === BLOCK 4: Product Photos (MediaStore — per-photo Firebase keys) ===
   const [productPhotos, setProductPhotos] = useState({});
+  const [shiftPhotos, setShiftPhotos] = useState({});
+  const mediaKeysRef = useRef(new Set());
 
   // === BLOCK 11: Offline Queue (placeholder for future use) ===
   // syncQueue data is loaded from localStorage on demand
@@ -1008,7 +1010,32 @@ export default function LikeBirdApp() {
     loadJson('likebird-shifts', setShiftsData, {});
     loadJson('likebird-achievements-granted', setAchievementsGranted, {});
     loadJson('likebird-challenges', setChallenges, []);
-    loadJson('likebird-product-photos-data', setProductPhotos, {});
+    // Загрузка фото из MediaStore (per-photo ключи)
+    loadJson('likebird-product-photos-data', (legacy) => {
+      // Загружаем индекс
+      let idx = [];
+      try { idx = JSON.parse(localStorage.getItem('likebird-media-index') || '[]'); } catch {}
+      const photos = {};
+      // Сначала загружаем из per-photo ключей
+      for (const name of idx) {
+        try {
+          const k = 'likebird-mp-' + name.replace(/[^a-zA-Zа-яА-ЯёЁ0-9]/g, '_');
+          const v = localStorage.getItem(k);
+          if (v && v.startsWith('data:')) photos[name] = v;
+        } catch {}
+      }
+      // Дополняем из legacy (если per-photo ключа нет)
+      if (legacy && typeof legacy === 'object') {
+        for (const [name, val] of Object.entries(legacy)) {
+          if (val && !photos[name]) photos[name] = val;
+        }
+      }
+      setProductPhotos(photos);
+      // Обновляем mediaKeysRef
+      mediaKeysRef.current = new Set(Object.keys(photos));
+    }, {});
+    // Загрузка фото смен
+    loadJson('likebird-shift-photos', setShiftPhotos, {});
     // likebird-sync-queue loaded on demand
     
     // ===== Cleanup =====
@@ -1047,14 +1074,14 @@ export default function LikeBirdApp() {
         setReports(migrated);
         localStorage.setItem('likebird-reports', JSON.stringify(migrated));
       }),
-      guardedSubscribe('likebird-expenses', (val) => { setExpenses(val); localStorage.setItem('likebird-expenses', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-stock', (val) => { setStock(val); localStorage.setItem('likebird-stock', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-given', (val) => { setGivenToAdmin(val); localStorage.setItem('likebird-given', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); localStorage.setItem('likebird-owncard', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-partners', (val) => { setPartnerStock(val); localStorage.setItem('likebird-partners', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-schedule', (val) => { setScheduleData(val); localStorage.setItem('likebird-schedule', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-expenses', (val) => { setExpenses(val); try { localStorage.setItem('likebird-expenses', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-stock', (val) => { setStock(val); try { localStorage.setItem('likebird-stock', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-given', (val) => { setGivenToAdmin(val); try { localStorage.setItem('likebird-given', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); try { localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); try { localStorage.setItem('likebird-owncard', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-partners', (val) => { setPartnerStock(val); try { localStorage.setItem('likebird-partners', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); try { localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-schedule', (val) => { setScheduleData(val); try { localStorage.setItem('likebird-schedule', JSON.stringify(val)); } catch {} }),
       guardedSubscribe('likebird-events', (val) => {
         // Миграция: старый формат { date: eventObj } → новый { date: [eventObj, ...] }
         if (val && typeof val === 'object') {
@@ -1067,9 +1094,9 @@ export default function LikeBirdApp() {
           localStorage.setItem('likebird-events', JSON.stringify(migrated));
         }
       }),
-      guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); localStorage.setItem('likebird-manuals', JSON.stringify(val)); } }),
-      guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); localStorage.setItem('likebird-admin-password', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); try { localStorage.setItem('likebird-manuals', JSON.stringify(val)); } catch {} } }),
+      guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); try { localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); try { localStorage.setItem('likebird-admin-password', JSON.stringify(val)); } catch {} }),
       guardedSubscribe('likebird-employees', (val) => {
         if (!Array.isArray(val)) return;
         // Синхронизируем employees с registered users: добавляем недостающих
@@ -1078,32 +1105,61 @@ export default function LikeBirdApp() {
         regUsers.forEach(u => {
           const name = u.name || u.login;
           if (!merged.find(e => e.name === name)) {
-            merged.push({ id: Date.now() + Math.random(), name, role: u.role || 'seller', salaryMultiplier: 1.0, active: true });
+            merged.push({ id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), name, role: u.role || 'seller', salaryMultiplier: 1.0, active: true });
           }
         });
         setEmployees(merged);
         localStorage.setItem('likebird-employees', JSON.stringify(merged));
       }),
-      guardedSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-audit-log', (val) => { setAuditLog(val); localStorage.setItem('likebird-audit-log', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); localStorage.setItem('likebird-custom-products', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-locations', (val) => { setLocations(val); localStorage.setItem('likebird-locations', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-penalties', (val) => { setPenalties(val); localStorage.setItem('likebird-penalties', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-bonuses', (val) => { setBonuses(val); localStorage.setItem('likebird-bonuses', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-timeoff', (val) => { setTimeOff(val); localStorage.setItem('likebird-timeoff', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); localStorage.setItem('likebird-ratings', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-chat', (val) => { setChatMessages(val); localStorage.setItem('likebird-chat', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-stock-history', (val) => { setStockHistory(val); localStorage.setItem('likebird-stock-history', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); localStorage.setItem('likebird-autoorder', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); localStorage.setItem('likebird-kpi', JSON.stringify(val)); }),
-      guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } }),
-      guardedSubscribe('likebird-challenges', (val) => { if (Array.isArray(val)) { setChallenges(val); localStorage.setItem('likebird-challenges', JSON.stringify(val)); } }),
-      guardedSubscribe('likebird-product-photos-data', (val) => { if (val && typeof val === 'object') { setProductPhotos(val); try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(val)); } catch {} } }),
+      guardedSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); try { localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-audit-log', (val) => { setAuditLog(val); try { localStorage.setItem('likebird-audit-log', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); try { localStorage.setItem('likebird-custom-products', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-locations', (val) => { setLocations(val); try { localStorage.setItem('likebird-locations', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); try { localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-penalties', (val) => { setPenalties(val); try { localStorage.setItem('likebird-penalties', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-bonuses', (val) => { setBonuses(val); try { localStorage.setItem('likebird-bonuses', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-timeoff', (val) => { setTimeOff(val); try { localStorage.setItem('likebird-timeoff', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); try { localStorage.setItem('likebird-ratings', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-chat', (val) => { setChatMessages(val); try { localStorage.setItem('likebird-chat', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-stock-history', (val) => { setStockHistory(val); try { localStorage.setItem('likebird-stock-history', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); try { localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); try { localStorage.setItem('likebird-autoorder', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); try { localStorage.setItem('likebird-kpi', JSON.stringify(val)); } catch {} }),
+      guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); try { localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } catch {} } }),
+      guardedSubscribe('likebird-challenges', (val) => { if (Array.isArray(val)) { setChallenges(val); try { localStorage.setItem('likebird-challenges', JSON.stringify(val)); } catch {} } }),
+      // MediaStore: подписка на индекс фото → загрузка каждого фото отдельно
+      guardedSubscribe('likebird-media-index', (idx) => {
+        if (!Array.isArray(idx)) return;
+        try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch {}
+        mediaKeysRef.current = new Set(idx);
+        // Загружаем каждое фото по отдельному ключу
+        idx.forEach(name => {
+          const k = 'likebird-mp-' + name.replace(/[^a-zA-Zа-яА-ЯёЁ0-9]/g, '_');
+          fbSubscribe(k, (val) => {
+            if (val && typeof val === 'string') {
+              setProductPhotos(prev => {
+                const next = { ...prev, [name]: val };
+                try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch {}
+                return next;
+              });
+              try { localStorage.setItem(k, val); } catch {}
+            }
+          });
+        });
+      }),
+      // Легаси подписка (для обратной совместимости)
+      guardedSubscribe('likebird-product-photos-data', (val) => {
+        if (val && typeof val === 'object') {
+          setProductPhotos(prev => {
+            const merged = { ...prev };
+            for (const [k, v] of Object.entries(val)) { if (v && !merged[k]) merged[k] = v; }
+            return merged;
+          });
+        }
+      }),
       guardedSubscribe('likebird-notifications', (val) => {
         if (!Array.isArray(val)) return;
-        localStorage.setItem('likebird-notifications', JSON.stringify(val));
+        try { localStorage.setItem('likebird-notifications', JSON.stringify(val)); } catch {}
         setUserNotifications(val);
         // Показать push-уведомления для НОВЫХ непрочитанных (но НЕ помечаем read автоматически)
         try {
@@ -1142,11 +1198,11 @@ export default function LikeBirdApp() {
           }
         } catch {}
       }),
-      guardedSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } }),
-      guardedSubscribe('likebird-profiles', (val) => { setProfilesData(val); localStorage.setItem('likebird-profiles', JSON.stringify(val)); }),
+      guardedSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); try { localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } catch {} } }),
+      guardedSubscribe('likebird-profiles', (val) => { setProfilesData(val); try { localStorage.setItem('likebird-profiles', JSON.stringify(val)); } catch {} }),
       guardedSubscribe('likebird-users', (val) => {
         if (!Array.isArray(val)) return;
-        localStorage.setItem('likebird-users', JSON.stringify(val));
+        try { localStorage.setItem('likebird-users', JSON.stringify(val)); } catch {}
         // Обновляем currentUser если его данные изменились (например роль)
         try {
           const authRaw = localStorage.getItem('likebird-auth');
@@ -1158,11 +1214,11 @@ export default function LikeBirdApp() {
         } catch {}
       }),
       guardedSubscribe('likebird-shifts', (val) => {
-        if (val && typeof val === 'object') { setShiftsData(val); localStorage.setItem('likebird-shifts', JSON.stringify(val)); }
+        if (val && typeof val === 'object') { setShiftsData(val); try { localStorage.setItem('likebird-shifts', JSON.stringify(val)); } catch {} }
       }),
       guardedSubscribe('likebird-invite-codes', (val) => {
         if (!Array.isArray(val)) return;
-        localStorage.setItem('likebird-invite-codes', JSON.stringify(val));
+        try { localStorage.setItem('likebird-invite-codes', JSON.stringify(val)); } catch {}
         setInviteCodes(val); // FIX: обновляем глобальное состояние
       }),
     ];
@@ -1270,7 +1326,7 @@ export default function LikeBirdApp() {
           // Уведомление сотруднику
           const notifKey = 'likebird-notifications';
           const existing = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
-          const notif = { id: Date.now() + Math.random(), type: 'achievement', targetLogin: login, title: `🏆 Новое достижение: ${ach.title}`, body: ach.desc || '', icon: ach.icon || '🏆', timestamp: Date.now(), read: false };
+          const notif = { id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), type: 'achievement', targetLogin: login, title: `🏆 Новое достижение: ${ach.title}`, body: ach.desc || '', icon: ach.icon || '🏆', timestamp: Date.now(), read: false };
           const updated = [notif, ...existing.slice(0, 49)];
           localStorage.setItem(notifKey, JSON.stringify(updated));
           // Сохраняем в Firebase чтобы уведомление дошло до устройства сотрудника
@@ -1279,7 +1335,7 @@ export default function LikeBirdApp() {
           if (ach.bonusAmount) {
             const matchedEmp = employees.find(e => e.name === empName);
             const empId = matchedEmp ? matchedEmp.id : login;
-            const bonus = { id: Date.now() + Math.random(), employeeId: empId, employeeName: empName, employeeLogin: login, achievementId: ach.id, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toISOString(), createdAt: Date.now() };
+            const bonus = { id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), employeeId: empId, employeeName: empName, employeeLogin: login, achievementId: ach.id, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toISOString(), createdAt: Date.now() };
             const newBonuses = [...bonuses, bonus];
             setBonuses(newBonuses);
             save('likebird-bonuses', newBonuses);
@@ -1425,7 +1481,7 @@ export default function LikeBirdApp() {
 
   // НОВОЕ: Функция аудита действий
   const logAction = (action, details) => {
-    const entry = { id: Date.now(), timestamp: new Date().toISOString(), action, details, user: employeeName || 'Аноним' };
+    const entry = { id: Date.now() + Math.random().toString(36).slice(2, 6), timestamp: new Date().toISOString(), action, details, user: employeeName || 'Аноним' };
     const updated = [entry, ...auditLog].slice(0, 500); // Храним последние 500 записей
     setAuditLog(updated);
     save('likebird-audit-log', updated);
@@ -1442,7 +1498,7 @@ export default function LikeBirdApp() {
   // НОВОЕ: Функции для управления сотрудниками
   const updateEmployees = (newEmployees) => { setEmployees(newEmployees); save('likebird-employees', newEmployees); };
   const addEmployee = (name, role = 'seller') => {
-    const newEmp = { id: Date.now(), name, role, salaryMultiplier: 1.0, active: true };
+    const newEmp = { id: Date.now() + Math.random().toString(36).slice(2, 6), name, role, salaryMultiplier: 1.0, active: true };
     updateEmployees([...employees, newEmp]);
     logAction('Добавлен сотрудник', name);
   };
@@ -1489,7 +1545,7 @@ export default function LikeBirdApp() {
   const updateCustomProducts = (products) => { setCustomProducts(products); save('likebird-custom-products', products); };
   const updateManuals = (newManuals) => { setManuals(newManuals); save('likebird-manuals', newManuals); };
   const addCustomProduct = (product) => {
-    const newProd = { ...product, id: Date.now(), isCustom: true };
+    const newProd = { ...product, id: Date.now() + Math.random().toString(36).slice(2, 6), isCustom: true };
     updateCustomProducts([...customProducts, newProd]);
     // FIX: Добавляем товар в склад (ранее кастомные не появлялись в остатках)
     if (!stock[product.name]) {
@@ -1515,7 +1571,7 @@ export default function LikeBirdApp() {
   // Локации
   const updateLocations = (locs) => { setLocations(locs); save('likebird-locations', locs); };
   const addLocation = (city, name) => {
-    const newLoc = { id: Date.now(), city, name, active: true };
+    const newLoc = { id: Date.now() + Math.random().toString(36).slice(2, 6), city, name, active: true };
     updateLocations([...locations, newLoc]);
     logAction('Добавлена точка', `${city} - ${name}`);
   };
@@ -1543,12 +1599,12 @@ export default function LikeBirdApp() {
   const updatePenalties = (p) => { setPenalties(p); save('likebird-penalties', p); };
   const updateBonuses = (b) => { setBonuses(b); save('likebird-bonuses', b); };
   const addPenalty = (employeeId, amount, reason, date = new Date().toISOString()) => {
-    const penalty = { id: Date.now(), employeeId, amount, reason, date };
+    const penalty = { id: Date.now() + Math.random().toString(36).slice(2, 6), employeeId, amount, reason, date };
     updatePenalties([...penalties, penalty]);
     logAction('Штраф добавлен', `${employees.find(e => e.id === employeeId)?.name}: ${amount}₽ - ${reason}`);
   };
   const addBonus = (employeeId, amount, reason, date = new Date().toISOString()) => {
-    const bonus = { id: Date.now(), employeeId, amount, reason, date };
+    const bonus = { id: Date.now() + Math.random().toString(36).slice(2, 6), employeeId, amount, reason, date };
     updateBonuses([...bonuses, bonus]);
     logAction('Бонус добавлен', `${employees.find(e => e.id === employeeId)?.name}: ${amount}₽ - ${reason}`);
   };
@@ -1573,7 +1629,7 @@ export default function LikeBirdApp() {
   // Больничные и отпуска
   const updateTimeOff = (t) => { setTimeOff(t); save('likebird-timeoff', t); };
   const addTimeOff = (employeeId, type, startDate, endDate, note = '') => {
-    const record = { id: Date.now(), employeeId, type, startDate, endDate, note };
+    const record = { id: Date.now() + Math.random().toString(36).slice(2, 6), employeeId, type, startDate, endDate, note };
     updateTimeOff([...timeOff, record]);
     logAction(`${type === 'sick' ? 'Больничный' : 'Отпуск'} добавлен`, employees.find(e => e.id === employeeId)?.name);
   };
@@ -1598,7 +1654,7 @@ export default function LikeBirdApp() {
   // Чат/комментарии
   const updateChatMessages = (m) => { setChatMessages(m); save('likebird-chat', m); };
   const sendMessage = (text, toEmployeeId = null) => {
-    const msg = { id: Date.now(), from: employeeName || 'Админ', to: toEmployeeId, text, date: new Date().toISOString(), read: false };
+    const msg = { id: Date.now() + Math.random().toString(36).slice(2, 6), from: employeeName || 'Админ', to: toEmployeeId, text, date: new Date().toISOString(), read: false };
     updateChatMessages([...chatMessages, msg]);
   };
   const getUnreadMessages = (forEmployee) => chatMessages.filter(m => !m.read && (m.to === forEmployee || m.to === null));
@@ -1609,14 +1665,14 @@ export default function LikeBirdApp() {
   // История склада
   const updateStockHistory = (h) => { setStockHistory(h); save('likebird-stock-history', h); };
   const addStockHistoryEntry = (productName, action, quantity, note = '') => {
-    const entry = { id: Date.now(), productName, action, quantity, note, date: new Date().toISOString(), user: employeeName || 'Система' };
+    const entry = { id: Date.now() + Math.random().toString(36).slice(2, 6), productName, action, quantity, note, date: new Date().toISOString(), user: employeeName || 'Система' };
     updateStockHistory([entry, ...stockHistory].slice(0, 1000));
   };
   
   // Брак и списания
   const updateWriteOffs = (w) => { setWriteOffs(w); save('likebird-writeoffs', w); };
   const addWriteOff = (productName, quantity, reason) => {
-    const writeOff = { id: Date.now(), productName, quantity, reason, date: new Date().toISOString(), user: employeeName || 'Админ' };
+    const writeOff = { id: Date.now() + Math.random().toString(36).slice(2, 6), productName, quantity, reason, date: new Date().toISOString(), user: employeeName || 'Админ' };
     updateWriteOffs([...writeOffs, writeOff]);
     // Уменьшаем склад
     if (stock[productName]) {
@@ -1656,11 +1712,67 @@ export default function LikeBirdApp() {
   const updateChallenges = (c) => { setChallenges(c); save('likebird-challenges', c); };
 
   // === BLOCK 4: Product Photos update ===
+  // ═══ MediaStore: каждое фото — отдельный Firebase ключ ═══
+  const mediaKeyEncode = (name) => 'likebird-mp-' + name.replace(/[^a-zA-Zа-яА-ЯёЁ0-9]/g, '_');
+  const shiftMediaKey = (dateKey) => 'likebird-ms-' + dateKey.replace(/[^a-zA-Z0-9_.]/g, '_');
+
+  const saveMediaPhoto = (productName, base64) => {
+    const key = mediaKeyEncode(productName);
+    // Сохраняем в state
+    setProductPhotos(prev => {
+      const next = { ...prev, [productName]: base64 };
+      try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    // Сохраняем ОТДЕЛЬНЫМ ключом в Firebase (маленький, ~3-5KB)
+    try { localStorage.setItem(key, base64); } catch {}
+    fbSave(key, base64);
+    // Обновляем индекс (список ключей фото)
+    mediaKeysRef.current.add(productName);
+    const idx = [...mediaKeysRef.current];
+    try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch {}
+    fbSave('likebird-media-index', idx);
+  };
+
+  const deleteMediaPhoto = (productName) => {
+    const key = mediaKeyEncode(productName);
+    setProductPhotos(prev => {
+      const next = { ...prev };
+      delete next[productName];
+      try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    try { localStorage.removeItem(key); } catch {}
+    fbSave(key, null);
+    mediaKeysRef.current.delete(productName);
+    const idx = [...mediaKeysRef.current];
+    try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch {}
+    fbSave('likebird-media-index', idx);
+  };
+
+  const saveShiftPhoto = (dateKey, base64) => {
+    const key = shiftMediaKey(dateKey);
+    setShiftPhotos(prev => ({ ...prev, [dateKey]: base64 }));
+    try { localStorage.setItem(key, base64); } catch {}
+    fbSave(key, base64);
+  };
+
   const updateProductPhotos = (p) => {
-    setProductPhotos(p);
-    // Явно сохраняем в localStorage + Firebase
-    try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(p)); } catch {}
-    fbSave('likebird-product-photos-data', p);
+    // Легаси обёртка — вызывает saveMediaPhoto для каждого нового фото
+    const oldKeys = Object.keys(productPhotos);
+    const newKeys = Object.keys(p);
+    // Добавленные
+    for (const k of newKeys) {
+      if (p[k] && p[k] !== productPhotos[k]) {
+        saveMediaPhoto(k, p[k]);
+      }
+    }
+    // Удалённые
+    for (const k of oldKeys) {
+      if (!p[k]) {
+        deleteMediaPhoto(k);
+      }
+    }
   };
 
   // === BLOCK 8: Role-based access ===
@@ -1689,19 +1801,19 @@ export default function LikeBirdApp() {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         let result = canvas.toDataURL('image/jpeg', quality);
-        // Если > 80KB — пережимаем агрессивнее
-        if (result.length > 80000) {
-          const s = Math.min(maxSize * 0.5, 400);
-          let w2 = img.width, h2 = img.height;
-          if (w2 > h2) { if (w2 > s) { h2 = h2 * s / w2; w2 = s; } } else { if (h2 > s) { w2 = w2 * s / h2; h2 = s; } }
-          canvas.width = Math.round(w2); canvas.height = Math.round(h2);
+        // Гарантируем < 50KB для Firebase. Пережимаем если нужно.
+        let attempts = 0;
+        while (result.length > 50000 && attempts < 3) {
+          attempts++;
+          const scale = 0.7;
+          canvas.width = Math.round(canvas.width * scale);
+          canvas.height = Math.round(canvas.height * scale);
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          result = canvas.toDataURL('image/jpeg', 0.5);
+          result = canvas.toDataURL('image/jpeg', Math.max(0.3, quality - attempts * 0.15));
         }
         resolve(result);
       } catch { resolve(''); }
     };
-    // Основной способ: createObjectURL
     try {
       const url = URL.createObjectURL(file);
       const img = new window.Image();
@@ -1709,7 +1821,6 @@ export default function LikeBirdApp() {
       img.onerror = () => { URL.revokeObjectURL(url); tryReader(); };
       img.src = url;
     } catch { tryReader(); }
-    // Фолбэк: FileReader
     function tryReader() {
       const r = new FileReader();
       r.onload = () => { const img = new window.Image(); img.onload = () => drawToCanvas(img); img.onerror = () => resolve(''); img.src = r.result; };
@@ -1753,7 +1864,7 @@ export default function LikeBirdApp() {
         if (data.count > 0 && data.count <= threshold) {
           const title = '📦 ' + name + ': осталось ' + data.count + ' шт';
           if (!isDuplicate('auto-stock', title)) {
-            newNotifs.push({ id: Date.now() + Math.random(), type: 'auto-stock', targetLogin: myLogin, title, body: 'Необходимо пополнить запас', icon: '📦', timestamp: Date.now(), read: false });
+            newNotifs.push({ id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), type: 'auto-stock', targetLogin: myLogin, title, body: 'Необходимо пополнить запас', icon: '📦', timestamp: Date.now(), read: false });
           }
         }
       });
@@ -1771,7 +1882,7 @@ export default function LikeBirdApp() {
           const pct = Math.round((1 - todayRevenue / avg) * 100);
           const title = '📉 Выручка за ' + todayStr + ': ' + todayRevenue + '₽';
           if (!isDuplicate('auto-revenue', title)) {
-            newNotifs.push({ id: Date.now() + Math.random(), type: 'auto-revenue', targetLogin: myLogin, title, body: 'Ниже среднего на ' + pct + '%', icon: '📉', timestamp: Date.now(), read: false });
+            newNotifs.push({ id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), type: 'auto-revenue', targetLogin: myLogin, title, body: 'Ниже среднего на ' + pct + '%', icon: '📉', timestamp: Date.now(), read: false });
           }
         }
       }
@@ -1787,7 +1898,7 @@ export default function LikeBirdApp() {
             events.forEach(ev => {
               const title = '📅 Завтра: ' + (ev.title || ev.name || 'Событие');
               if (!isDuplicate('auto-event', title)) {
-                newNotifs.push({ id: Date.now() + Math.random(), type: 'auto-event', targetLogin: myLogin, title, body: date, icon: '📅', timestamp: Date.now(), read: false });
+                newNotifs.push({ id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), type: 'auto-event', targetLogin: myLogin, title, body: date, icon: '📅', timestamp: Date.now(), read: false });
               }
             });
           }
@@ -1840,7 +1951,7 @@ export default function LikeBirdApp() {
         if (current >= ch.condition.target) {
           const alreadyNotified = userNotifications.some(n => n.type === 'challenge-complete' && n.title?.includes(ch.title) && formatDate(new Date(n.timestamp)) === todayStr);
           if (!alreadyNotified) {
-            const notif = { id: Date.now() + Math.random(), type: 'challenge-complete', targetLogin: myLogin, title: '🏆 Челлендж выполнен: ' + ch.title, body: 'Результат: ' + current + ' / ' + ch.condition.target, icon: '🏆', timestamp: Date.now(), read: false };
+            const notif = { id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), type: 'challenge-complete', targetLogin: myLogin, title: '🏆 Челлендж выполнен: ' + ch.title, body: 'Результат: ' + current + ' / ' + ch.condition.target, icon: '🏆', timestamp: Date.now(), read: false };
             const updated = [...userNotifications, notif];
             setUserNotifications(updated);
             save('likebird-notifications', updated);
@@ -1913,7 +2024,7 @@ export default function LikeBirdApp() {
     const empReports = reports.filter(r => {
       const emp = employees.find(e => e.id === employeeId);
       if (!emp || r.employee !== emp.name) return false;
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= periodStart;
@@ -1927,7 +2038,7 @@ export default function LikeBirdApp() {
   
   // Системные уведомления (с сохранением)
   const addSystemNotification = (type, message, priority = 'normal') => {
-    const notif = { id: Date.now(), type, message, priority, date: new Date().toISOString(), read: false };
+    const notif = { id: Date.now() + Math.random().toString(36).slice(2, 6), type, message, priority, date: new Date().toISOString(), read: false };
     const updated = [notif, ...systemNotifications].slice(0, 50);
     setSystemNotifications(updated);
     save('likebird-system-notifications', updated);
@@ -1949,7 +2060,7 @@ export default function LikeBirdApp() {
     periodStart.setDate(now.getDate() - period);
     
     const periodReports = reports.filter(r => {
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= periodStart && !r.isUnrecognized;
@@ -1958,7 +2069,7 @@ export default function LikeBirdApp() {
     // По дням
     const byDay = {};
     periodReports.forEach(r => {
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       if (!byDay[datePart]) byDay[datePart] = { sales: 0, revenue: 0, profit: 0 };
       byDay[datePart].sales += 1;
       byDay[datePart].revenue += r.total;
@@ -2000,7 +2111,7 @@ export default function LikeBirdApp() {
     const prevStart = new Date(periodStart);
     prevStart.setDate(prevStart.getDate() - period);
     const prevReports = reports.filter(r => {
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= prevStart && reportDate < periodStart && !r.isUnrecognized;
@@ -2150,9 +2261,9 @@ export default function LikeBirdApp() {
 
   const updateGivenToAdmin = (emp, amount) => { const key = emp + '_' + selectedDate; const updated = {...givenToAdmin, [key]: amount}; setGivenToAdmin(updated); save('likebird-given', updated); };
   const getGivenToAdmin = (emp) => givenToAdmin[emp + '_' + selectedDate] || 0;
-  const getReportsByDate = (date) => reports.filter(r => r.date.split(',')[0] === date);
+  const getReportsByDate = (date) => reports.filter(r => (r.date||'').split(',')[0] === date);
   const getExpensesByDate = (date) => expenses.filter(e => e.date.split(',')[0] === date);
-  const getAllDates = () => [...new Set(reports.map(r => r.date.split(',')[0]))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1); });
+  const getAllDates = () => [...new Set(reports.map(r => (r.date||'').split(',')[0]))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1); });
   const navigateDate = (dir) => { const dates = getAllDates(); const idx = dates.indexOf(selectedDate); if (dir === 'prev' && idx < dates.length - 1) setSelectedDate(dates[idx + 1]); else if (dir === 'next' && idx > 0) setSelectedDate(dates[idx - 1]); };
 
   const handleParseText = useCallback((inputText) => {
@@ -2210,7 +2321,7 @@ export default function LikeBirdApp() {
   // FIX: Условие count > 0 — при инициализации все count=0, не считаем их «низким остатком»
   const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= data.minStock).map(([name, data]) => ({name, ...data}));
   
-  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); const sales = {}; reports.filter(r => { const [d, m, y] = r.date.split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
+  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); const sales = {}; reports.filter(r => { const [d, m, y] = (r.date||'').split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
 
   const exportData = async () => {
     showNotification('⏳ Получаем актуальные данные из Firebase...');
@@ -2379,7 +2490,7 @@ export default function LikeBirdApp() {
       if (!desc.trim()) { showNotification('Введите описание', 'error'); return; }
       const amtNum = parseInt(amt);
       if (!amtNum || isNaN(amtNum)) { showNotification('Неверная сумма', 'error'); return; }
-      const newExp = { id: Date.now(), date: new Date().toLocaleString('ru-RU'), amount: amtNum, description: desc.trim(), employee: expenseModal.employee };
+      const newExp = { id: Date.now() + Math.random().toString(36).slice(2, 6), date: new Date().toLocaleString('ru-RU'), amount: amtNum, description: desc.trim(), employee: expenseModal.employee };
       const updated = [newExp, ...expenses]; setExpenses(updated); save('likebird-expenses', updated);
       showNotification('Расход добавлен');
       setExpenseModal(null);
@@ -4329,7 +4440,7 @@ export default function LikeBirdApp() {
       
       quickParsed.forEach((sale, idx) => {
         const report = {
-          id: Date.now() + idx,
+          id: Date.now() + Math.random().toString(36).slice(2, 6) + idx,
           date: dateStr,
           employee: localName.trim(),
           total: sale.price,
@@ -4674,7 +4785,7 @@ export default function LikeBirdApp() {
                 <div key={price} className="mb-4">
                   <div className="bg-amber-500 rounded-lg p-2 mb-2 shadow"><span className="text-white text-lg font-bold">{price}₽</span></div>
                   <div className="bg-white rounded-xl shadow overflow-hidden">{grouped[price].map((p, i) => { const photo = productPhotos[p.name]; return (<div key={i} className="p-3 border-b last:border-0 flex items-center gap-3 text-sm">
-                    {photo ? <img src={photo} className="w-24 h-24 rounded-xl object-cover flex-shrink-0 border border-gray-100 shadow-sm" /> : <span className="text-2xl flex-shrink-0 w-24 h-24 bg-amber-50 rounded-xl flex items-center justify-center text-4xl">{p.emoji}</span>}
+                    {photo ? <img src={photo} alt={p.name} className="w-24 h-24 rounded-xl object-cover flex-shrink-0 border border-gray-100 shadow-sm" /> : <span className="text-2xl flex-shrink-0 w-24 h-24 bg-amber-50 rounded-xl flex items-center justify-center text-4xl">{p.emoji}</span>}
                     <span className="flex-1">{p.name}</span>
                     {localSearch && <span className="text-xs text-gray-400">{CAT_ICONS[p.category]}</span>}
                     <label className="cursor-pointer p-1 text-gray-300 hover:text-amber-500">
@@ -5332,7 +5443,7 @@ export default function LikeBirdApp() {
       // Если фильтры по дате активны — фильтруем по диапазону дат, иначе по выбранной дате
       if (filterDateFrom || filterDateTo) {
         baseReports = reports.filter(r => {
-          const [datePart] = r.date.split(',');
+          const [datePart] = (r.date||'').split(',');
           const [d, m, y] = datePart.trim().split('.');
           const reportDate = new Date(parseYear(y), parseInt(m) - 1, parseInt(d));
           if (filterDateFrom) {
@@ -5424,7 +5535,7 @@ export default function LikeBirdApp() {
                       <span>{r.paymentType === 'cashless' ? '💳' : '💵'}</span>
                       {r.quantity > 1 && <><span>•</span><span>{r.quantity} шт</span></>}
                       {r.date && r.date.includes(',') && (
-                        <><span>•</span><span className="font-mono">🕐 {r.date.split(',')[1]?.trim()?.slice(0,5)}</span></>
+                        <><span>•</span><span className="font-mono">🕐 {(r.date||'').split(',')[1]?.trim()?.slice(0,5)}</span></>
                       )}
                     </div>
 
@@ -5791,13 +5902,13 @@ export default function LikeBirdApp() {
     const todayApproved = todayReports.filter(r => r.reviewStatus === 'approved' || r.reviewStatus === 'submitted');
     const todayPending = todayReports.filter(r => !r.reviewStatus || r.reviewStatus === 'pending');
     const weekReports = reports.filter(r => {
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= weekAgo && !r.isUnrecognized;
     });
     const monthReports = reports.filter(r => {
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= monthAgo && !r.isUnrecognized;
@@ -6230,7 +6341,9 @@ export default function LikeBirdApp() {
               }
             };
             setTimeout(scrollToActive, 50);
+            if (el._observer) { try { el._observer.disconnect(); } catch {} }
             const observer = new MutationObserver(scrollToActive);
+            el._observer = observer;
             observer.observe(el, { attributes: true, subtree: true, attributeFilter: ['data-active'] });
           }
         }}>
@@ -6541,7 +6654,7 @@ export default function LikeBirdApp() {
               {(() => {
                 const groupedByDate = {};
                 reports.forEach(r => {
-                  const dateKey = r.date.split(',')[0];
+                  const dateKey = (r.date||'').split(',')[0];
                   if (!groupedByDate[dateKey]) groupedByDate[dateKey] = [];
                   groupedByDate[dateKey].push(r);
                 });
@@ -7183,7 +7296,7 @@ export default function LikeBirdApp() {
                         <input type="text" placeholder="Причина" value={newPenalty.reason} onChange={(e) => setNewPenalty({...newPenalty, reason: e.target.value})} className="w-full p-2 border rounded" />
                         <button onClick={() => {
                           if (newPenalty.employeeId && newPenalty.amount && newPenalty.reason) {
-                            addPenalty(parseInt(newPenalty.employeeId), parseInt(newPenalty.amount), newPenalty.reason);
+                            addPenalty(parseInt(newPenalty.employeeId), (parseInt(newPenalty.amount) || 0), newPenalty.reason);
                             setNewPenalty({ employeeId: '', amount: '', reason: '' });
                             showNotification('Штраф добавлен');
                           }
@@ -7247,7 +7360,7 @@ export default function LikeBirdApp() {
                         <input type="text" placeholder="Причина" value={newBonus.reason} onChange={(e) => setNewBonus({...newBonus, reason: e.target.value})} className="w-full p-2 border rounded" />
                         <button onClick={() => {
                           if (newBonus.employeeId && newBonus.amount && newBonus.reason) {
-                            addBonus(parseInt(newBonus.employeeId), parseInt(newBonus.amount), newBonus.reason);
+                            addBonus(parseInt(newBonus.employeeId), (parseInt(newBonus.amount) || 0), newBonus.reason);
                             setNewBonus({ employeeId: '', amount: '', reason: '' });
                             showNotification('Бонус добавлен');
                           }
@@ -7557,7 +7670,7 @@ export default function LikeBirdApp() {
                       <span className="text-sm text-gray-500">{productPhoto ? '✅ Фото загружено' : '📷 Нажмите для загрузки'}</span>
                       <input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 400, 0.6); if (compressed) { setProductPhoto(compressed); showNotification('📷 Фото загружено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" />
                     </label>
-                    {productPhoto && <div className="mt-2 relative"><img src={productPhoto} className="w-36 h-36 object-cover rounded-xl border border-gray-200 shadow-sm" /><button onClick={() => setProductPhoto(null)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">×</button></div>}
+                    {productPhoto && <div className="mt-2 relative"><img src={productPhoto} alt="Фото товара" className="w-36 h-36 object-cover rounded-xl border border-gray-200 shadow-sm" /><button onClick={() => setProductPhoto(null)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">×</button></div>}
                   </div>
                   <button onClick={() => {
                     if (newProduct.name && newProduct.price) {
@@ -7580,7 +7693,7 @@ export default function LikeBirdApp() {
                     {[...items.map(p => ({...p, category: cat, isBase: true})), ...customProducts.filter(p => p.category === cat).map(p => ({...p, isBase: false}))].map((prod, i) => (
                       <div key={prod.name + i} className={`flex items-center gap-2 p-2 rounded-lg text-sm ${prod.isBase ? 'bg-gray-50' : 'bg-purple-50'}`}>
                         {productPhotos[prod.name] ? (
-                          <img src={productPhotos[prod.name]} className="w-20 h-20 rounded-xl object-cover flex-shrink-0 border border-gray-200 shadow-sm" />
+                          <img src={productPhotos[prod.name]} alt={prod.name} className="w-20 h-20 rounded-xl object-cover flex-shrink-0 border border-gray-200 shadow-sm" />
                         ) : (
                           <span className="text-2xl flex-shrink-0 w-20 h-20 bg-gray-50 rounded-xl flex items-center justify-center text-4xl">{prod.emoji}</span>
                         )}
@@ -7600,7 +7713,7 @@ export default function LikeBirdApp() {
                               <label className="text-gray-400 hover:text-purple-500 cursor-pointer"><Camera className="w-4 h-4" /><input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files[0]; if (f) { const compressed = await compressImage(f, 400, 0.6); if (compressed) { updateProductPhotos({...productPhotos, [prod.name]: compressed}); showNotification('📷 Фото добавлено'); } else { showNotification('Формат не поддерживается', 'error'); } }}} className="hidden" /></label>
                               {!prod.isBase && <button onClick={() => { setEditingProduct(prod.name); setEditProductData({ name: prod.name, price: prod.price, emoji: prod.emoji, category: prod.category }); }} className="text-gray-400 hover:text-blue-500"><Edit3 className="w-3.5 h-3.5" /></button>}
                               {!prod.isBase && <button onClick={() => showConfirm(`Удалить ${prod.name}?`, () => removeCustomProduct(prod.id))} className="text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>}
-                              {productPhotos[prod.name] && <button onClick={() => { const photos = {...productPhotos}; delete photos[prod.name]; updateProductPhotos(photos); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
+                              {productPhotos[prod.name] && <button onClick={() => { deleteMediaPhoto(prod.name); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
                             </div>
                           </>
                         )}
@@ -8105,7 +8218,7 @@ export default function LikeBirdApp() {
                   )}
                   <button onClick={() => {
                     if (!challengeForm.title || !challengeForm.target) { showNotification('Заполните название и цель', 'error'); return; }
-                    const ch = { id: Date.now(), ...challengeForm, condition: { metric: challengeForm.metric, target: challengeForm.target, product: challengeForm.product }, active: true, createdAt: new Date().toISOString() };
+                    const ch = { id: Date.now() + Math.random().toString(36).slice(2, 6), ...challengeForm, condition: { metric: challengeForm.metric, target: challengeForm.target, product: challengeForm.product }, active: true, createdAt: new Date().toISOString() };
                     updateChallenges([...challenges, ch]);
                     setChallengeForm({ title: '', icon: '🏆', type: 'daily', metric: 'sales_count', target: 10, product: '', reward: '' });
                     showNotification('Челлендж создан!');
@@ -8154,17 +8267,30 @@ export default function LikeBirdApp() {
                       <div>Товаров: <span className="font-bold">{ALL_PRODUCTS.length + customProducts.length}</span></div>
                       <div>Дней: <span className="font-bold">{getAllDates().length}</span></div>
                       <div>Фото товаров: <span className="font-bold">{Object.keys(productPhotos).length}</span></div>
-                      <div>Размер фото: <span className="font-bold">{Math.round(JSON.stringify(productPhotos).length / 1024)} КБ</span></div>
+                      <div>Фото смен: <span className="font-bold">{Object.keys(shiftPhotos).length}</span></div>
+                      <div>Размер медиа: <span className="font-bold">{Math.round((JSON.stringify(productPhotos).length + JSON.stringify(shiftPhotos).length) / 1024)} КБ</span></div>
                     </div>
                   </div>
                   {Object.keys(productPhotos).length > 0 && (
                     <div className="p-3 bg-blue-50 rounded-lg space-y-2">
                       <p className="font-medium text-blue-700">📷 Фото товаров</p>
                       <button onClick={() => {
+                        // Пушим каждое фото отдельным ключом + индекс
+                        const names = Object.keys(productPhotos);
+                        names.forEach(name => {
+                          const k = 'likebird-mp-' + name.replace(/[^a-zA-Zа-яА-ЯёЁ0-9]/g, '_');
+                          fbSave(k, productPhotos[name]);
+                        });
+                        fbSave('likebird-media-index', names);
+                        // Легаси (для обратной совместимости)
                         fbSave('likebird-product-photos-data', productPhotos);
-                        showNotification(`☁️ ${Object.keys(productPhotos).length} фото отправлено в облако`);
+                        // Фото смен
+                        Object.entries(shiftPhotos).forEach(([dk, v]) => {
+                          fbSave('likebird-ms-' + dk.replace(/[^a-zA-Z0-9_.]/g, '_'), v);
+                        });
+                        showNotification(`☁️ ${names.length} фото товаров + ${Object.keys(shiftPhotos).length} фото смен → облако`);
                       }} className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 text-sm flex items-center justify-center gap-2">
-                        <Upload className="w-4 h-4" />Синхронизировать фото в облако
+                        <Upload className="w-4 h-4" />Синхронизировать все медиа в облако
                       </button>
                     </div>
                   )}
@@ -8308,7 +8434,7 @@ export default function LikeBirdApp() {
                 logAction('Мануал изменён', newManual.title);
                 showNotification('Мануал обновлён ✓');
               } else {
-                updateManuals([...manuals, { ...newManual, id: Date.now() }]);
+                updateManuals([...manuals, { ...newManual, id: Date.now() + Math.random().toString(36).slice(2, 6) }]);
                 logAction('Мануал добавлен', newManual.title);
                 showNotification('Мануал добавлен ✓');
               }
@@ -8518,7 +8644,7 @@ export default function LikeBirdApp() {
               const notifKey = 'likebird-notifications';
               const existingNotifs = (() => { try { return JSON.parse(localStorage.getItem(notifKey) || '[]'); } catch { return []; } })();
               const newNotif = {
-                id: Date.now(),
+                id: Date.now() + Math.random().toString(36).slice(2, 6),
                 type: 'achievement',
                 targetLogin: userLogin,
                 title: '🏆 Новое достижение!',
@@ -8538,7 +8664,7 @@ export default function LikeBirdApp() {
                 const user = regUsers.find(u => u.login === userLogin);
                 const emp = employees.find(e => e.name === (user?.name || userLogin));
                 if (emp) {
-                  const newBonus = { id: Date.now(), employeeId: emp.id, employeeName: emp.name, employeeLogin: userLogin, achievementId: achId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
+                  const newBonus = { id: Date.now() + Math.random().toString(36).slice(2, 6), employeeId: emp.id, employeeName: emp.name, employeeLogin: userLogin, achievementId: achId, amount: Number(ach.bonusAmount), reason: `Достижение: ${ach.title}`, date: new Date().toLocaleDateString('ru-RU'), createdAt: Date.now() };
                   const updatedBonuses = [newBonus, ...bonuses];
                   updateBonuses(updatedBonuses);
                 }
@@ -8734,7 +8860,7 @@ export default function LikeBirdApp() {
     weekAgo.setDate(weekAgo.getDate() - 7);
     
     const weekReports = reports.filter(r => {
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= weekAgo && !r.isUnrecognized;
@@ -8746,7 +8872,7 @@ export default function LikeBirdApp() {
         byEmployee[r.employee] = { name: r.employee, shifts: 0, totalHours: 0, sales: 0, workDays: new Set() };
       }
       byEmployee[r.employee].sales += 1;
-      const [datePart] = r.date.split(',');
+      const [datePart] = (r.date||'').split(',');
       byEmployee[r.employee].workDays.add(datePart);
       if (r.workTime?.workHours) byEmployee[r.employee].totalHours += r.workTime.workHours;
     });
@@ -8846,7 +8972,7 @@ export default function LikeBirdApp() {
                       const todayStr = formatDate(new Date());
                       const todaySales = reports.filter(r =>
                         (r.employee === u.name || r.employee === u.login || r.employee === userProfile.displayName) &&
-                        r.date.split(',')[0].trim() === todayStr
+                        (r.date||'').split(',')[0].trim() === todayStr
                       ).length;
 
                       return (
@@ -9150,7 +9276,7 @@ export default function LikeBirdApp() {
 
             const handleSendChat = () => {
               if (!chatText.trim()) return;
-              const msg = { id: Date.now(), from: employeeName || 'Аноним', text: chatText.trim(), date: new Date().toISOString(), read: false, reactions: {}, pinned: false };
+              const msg = { id: Date.now() + Math.random().toString(36).slice(2, 6), from: employeeName || 'Аноним', text: chatText.trim(), date: new Date().toISOString(), read: false, reactions: {}, pinned: false };
               // Check for @mentions
               const mentionRegex = /@(\S+)/g;
               let match;
@@ -9160,7 +9286,7 @@ export default function LikeBirdApp() {
                   const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
                   const user = users.find(u => u.login === mentioned || u.name === mentioned);
                   if (user) {
-                    const notif = { id: Date.now() + Math.random(), type: 'mention', targetLogin: user.login, title: '💬 Вас упомянули в чате', body: employeeName + ': ' + chatText.trim().substring(0, 80), icon: '💬', timestamp: Date.now(), read: false };
+                    const notif = { id: Date.now() + Math.random().toString(36).slice(2, 6) + Math.random(), type: 'mention', targetLogin: user.login, title: '💬 Вас упомянули в чате', body: employeeName + ': ' + chatText.trim().substring(0, 80), icon: '💬', timestamp: Date.now(), read: false };
                     const updatedNotifs = [...userNotifications, notif];
                     setUserNotifications(updatedNotifs);
                     save('likebird-notifications', updatedNotifs);
@@ -9202,7 +9328,7 @@ export default function LikeBirdApp() {
               if (!file) return;
               try {
                 const compressed = await compressImage(file, 800, 0.7);
-                const msg = { id: Date.now(), from: employeeName || 'Аноним', text: '', image: compressed, date: new Date().toISOString(), read: false, reactions: {}, pinned: false };
+                const msg = { id: Date.now() + Math.random().toString(36).slice(2, 6), from: employeeName || 'Аноним', text: '', image: compressed, date: new Date().toISOString(), read: false, reactions: {}, pinned: false };
                 updateChatMessages([...chatMessages, msg]);
                 setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
               } catch { showNotification('Ошибка загрузки фото', 'error'); }
@@ -9424,7 +9550,7 @@ export default function LikeBirdApp() {
     // Мои продажи сегодня (только pending + approved своего отчёта)
     const myTodayReports = reports.filter(r =>
       r.employee === employeeName &&
-      r.date.split(',')[0].trim() === todayStr
+      (r.date||'').split(',')[0].trim() === todayStr
     ).sort((a, b) => b.createdAt - a.createdAt);
 
     // Продажи в статусе "черновик" (ещё не подтверждены мной)
@@ -9436,13 +9562,32 @@ export default function LikeBirdApp() {
     const myCashless = myTodayReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
     const mySalary = myTodayReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
 
+    const [shiftPhotoMode, setShiftPhotoMode] = useState(null); // 'open' | 'close'
+
     const openShift = async (time) => {
       const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
       const geo = await getGeoLocation();
       const updated = { ...shiftsData, [shiftKey]: { openTime: t, status: 'open', openedAt: Date.now(), openGeo: geo } };
       updateShiftsData(updated);
       setShowTimeModal(null);
+      // Предлагаем сделать фото стола
+      setShiftPhotoMode('open');
       showNotification(`Смена открыта в ${t}${geo ? ' 📍' : ''}`);
+    };
+
+    const handleShiftPhoto = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const compressed = await compressImage(file, 400, 0.5);
+      if (compressed) {
+        const photoKey = shiftKey + '_' + (shiftPhotoMode || 'open');
+        saveShiftPhoto(photoKey, compressed);
+        // Сохраняем ссылку в данных смены
+        const updShift = { ...shiftsData[shiftKey], [shiftPhotoMode === 'open' ? 'openPhoto' : 'closePhoto']: photoKey };
+        updateShiftsData({ ...shiftsData, [shiftKey]: updShift });
+        showNotification('📷 Фото стола сохранено');
+      }
+      setShiftPhotoMode(null);
     };
 
     const closeShift = (time) => {
@@ -9460,9 +9605,37 @@ export default function LikeBirdApp() {
         const updated = { ...shiftsData, [shiftKey]: { ...myShift, closeTime: t, status: 'closed', closedAt: Date.now(), closeGeo: geo } };
         updateShiftsData(updated);
         showNotification(`Смена закрыта в ${t}`);
+        setShiftPhotoMode('close');
       });
       setShowTimeModal(null);
     };
+
+    // Модалка для фото стола при открытии/закрытии смены
+    const ShiftPhotoPrompt = () => shiftPhotoMode ? (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShiftPhotoMode(null)}>
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full" onClick={e => e.stopPropagation()}>
+          <h3 className="font-bold text-lg mb-2">📷 Фото рабочего стола</h3>
+          <p className="text-gray-500 text-sm mb-4">
+            {shiftPhotoMode === 'open' ? 'Сфотографируйте рабочее место перед началом смены' : 'Сфотографируйте рабочее место после завершения'}
+          </p>
+          {shiftPhotos[shiftKey + '_' + shiftPhotoMode] ? (
+            <div className="relative mb-4">
+              <img src={shiftPhotos[shiftKey + '_' + shiftPhotoMode]} alt="Фото стола" className="w-full h-48 object-cover rounded-xl" />
+              <span className="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full">✓ Загружено</span>
+            </div>
+          ) : (
+            <label className="flex flex-col items-center justify-center h-40 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50 mb-4">
+              <Camera className="w-10 h-10 text-gray-400 mb-2" />
+              <span className="text-sm text-gray-500">Нажмите для съёмки</span>
+              <input type="file" accept="image/*" capture="environment" onChange={handleShiftPhoto} className="hidden" />
+            </label>
+          )}
+          <button onClick={() => setShiftPhotoMode(null)} className="w-full bg-gray-200 py-2 rounded-xl font-semibold hover:bg-gray-300">
+            {shiftPhotos[shiftKey + '_' + shiftPhotoMode] ? 'Готово' : 'Пропустить'}
+          </button>
+        </div>
+      </div>
+    ) : null;
 
     const submitMyReport = () => {
       if (draftReports.length === 0) { showNotification('Нет продаж для подтверждения', 'error'); return; }
@@ -9660,7 +9833,7 @@ export default function LikeBirdApp() {
                         <div className="text-2xl">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-sm truncate">{r.product}</p>
-                          <p className="text-xs text-gray-400">{r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
+                          <p className="text-xs text-gray-400">{(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
                         </div>
                         <div className="text-right">
                           <p className="font-bold text-blue-600">{r.total.toLocaleString()}₽</p>
@@ -9762,7 +9935,7 @@ export default function LikeBirdApp() {
                         <div className="text-2xl flex-shrink-0">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-sm truncate">{r.product}</p>
-                          <p className="text-xs text-gray-400">{r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
+                          <p className="text-xs text-gray-400">{(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
                         </div>
                         <p className="font-bold text-gray-800">{r.total.toLocaleString()}₽</p>
                         {(r.reviewStatus === 'pending' || r.reviewStatus === 'draft') && (
@@ -9809,7 +9982,7 @@ export default function LikeBirdApp() {
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-sm truncate">{r.product}</p>
                         <p className="text-xs text-gray-400">
-                          {r.date.split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳 Безнал' : '💵 Нал'}
+                          {(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳 Безнал' : '💵 Нал'}
                           {r.location && ` · 📍 ${r.location.split(' - ').pop()}`}
                         </p>
                       </div>
@@ -9833,6 +10006,7 @@ export default function LikeBirdApp() {
 
         </div>
 
+        <ShiftPhotoPrompt />
         {/* Модал выбора времени */}
         {showTimeModal && (
           <div className="fixed inset-0 bg-black/50 flex items-end z-50 p-4">
@@ -10232,7 +10406,7 @@ export default function LikeBirdApp() {
                           })()}</div>
                           <div className="flex-1 min-w-0">
                             <p className="font-semibold text-sm truncate">{r.product}</p>
-                            <p className="text-xs text-gray-400">{r.date.split(',')[0]} · {r.total?.toLocaleString()} ₽ · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
+                            <p className="text-xs text-gray-400">{(r.date||'').split(',')[0]} · {r.total?.toLocaleString()} ₽ · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
                           </div>
                           <div className="text-right">
                             <p className="font-bold text-indigo-600">+{sal} ₽</p>
@@ -10556,7 +10730,7 @@ export default function LikeBirdApp() {
       // Добавляем в employees если ещё нет
       const currentEmps = (() => { try { return JSON.parse(localStorage.getItem('likebird-employees') || '[]'); } catch { return []; } })();
       if (!currentEmps.find(e => e.name === newUser.name)) {
-        const newEmp = { id: Date.now(), name: newUser.name, role: newUser.role || 'seller', salaryMultiplier: 1.0, active: true };
+        const newEmp = { id: Date.now() + Math.random().toString(36).slice(2, 6), name: newUser.name, role: newUser.role || 'seller', salaryMultiplier: 1.0, active: true };
         const updatedEmps = [...currentEmps, newEmp];
         localStorage.setItem('likebird-employees', JSON.stringify(updatedEmps));
         await fbSave('likebird-employees', updatedEmps);
@@ -10624,7 +10798,7 @@ export default function LikeBirdApp() {
       fbSave('likebird-users', [newUser]);
       
       // FIX: Добавляем первого пользователя в employees (ранее отсутствовало)
-      const newEmp = { id: Date.now(), name: newUser.name, role: 'admin', salaryMultiplier: 1.0, active: true };
+      const newEmp = { id: Date.now() + Math.random().toString(36).slice(2, 6), name: newUser.name, role: 'admin', salaryMultiplier: 1.0, active: true };
       const empList = [newEmp];
       localStorage.setItem('likebird-employees', JSON.stringify(empList));
       fbSave('likebird-employees', empList);

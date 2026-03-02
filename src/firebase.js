@@ -1,22 +1,20 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, onValue, get } from 'firebase/database';
+import { getDatabase, ref, set, onValue, get, onDisconnect, serverTimestamp } from 'firebase/database';
 
-// FIX: Используем переменные окружения если доступны, иначе fallback
 const firebaseConfig = {
-  apiKey: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_API_KEY) || "AIzaSyAoZOo5LYtUKYiFhntbr0O5LfCKQEHn3jo",
-  authDomain: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN) || "likebird-928e2.firebaseapp.com",
-  databaseURL: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_DATABASE_URL) || "https://likebird-928e2-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_PROJECT_ID) || "likebird-928e2",
-  storageBucket: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET) || "likebird-928e2.firebasestorage.app",
-  messagingSenderId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID) || "438710809259",
-  appId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APP_ID) || "1:438710809259:web:f944a3340e3452f318bdee"
+  apiKey: "AIzaSyAoZOo5LYtUKYiFhntbr0O5LfCKQEHn3jo",
+  authDomain: "likebird-928e2.firebaseapp.com",
+  databaseURL: "https://likebird-928e2-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "likebird-928e2",
+  storageBucket: "likebird-928e2.firebasestorage.app",
+  messagingSenderId: "438710809259",
+  appId: "1:438710809259:web:f944a3340e3452f318bdee"
 };
 
 const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
 
 // Ключи, которые синхронизируются между всеми устройствами
-// (личные данные вроде сессии и имени сотрудника — не синхронизируются)
 export const SYNC_KEYS = new Set([
   'likebird-reports',
   'likebird-expenses',
@@ -52,15 +50,30 @@ export const SYNC_KEYS = new Set([
   'likebird-custom-achievements',
   'likebird-achievements-granted',
   'likebird-shifts',
+  // Новые ключи v3.0
   'likebird-notifications',
+  'likebird-system-notifications',
+  'likebird-notif-settings',
+  'likebird-challenges',
+  'likebird-product-photos-data',
+  'likebird-media-index',
 ]);
+
+// Динамические ключи: фото товаров (likebird-mp-*) и фото смен (likebird-ms-*)
+const isDynamicKey = (key) =>
+  key.startsWith('likebird-mp-') ||
+  key.startsWith('likebird-ms-') ||
+  key.startsWith('likebird-game-leaderboard/');
+
+// Проверка: разрешён ли ключ для синхронизации
+const isAllowedKey = (key) => SYNC_KEYS.has(key) || isDynamicKey(key);
 
 // likebird-reports → data/likebird-reports
 const toFbPath = (key) => `data/${key}`;
 
 // Сохранить данные в Firebase
 export const fbSave = (key, data) => {
-  if (!SYNC_KEYS.has(key)) return;
+  if (!isAllowedKey(key)) return;
   set(ref(db, toFbPath(key)), data).catch((e) => {
     console.warn('[Firebase] Ошибка записи', key, e.message);
   });
@@ -78,29 +91,9 @@ export const fbGet = async (key) => {
   }
 };
 
-// Presence: записать что пользователь онлайн
-export const fbSetPresence = (login, displayName) => {
-  if (!login) return;
-  set(ref(db, `presence/${login}`), {
-    login,
-    displayName,
-    lastSeen: Date.now(),
-    online: true,
-  }).catch(() => {});
-};
-
-// Presence: подписаться на все онлайн-данные
-export const fbSubscribePresence = (callback) => {
-  const unsubscribe = onValue(ref(db, 'presence'), (snapshot) => {
-    callback(snapshot.exists() ? snapshot.val() : {});
-  });
-  return unsubscribe;
-};
-
 // Подписаться на изменения ключа в Firebase
-// callback(data) вызывается при каждом изменении (включая первую загрузку)
 export const fbSubscribe = (key, callback) => {
-  if (!SYNC_KEYS.has(key)) return () => {};
+  if (!isAllowedKey(key)) return () => {};
   const unsubscribe = onValue(ref(db, toFbPath(key)), (snapshot) => {
     if (snapshot.exists()) {
       callback(snapshot.val());
@@ -109,4 +102,31 @@ export const fbSubscribe = (key, callback) => {
     console.warn('[Firebase] Ошибка подписки', key, error.message);
   });
   return unsubscribe;
+};
+
+// === Presence (онлайн-статус сотрудников) ===
+
+export const fbSetPresence = (login, name) => {
+  if (!login) return;
+  const presenceRef = ref(db, `presence/${login}`);
+  set(presenceRef, {
+    name: name || login,
+    online: true,
+    lastSeen: Date.now()
+  }).catch(() => {});
+  // При отключении — помечаем offline
+  onDisconnect(presenceRef).set({
+    name: name || login,
+    online: false,
+    lastSeen: Date.now()
+  }).catch(() => {});
+};
+
+export const fbSubscribePresence = (callback) => {
+  const presenceRef = ref(db, 'presence');
+  return onValue(presenceRef, (snapshot) => {
+    if (snapshot.exists()) {
+      callback(snapshot.val());
+    }
+  }, () => {});
 };
