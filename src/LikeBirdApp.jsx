@@ -6,6 +6,7 @@ import { fbSave, fbSubscribe, fbGet, fbSetPresence, fbSubscribePresence, SYNC_KE
 
 // ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
 const APP_VERSION = '3.0';
+const DATA_VERSION = 2; // Increment when data structure changes
 
 // ===== УТИЛИТЫ: Хэширование пароля =====
 const hashPassword = async (password) => {
@@ -19,11 +20,11 @@ const hashPassword = async (password) => {
 // ===== УТИЛИТЫ: Синхронизация =====
 const SyncManager = {
   getSyncId: () => {
-    let id = localStorage.getItem('likebird-sync-id');
+    let id; try { id = localStorage.getItem('likebird-sync-id'); } catch { return 'lb-fallback-' + Date.now().toString(36); }
     if (!id) { id = 'lb-' + Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 6); localStorage.setItem('likebird-sync-id', id); }
     return id;
   },
-  getLastSync: () => localStorage.getItem('likebird-last-sync') || null,
+  getLastSync: () => { try { return localStorage.getItem('likebird-last-sync') || null; } catch { return null; } },
   setLastSync: () => localStorage.setItem('likebird-last-sync', new Date().toISOString()),
   
   // Все ключи localStorage приложения
@@ -193,6 +194,8 @@ let DYNAMIC_ALL_PRODUCTS = [...ALL_PRODUCTS];
 
 const calculateSalary = (basePrice, salePrice, category, tips = 0, adj = 'normal', salarySettings = null) => {
   if (adj === 'none') return 0;
+  if (isNaN(salePrice) || salePrice == null) return 0;
+  if (isNaN(basePrice)) basePrice = 0;
   
   // Используем переданные настройки или значения по умолчанию
   const defaultRanges = [
@@ -259,7 +262,7 @@ let CUSTOM_ALIASES = {};
 try {
   const saved = localStorage.getItem('likebird-custom-aliases');
   if (saved) CUSTOM_ALIASES = JSON.parse(saved);
-} catch {}
+} catch { /* silent */ }
 
 const findProductByPrice = (text, price) => {
   const l = text.toLowerCase().trim();
@@ -371,7 +374,13 @@ const getInitialStock = () => {
 const formatDate = (date) => typeof date === 'string' ? date : date.toLocaleDateString('ru-RU');
 
 // ИСПРАВЛЕНИЕ: Безопасный парсинг года (поддержка и 2-х и 4-х значных форматов)
-const logErr = (ctx, e) => { try { console.warn('[LikeBird]', ctx, e?.message || e); } catch {} };
+const logErr = (ctx, e) => { try { console.warn('[LikeBird]', ctx, e?.message || e); } catch { /* silent */ } };
+
+const useDebounce = (value, delay = 300) => {
+  const [deb, setDeb] = React.useState(value);
+  React.useEffect(() => { const t = setTimeout(() => setDeb(value), delay); return () => clearTimeout(t); }, [value, delay]);
+  return deb;
+};
 
 const parseRuDate = (dateStr) => {
   if (!dateStr) return new Date(0);
@@ -380,12 +389,12 @@ const parseRuDate = (dateStr) => {
     const [datePart, timePart] = String(dateStr).split(',');
     const [d, m, y] = datePart.trim().split('.');
     if (!d || !m || !y) return new Date(0);
-    const fullYear = y.length === 4 ? parseInt(y) : 2000 + parseInt(y);
+    const fullYear = y.length === 4 ? parseInt(y, 10) : 2000 + parseInt(y, 10);
     if (timePart) {
       const [h, min] = timePart.trim().split(':');
-      return new Date(fullYear, parseInt(m) - 1, parseInt(d), parseInt(h) || 0, parseInt(min) || 0);
+      return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10), parseInt(h, 10) || 0, parseInt(min, 10) || 0);
     }
-    return new Date(fullYear, parseInt(m) - 1, parseInt(d));
+    return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
   } catch { return new Date(0); }
 };
 
@@ -462,6 +471,10 @@ const KpiGoalRow = ({ label, progress, goalType, empId, setEmployeeGoal, showNot
       )}
     </div>
   );
+}
+
+export default function LikeBirdApp() {
+  return React.createElement(LikeBirdErrorBoundary, null, React.createElement(LikeBirdAppInner));
 };
 
 const KpiGoalsPanel = ({ employees, employeeKPI, setEmployeeGoal, showNotification, getEmployeeProgress }) => {
@@ -477,7 +490,7 @@ const KpiGoalsPanel = ({ employees, employeeKPI, setEmployeeGoal, showNotificati
   return (
     <div className="space-y-4">
       {activeEmps.map(emp => (
-        <div key={emp.id} className="bg-white rounded-xl p-4 shadow">
+        <div key={emp.id} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <div className="flex items-center justify-between mb-4">
             <h4 className="font-bold text-gray-800">{emp.name}</h4>
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-lg">Месяц</span>
@@ -506,7 +519,31 @@ const KpiGoalsPanel = ({ employees, employeeKPI, setEmployeeGoal, showNotificati
   );
 };
 
-export default function LikeBirdApp() {
+// Error Boundary для перехвата крашей
+class LikeBirdErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { try { console.error('[LikeBird] Crash:', error, info); } catch { /* silent */ } }
+  render() {
+    if (this.state.hasError) {
+      return React.createElement('div', { style: { padding: 40, textAlign: 'center', fontFamily: 'system-ui' } },
+        React.createElement('h2', null, '😔 Приложение столкнулось с ошибкой'),
+        React.createElement('p', { style: { color: '#666', margin: '16px 0' } }, String(this.state.error?.message || 'Неизвестная ошибка')),
+        React.createElement('button', {
+          onClick: () => { this.setState({ hasError: false, error: null }); },
+          style: { padding: '12px 24px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 12, fontSize: 16, cursor: 'pointer' }
+        }, '🔄 Перезагрузить'),
+        React.createElement('button', {
+          onClick: () => { localStorage.clear(); window.location.reload(); },
+          style: { padding: '12px 24px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 12, fontSize: 16, cursor: 'pointer', marginLeft: 12 }
+        }, '🗑️ Сбросить данные')
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function LikeBirdAppInner() {
   // ===== АВТОРИЗАЦИЯ =====
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null); // полный объект user из likebird-users
@@ -529,7 +566,9 @@ export default function LikeBirdApp() {
   const [analyticsPeriod, setAnalyticsPeriod] = useState(7);
   const [manualFilter, setManualFilter] = useState('all');
 
-  const [currentView, setCurrentView] = useState('menu');
+  const [currentView, _setCurrentView] = useState('menu');
+  const [chatLimit, setChatLimit] = useState(50);
+  const setCurrentView = (v) => { _setCurrentView(v); try { window.scrollTo(0, 0); } catch { /* silent */ } };
   const [reports, setReports] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [stock, setStock] = useState(getInitialStock);
@@ -749,7 +788,7 @@ export default function LikeBirdApp() {
   const [auditLog, setAuditLog] = useState([]);
   const [customProducts, setCustomProducts] = useState([]);
   const [archivedProducts, setArchivedProducts] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-archived-products') || '[]'); } catch { return []; } });
-  const toggleArchiveProduct = (name) => { const isArch = archivedProducts.includes(name); const upd = isArch ? archivedProducts.filter(n => n !== name) : [...archivedProducts, name]; setArchivedProducts(upd); try { localStorage.setItem('likebird-archived-products', JSON.stringify(upd)); } catch {} };
+  const toggleArchiveProduct = (name) => { const isArch = archivedProducts.includes(name); const upd = isArch ? archivedProducts.filter(n => n !== name) : [...archivedProducts, name]; setArchivedProducts(upd); save('likebird-archived-products', upd); };
 
   // ===== НОВЫЕ СОСТОЯНИЯ v2.4 =====
   
@@ -892,10 +931,10 @@ export default function LikeBirdApp() {
             const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
             const foundUser = users.find(u => u.login === parsed.login);
             if (foundUser) setCurrentUser(foundUser);
-          } catch {}
+          } catch { /* silent */ }
         }
       }
-    } catch {}
+    } catch { /* silent */ }
     setAuthLoading(false);
     
     // ===== PWA: Перехватываем событие установки =====
@@ -906,6 +945,15 @@ export default function LikeBirdApp() {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
+    const flushOfflineQueue = () => {
+      try {
+        const q = JSON.parse(localStorage.getItem('likebird-offline-queue') || '[]');
+        if (q.length === 0) return;
+        q.forEach(key => { try { const data = JSON.parse(localStorage.getItem(key)); if (data != null) fbSave(key, data); } catch { /* silent */ } });
+        localStorage.removeItem('likebird-offline-queue');
+      } catch { /* silent */ }
+    };
+    window.addEventListener('online', flushOfflineQueue);
     window.addEventListener('offline', handleOffline);
     
     // Загрузка reports с миграцией старых данных
@@ -975,7 +1023,7 @@ export default function LikeBirdApp() {
         const parsed = JSON.parse(savedManuals);
         if (parsed.length > 0) setManuals(parsed);
       }
-    } catch {}
+    } catch { /* silent */ }
     // ИСПРАВЛЕНИЕ #1: Загружаем настройки зарплаты
     loadJson('likebird-salary-settings', setSalarySettings, {
       ranges: [
@@ -1022,7 +1070,7 @@ export default function LikeBirdApp() {
     try {
       const savedAliases = localStorage.getItem('likebird-custom-aliases');
       if (savedAliases) setCustomAliases(JSON.parse(savedAliases));
-    } catch {}
+    } catch { /* silent */ }
     loadJson('likebird-invite-codes', setInviteCodes, []);
     loadJson('likebird-notif-settings', setNotifSettings, { shiftReminder: true, lowStockAlert: true, stockThreshold: 3 });
     loadJson('likebird-notifications', setUserNotifications, []);
@@ -1034,7 +1082,7 @@ export default function LikeBirdApp() {
     loadJson('likebird-product-photos-data', (legacy) => {
       // Загружаем индекс
       let idx = [];
-      try { idx = JSON.parse(localStorage.getItem('likebird-media-index') || '[]'); } catch {}
+      try { idx = JSON.parse(localStorage.getItem('likebird-media-index') || '[]'); } catch { /* silent */ }
       const photos = {};
       // Сначала загружаем из per-photo ключей
       for (const name of idx) {
@@ -1042,7 +1090,7 @@ export default function LikeBirdApp() {
           const k = 'likebird-mp-' + name.replace(/[^a-zA-Zа-яА-ЯёЁ0-9]/g, '_');
           const v = localStorage.getItem(k);
           if (v && v.startsWith('data:')) photos[name] = v;
-        } catch {}
+        } catch { /* silent */ }
       }
       // Дополняем из legacy (если per-photo ключа нет)
       if (legacy && typeof legacy === 'object') {
@@ -1063,6 +1111,7 @@ export default function LikeBirdApp() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', flushOfflineQueue);
     };
   }, []);
 
@@ -1094,14 +1143,14 @@ export default function LikeBirdApp() {
         setReports(migrated);
         localStorage.setItem('likebird-reports', JSON.stringify(migrated));
       }),
-      guardedSubscribe('likebird-expenses', (val) => { setExpenses(val); try { try { localStorage.setItem('likebird-expenses', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-stock', (val) => { setStock(val); try { try { localStorage.setItem('likebird-stock', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-given', (val) => { setGivenToAdmin(val); try { try { localStorage.setItem('likebird-given', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); try { try { localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); try { try { localStorage.setItem('likebird-owncard', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-partners', (val) => { setPartnerStock(val); try { try { localStorage.setItem('likebird-partners', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); try { try { localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-schedule', (val) => { setScheduleData(val); try { try { localStorage.setItem('likebird-schedule', JSON.stringify(val)); } catch {} } catch {} }),
+      guardedSubscribe('likebird-expenses', (val) => { setExpenses(val); try { try { localStorage.setItem('likebird-expenses', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-stock', (val) => { setStock(val); try { try { localStorage.setItem('likebird-stock', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-given', (val) => { setGivenToAdmin(val); try { try { localStorage.setItem('likebird-given', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-salary-decisions', (val) => { setSalaryDecisions(val); try { try { localStorage.setItem('likebird-salary-decisions', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-owncard', (val) => { setOwnCardTransfers(val); try { try { localStorage.setItem('likebird-owncard', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-partners', (val) => { setPartnerStock(val); try { try { localStorage.setItem('likebird-partners', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-totalbirds', (val) => { setTotalBirds(val); try { try { localStorage.setItem('likebird-totalbirds', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-schedule', (val) => { setScheduleData(val); try { try { localStorage.setItem('likebird-schedule', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-events', (val) => {
         // Миграция: старый формат { date: eventObj } → новый { date: [eventObj, ...] }
         if (val && typeof val === 'object') {
@@ -1114,9 +1163,9 @@ export default function LikeBirdApp() {
           localStorage.setItem('likebird-events', JSON.stringify(migrated));
         }
       }),
-      guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); try { try { localStorage.setItem('likebird-manuals', JSON.stringify(val)); } catch {} } catch {} } }),
-      guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); try { try { localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); try { try { localStorage.setItem('likebird-admin-password', JSON.stringify(val)); } catch {} } catch {} }),
+      guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); try { try { localStorage.setItem('likebird-manuals', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
+      guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); try { try { localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); try { try { localStorage.setItem('likebird-admin-password', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-employees', (val) => {
         if (!Array.isArray(val)) return;
         // Синхронизируем employees с registered users: добавляем недостающих
@@ -1131,35 +1180,36 @@ export default function LikeBirdApp() {
         setEmployees(merged);
         localStorage.setItem('likebird-employees', JSON.stringify(merged));
       }),
-      guardedSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); try { try { localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-audit-log', (val) => { setAuditLog(val); try { try { localStorage.setItem('likebird-audit-log', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); try { try { localStorage.setItem('likebird-custom-products', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-locations', (val) => { setLocations(val); try { try { localStorage.setItem('likebird-locations', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); try { try { localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-penalties', (val) => { setPenalties(val); try { try { localStorage.setItem('likebird-penalties', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-bonuses', (val) => { setBonuses(val); try { try { localStorage.setItem('likebird-bonuses', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-timeoff', (val) => { setTimeOff(val); try { try { localStorage.setItem('likebird-timeoff', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); try { try { localStorage.setItem('likebird-ratings', JSON.stringify(val)); } catch {} } catch {} }),
+      guardedSubscribe('likebird-sales-plan', (val) => { setSalesPlan(val); try { try { localStorage.setItem('likebird-sales-plan', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-audit-log', (val) => { setAuditLog(val); try { try { localStorage.setItem('likebird-audit-log', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-custom-products', (val) => { setCustomProducts(val); try { try { localStorage.setItem('likebird-custom-products', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-locations', (val) => { setLocations(val); try { try { localStorage.setItem('likebird-locations', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-cost-prices', (val) => { setCostPrices(val); try { try { localStorage.setItem('likebird-cost-prices', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-penalties', (val) => { setPenalties(val); try { try { localStorage.setItem('likebird-penalties', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-bonuses', (val) => { setBonuses(val); try { try { localStorage.setItem('likebird-bonuses', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-timeoff', (val) => { setTimeOff(val); try { try { localStorage.setItem('likebird-timeoff', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-ratings', (val) => { setEmployeeRatings(val); try { try { localStorage.setItem('likebird-ratings', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-chat', (val) => {
         if (Array.isArray(val) && val.length > 0) {
           const last = val[val.length - 1];
           const myL = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
           if (last.fromLogin && last.fromLogin !== myL && last.date && Date.now() - last.date < 10000) {
-            try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); const o = ctx.createOscillator(); const g = ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.setValueAtTime(660, ctx.currentTime); o.frequency.setValueAtTime(880, ctx.currentTime + 0.1); g.gain.setValueAtTime(0.15, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3); o.start(); o.stop(ctx.currentTime + 0.3); } catch {}
+            try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); const o = ctx.createOscillator(); const g = ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.setValueAtTime(660, ctx.currentTime); o.frequency.setValueAtTime(880, ctx.currentTime + 0.1); g.gain.setValueAtTime(0.15, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3); o.start(); o.stop(ctx.currentTime + 0.3); } catch { /* silent */ }
           }
         }
-        setChatMessages(val); try { try { localStorage.setItem('likebird-chat', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-stock-history', (val) => { setStockHistory(val); try { try { localStorage.setItem('likebird-stock-history', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); try { try { localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); try { try { localStorage.setItem('likebird-autoorder', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); try { try { localStorage.setItem('likebird-kpi', JSON.stringify(val)); } catch {} } catch {} }),
-      guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); try { try { localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } catch {} } catch {} } }),
-      guardedSubscribe('likebird-system-notifications', (val) => { if (Array.isArray(val)) { try { localStorage.setItem('likebird-system-notifications', JSON.stringify(val)); } catch {} } }),
-      guardedSubscribe('likebird-challenges', (val) => { if (Array.isArray(val)) { setChallenges(val); try { try { localStorage.setItem('likebird-challenges', JSON.stringify(val)); } catch {} } catch {} } }),
+        setChatMessages(val); try { try { localStorage.setItem('likebird-chat', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-stock-history', (val) => { setStockHistory(val); try { try { localStorage.setItem('likebird-stock-history', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-writeoffs', (val) => { setWriteOffs(val); try { try { localStorage.setItem('likebird-writeoffs', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-autoorder', (val) => { setAutoOrderList(val); try { try { localStorage.setItem('likebird-autoorder', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); try { try { localStorage.setItem('likebird-kpi', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); try { try { localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
+      guardedSubscribe('likebird-archived-products', (val) => { if (Array.isArray(val)) setArchivedProducts(val); }),
+      guardedSubscribe('likebird-system-notifications', (val) => { if (Array.isArray(val)) { try { localStorage.setItem('likebird-system-notifications', JSON.stringify(val)); } catch { /* silent */ } } }),
+      guardedSubscribe('likebird-challenges', (val) => { if (Array.isArray(val)) { setChallenges(val); try { try { localStorage.setItem('likebird-challenges', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
       // MediaStore: подписка на индекс фото → загрузка каждого фото отдельно
       guardedSubscribe('likebird-media-index', (idx) => {
         if (!Array.isArray(idx)) return;
-        try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch {}
+        try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch { /* silent */ }
         mediaKeysRef.current = new Set(idx);
         // Загружаем каждое фото по отдельному ключу
         idx.forEach(name => {
@@ -1168,10 +1218,10 @@ export default function LikeBirdApp() {
             if (val && typeof val === 'string') {
               setProductPhotos(prev => {
                 const next = { ...prev, [name]: val };
-                try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch {}
+                try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch { /* silent */ }
                 return next;
               });
-              try { localStorage.setItem(k, val); } catch {}
+              try { localStorage.setItem(k, val); } catch { /* silent */ }
             }
           });
         });
@@ -1188,7 +1238,7 @@ export default function LikeBirdApp() {
       }),
       guardedSubscribe('likebird-notifications', (val) => {
         if (!Array.isArray(val)) return;
-        try { try { localStorage.setItem('likebird-notifications', JSON.stringify(val)); } catch {} } catch {}
+        try { try { localStorage.setItem('likebird-notifications', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ }
         setUserNotifications(val);
         // Показать push-уведомления для НОВЫХ непрочитанных (но НЕ помечаем read автоматически)
         try {
@@ -1201,7 +1251,7 @@ export default function LikeBirdApp() {
             showNotification(n.body || n.title, 'achievement');
             // Web Notification API (push на телефон)
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-              try { new Notification(n.title || 'LikeBird', { body: n.body, icon: '/favicon.ico', badge: '/favicon.ico' }); } catch {}
+              try { new Notification(n.title || 'LikeBird', { body: n.body, icon: '/favicon.ico', badge: '/favicon.ico' }); } catch { /* silent */ }
             }
             // Звук
             try {
@@ -1216,7 +1266,7 @@ export default function LikeBirdApp() {
               gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
               osc.start(ctx.currentTime);
               osc.stop(ctx.currentTime + 0.5);
-            } catch {}
+            } catch { /* silent */ }
           });
           // Помечаем shownLocally чтобы не показывать toast повторно (но НЕ read!)
           if (myNew.length > 0) {
@@ -1225,13 +1275,13 @@ export default function LikeBirdApp() {
             setUserNotifications(updatedVal);
             fbSave('likebird-notifications', updatedVal);
           }
-        } catch {}
+        } catch { /* silent */ }
       }),
-      guardedSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); try { try { localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } catch {} } catch {} } }),
-      guardedSubscribe('likebird-profiles', (val) => { setProfilesData(val); try { try { localStorage.setItem('likebird-profiles', JSON.stringify(val)); } catch {} } catch {} }),
+      guardedSubscribe('likebird-achievements-granted', (val) => { if (val && typeof val === 'object') { setAchievementsGranted(val); try { try { localStorage.setItem('likebird-achievements-granted', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
+      guardedSubscribe('likebird-profiles', (val) => { setProfilesData(val); try { try { localStorage.setItem('likebird-profiles', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-users', (val) => {
         if (!Array.isArray(val)) return;
-        try { try { localStorage.setItem('likebird-users', JSON.stringify(val)); } catch {} } catch {}
+        try { try { localStorage.setItem('likebird-users', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ }
         // Обновляем currentUser если его данные изменились (например роль)
         try {
           const authRaw = localStorage.getItem('likebird-auth');
@@ -1240,14 +1290,14 @@ export default function LikeBirdApp() {
             const me = val.find(u => u.login === auth.login);
             if (me) setCurrentUser(me);
           }
-        } catch {}
+        } catch { /* silent */ }
       }),
       guardedSubscribe('likebird-shifts', (val) => {
-        if (val && typeof val === 'object') { setShiftsData(val); try { try { localStorage.setItem('likebird-shifts', JSON.stringify(val)); } catch {} } catch {} }
+        if (val && typeof val === 'object') { setShiftsData(val); try { try { localStorage.setItem('likebird-shifts', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }
       }),
       guardedSubscribe('likebird-invite-codes', (val) => {
         if (!Array.isArray(val)) return;
-        try { try { localStorage.setItem('likebird-invite-codes', JSON.stringify(val)); } catch {} } catch {}
+        try { try { localStorage.setItem('likebird-invite-codes', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ }
         setInviteCodes(val); // FIX: обновляем глобальное состояние
       }),
     ];
@@ -1396,10 +1446,10 @@ export default function LikeBirdApp() {
         const shifts = JSON.parse(localStorage.getItem('likebird-shifts') || '{}');
         if (!shifts[shiftKey] || !shifts[shiftKey].status) {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            try { new Notification('LikeBird 🐦', { body: '⏰ Смена ещё не открыта! Не забудьте начать работу.', icon: '/favicon.ico' }); } catch {}
+            try { new Notification('LikeBird 🐦', { body: '⏰ Смена ещё не открыта! Не забудьте начать работу.', icon: '/favicon.ico' }); } catch { /* silent */ }
           }
         }
-      } catch {}
+      } catch { /* silent */ }
     };
     // Проверяем сразу и каждый час
     const timer = setTimeout(checkShiftReminder, 5000);
@@ -1416,18 +1466,29 @@ export default function LikeBirdApp() {
   const save = (key, data) => {
     fbWriteKeys.current.add(key);
     fbWriting.current = true;
-    try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* localStorage full — OK, Firebase is primary */ }
-    fbSave(key, data);
+    try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) { logErr('save:localStorage:' + key, e); }
+    if (navigator.onLine !== false) {
+      try { fbSave(key, data); } catch (e) { logErr('save:firebase', e); }
+    } else {
+      try { const q = JSON.parse(localStorage.getItem('likebird-offline-queue') || '[]'); if (!q.includes(key)) { q.push(key); localStorage.setItem('likebird-offline-queue', JSON.stringify(q)); } } catch { /* silent */ }
+    }
     setTimeout(() => {
       fbWriteKeys.current.delete(key);
       if (fbWriteKeys.current.size === 0) fbWriting.current = false;
     }, 500);
   };
-  const updateReports = (r) => { setReports(r); save('likebird-reports', r); };
+  const updateReports = (r) => {
+    // Архивация: если >5000, удаляем старейшие
+    let data = r;
+    if (data.length > 5000) {
+      data = data.slice(-5000);
+      showNotification('Автоочистка: удалены старые записи');
+    }
+    setReports(data); save('likebird-reports', data); };
   const updateStock = (s) => { 
     setStock(s); 
     save('likebird-stock', s);
-    try { checkLowStockAuto(s); } catch {}
+    try { checkLowStockAuto(s); } catch { /* silent */ }
     // Проверка низких остатков
     try {
       const settings = JSON.parse(localStorage.getItem('likebird-notif-settings') || '{}');
@@ -1436,12 +1497,12 @@ export default function LikeBirdApp() {
         Object.entries(s).forEach(([name, data]) => {
           if (data.count > 0 && data.count <= threshold && data.count <= (data.minStock || threshold)) {
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-              try { new Notification('LikeBird — Низкий остаток', { body: `⚠️ ${name}: осталось ${data.count} шт`, icon: '/favicon.ico' }); } catch {}
+              try { new Notification('LikeBird — Низкий остаток', { body: `⚠️ ${name}: осталось ${data.count} шт`, icon: '/favicon.ico' }); } catch { /* silent */ }
             }
           }
         });
       }
-    } catch {}
+    } catch { /* silent */ }
   };
   const updateSalaryDecision = (id, dec) => { const u = {...salaryDecisions, [id]: dec}; setSalaryDecisions(u); save('likebird-salary-decisions', u); };
   const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings);
@@ -1483,6 +1544,7 @@ export default function LikeBirdApp() {
   // FIX #56c: InputModal тоже через ref + DOM (та же проблема)
   const inputModalRef = useRef(null);
   const inputModalInputRef = useRef(null);
+  const [inputModalValue, setInputModalValue] = useState('');
   const inputModalCallbackRef = useRef(null);
   
   const showInputModal = ({ title, placeholder, defaultValue = '', onSave }) => {
@@ -1575,6 +1637,9 @@ export default function LikeBirdApp() {
   const updateCustomProducts = (products) => { setCustomProducts(products); save('likebird-custom-products', products); };
   const updateManuals = (newManuals) => { setManuals(newManuals); save('likebird-manuals', newManuals); };
   const addCustomProduct = (product) => {
+    // Проверка дубликата
+    const dup = DYNAMIC_ALL_PRODUCTS.find(p => p.name.toLowerCase() === product.name.toLowerCase());
+    if (dup) { showNotification(`Товар "${product.name}" уже существует`, 'error'); return; }
     const newProd = { ...product, id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), isCustom: true };
     updateCustomProducts([...customProducts, newProd]);
     // FIX: Добавляем товар в склад (ранее кастомные не появлялись в остатках)
@@ -1586,6 +1651,10 @@ export default function LikeBirdApp() {
   };
   const removeCustomProduct = (id) => {
     const prod = customProducts.find(p => p.id === id);
+    if (prod) {
+      const usedIn = reports.filter(r => getProductName(r.product) === prod.name).length;
+      if (usedIn > 0) { showNotification(`Товар используется в ${usedIn} отчётах. Лучше архивировать.`, 'error'); return; }
+    }
     updateCustomProducts(customProducts.filter(p => p.id !== id));
     // FIX: Убираем запись из склада (ранее оставался «призрачный» товар)
     if (prod && stock[prod.name]) {
@@ -1706,16 +1775,16 @@ export default function LikeBirdApp() {
       const threshold = 3;
       const lastCheck = localStorage.getItem('likebird-last-low-stock-check');
       const now = Date.now();
-      if (lastCheck && now - parseInt(lastCheck) < 3600000) return;
+      if (lastCheck && now - parseInt(lastCheck, 10) < 900000) return; // 15 мин
       const lowItems = [];
       Object.entries(currentStock).forEach(([name, data]) => {
         if (data.count > 0 && data.count <= (data.minStock || threshold)) lowItems.push(name + ': ' + data.count);
       });
       if (lowItems.length > 0) {
         showNotification('⚠️ Низкие остатки: ' + lowItems.slice(0, 3).join(', '));
-        try { localStorage.setItem('likebird-last-low-stock-check', String(now)); } catch {}
+        try { localStorage.setItem('likebird-last-low-stock-check', String(now)); } catch { /* silent */ }
       }
-    } catch {}
+    } catch { /* silent */ }
   };
 
   const addWriteOff = (productName, quantity, reason) => {
@@ -1768,16 +1837,16 @@ export default function LikeBirdApp() {
     // Сохраняем в state
     setProductPhotos(prev => {
       const next = { ...prev, [productName]: base64 };
-      try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch {}
+      try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch { /* silent */ }
       return next;
     });
     // Сохраняем ОТДЕЛЬНЫМ ключом в Firebase (маленький, ~3-5KB)
-    try { localStorage.setItem(key, base64); } catch {}
+    try { localStorage.setItem(key, base64); } catch { /* silent */ }
     fbSave(key, base64);
     // Обновляем индекс (список ключей фото)
     mediaKeysRef.current.add(productName);
     const idx = [...mediaKeysRef.current];
-    try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch {}
+    try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch { /* silent */ }
     fbSave('likebird-media-index', idx);
   };
 
@@ -1786,21 +1855,21 @@ export default function LikeBirdApp() {
     setProductPhotos(prev => {
       const next = { ...prev };
       delete next[productName];
-      try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch {}
+      try { localStorage.setItem('likebird-product-photos-data', JSON.stringify(next)); } catch { /* silent */ }
       return next;
     });
-    try { localStorage.removeItem(key); } catch {}
+    try { localStorage.removeItem(key); } catch { /* silent */ }
     fbSave(key, null);
     mediaKeysRef.current.delete(productName);
     const idx = [...mediaKeysRef.current];
-    try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch {}
+    try { localStorage.setItem('likebird-media-index', JSON.stringify(idx)); } catch { /* silent */ }
     fbSave('likebird-media-index', idx);
   };
 
   const saveShiftPhoto = (dateKey, base64) => {
     const key = shiftMediaKey(dateKey);
     setShiftPhotos(prev => ({ ...prev, [dateKey]: base64 }));
-    try { localStorage.setItem(key, base64); } catch {}
+    try { localStorage.setItem(key, base64); } catch { /* silent */ }
     fbSave(key, base64);
   };
 
@@ -1886,7 +1955,8 @@ export default function LikeBirdApp() {
     recentReports.forEach(r => {
       if (getProductName(r.product) === productName) totalSold += (r.quantity || 1);
     });
-    const avgDaily = totalSold / 30;
+    const daysSinceFirst = Math.max(1, Math.min(30, Math.ceil((Date.now() - (recentReports.length > 0 ? parseRuDate(recentReports[recentReports.length-1].date || recentReports[recentReports.length-1].timestamp).getTime() : Date.now())) / 86400000)));
+    const avgDaily = totalSold / daysSinceFirst;
     const currentStock = stock[productName]?.count || 0;
     const daysRemaining = avgDaily > 0 ? currentStock / avgDaily : 999;
     return { avgDaily: Math.round(avgDaily * 100) / 100, daysRemaining: Math.round(daysRemaining), predictedNeed: Math.round(avgDaily * days) };
@@ -1949,7 +2019,7 @@ export default function LikeBirdApp() {
               }
             });
           }
-        } catch {}
+        } catch { /* silent */ }
       });
 
       if (newNotifs.length > 0) {
@@ -2309,7 +2379,7 @@ export default function LikeBirdApp() {
   const updateGivenToAdmin = (emp, amount) => { const key = emp + '_' + selectedDate; const updated = {...givenToAdmin, [key]: amount}; setGivenToAdmin(updated); save('likebird-given', updated); };
   const getGivenToAdmin = (emp) => givenToAdmin[emp + '_' + selectedDate] || 0;
   const getReportsByDate = (date) => reports.filter(r => (r.date||'').split(',')[0] === date);
-  const getExpensesByDate = (date) => expenses.filter(e => e.date.split(',')[0] === date);
+  const getExpensesByDate = (date) => expenses.filter(e => (e.date||'').split(',')[0] === date);
   const getAllDates = () => [...new Set(reports.map(r => (r.date||'').split(',')[0]))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1); });
   const navigateDate = (dir) => { const dates = getAllDates(); const idx = dates.indexOf(selectedDate); if (dir === 'prev' && idx < dates.length - 1) setSelectedDate(dates[idx + 1]); else if (dir === 'next' && idx > 0) setSelectedDate(dates[idx - 1]); };
 
@@ -2368,7 +2438,7 @@ export default function LikeBirdApp() {
   // FIX: Условие count > 0 — при инициализации все count=0, не считаем их «низким остатком»
   const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= data.minStock).map(([name, data]) => ({name, ...data}));
   
-  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); const sales = {}; reports.filter(r => { const [d, m, y] = (r.date||'').split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
+  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0,0,0,0); const sales = {}; reports.filter(r => { const [d, m, y] = (r.date||'').split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
 
   const exportData = async () => {
     showNotification('⏳ Получаем актуальные данные из Firebase...');
@@ -2380,7 +2450,7 @@ export default function LikeBirdApp() {
         try {
           const val = await fbGet(key);
           if (val !== null && val !== undefined) fbData[key] = val;
-        } catch {}
+        } catch { /* silent */ }
       }));
       // Мержим: Firebase приоритетнее localStorage
       const localData = SyncManager.exportAll();
@@ -2416,7 +2486,7 @@ export default function LikeBirdApp() {
             try {
               await fbSave(key, data[key]);
               fbPushed++;
-            } catch {}
+            } catch { /* silent */ }
           }
         }
         showNotification(`✅ Импортировано ${imported} записей → Firebase (${fbPushed}). Перезагрузка...`);
@@ -2472,7 +2542,7 @@ export default function LikeBirdApp() {
         }
         shiftLine += '\n';
       }
-    } catch {}
+    } catch { /* silent */ }
     let text = `📅 ${selectedDate} - ${emp}\n${shiftLine}📦 Продаж: ${empReports.length}\n`;
     Object.entries(byCat).forEach(([cat, cnt]) => { text += `${CAT_ICONS[cat]} ${cat}: ${cnt}\n`; });
     text += `\n💰 Итого: ${(cashTotal + cashlessTotal).toLocaleString()}₽\n💵 Наличные: ${cashTotal.toLocaleString()}₽\n💳 Безнал: ${cashlessTotal.toLocaleString()}₽\n🎁 Чаевые: ${totalTips.toLocaleString()}₽\n👛 ЗП: ${totalSalary.toLocaleString()}₽\n`;
@@ -2535,8 +2605,8 @@ export default function LikeBirdApp() {
     if (!expenseModal) return null;
     const handleSave = () => {
       if (!desc.trim()) { showNotification('Введите описание', 'error'); return; }
-      const amtNum = parseInt(amt);
-      if (!amtNum || isNaN(amtNum)) { showNotification('Неверная сумма', 'error'); return; }
+      const amtNum = parseInt(amt, 10);
+      if (!amtNum || isNaN(amtNum) || amtNum <= 0) { showNotification('Введите положительную сумму', 'error'); return; }
       const newExp = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), date: new Date().toLocaleString('ru-RU'), amount: amtNum, description: desc.trim(), employee: expenseModal.employee };
       const updated = [newExp, ...expenses]; setExpenses(updated); save('likebird-expenses', updated);
       showNotification('Расход добавлен');
@@ -2546,7 +2616,7 @@ export default function LikeBirdApp() {
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
           <h3 className="text-lg font-bold mb-4">📝 Новый расход</h3>
-          <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Описание расхода" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-3 focus:border-amber-500 focus:outline-none" autoFocus />
+          <input type="text" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Описание расхода" maxLength={200} className="w-full p-3 border-2 border-gray-200 rounded-xl mb-3 focus:border-amber-500 focus:outline-none" autoFocus />
           <input type="number" value={amt} onChange={e => setAmt(e.target.value)} placeholder="Сумма" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" onKeyDown={e => { if (e.key === 'Enter') handleSave(); }} />
           <div className="flex gap-3">
             <button onClick={() => setExpenseModal(null)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
@@ -2686,7 +2756,7 @@ export default function LikeBirdApp() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 via-orange-50 to-amber-100 pb-6">
         <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📊 Аналитика</h2>
         </div>
         <div className="max-w-lg mx-auto px-4 mt-4">
@@ -2712,7 +2782,7 @@ export default function LikeBirdApp() {
           {/* TAB: Revenue */}
           {tab === 'revenue' && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-3">Выручка по дням</h3>
                 {revenueData.length > 0 ? (
                   <ResponsiveContainer width="100%" height={220}>
@@ -2744,7 +2814,7 @@ export default function LikeBirdApp() {
                 </div>
               </div>
               {/* Cash vs Cashless */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-3">Нал / Безнал</h3>
                 {revenueData.length > 0 ? (
                   <>
@@ -2782,7 +2852,7 @@ export default function LikeBirdApp() {
             });
             const totalSalary = salaryData.reduce((s, d) => s + d.salary, 0);
             return (<div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-1">Заработок по дням</h3>
                 <p className="text-2xl font-bold text-green-600 mb-3">{totalSalary.toLocaleString()} ₽</p>
                 {salaryData.length > 0 ? (<ResponsiveContainer width="100%" height={200}><BarChart data={salaryData}><CartesianGrid strokeDasharray="3 3" stroke={darkMode ? "#374151" : "#f0f0f0"} /><XAxis dataKey="date" tick={{fontSize: 9}} /><YAxis tick={{fontSize: 10}} /><Tooltip formatter={(v) => v.toLocaleString() + ' ₽'} /><Bar dataKey="salary" fill="#22c55e" radius={[4, 4, 0, 0]} name="ЗП" /></BarChart></ResponsiveContainer>) : <p className="text-gray-400 text-sm text-center py-8">Нет данных</p>}
@@ -2797,7 +2867,7 @@ export default function LikeBirdApp() {
           {/* TAB: Products */}
           {tab === 'products' && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-3">ABC-анализ товаров</h3>
                 <div className="space-y-1 max-h-80 overflow-y-auto">
                   {abcData.slice(0, 20).map((p, i) => (
@@ -2812,7 +2882,7 @@ export default function LikeBirdApp() {
                 </div>
               </div>
               {categoryData.length > 0 && (
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold text-sm mb-3">По категориям</h3>
                   <ResponsiveContainer width="100%" height={200}>
                     <PieChart>
@@ -2830,7 +2900,7 @@ export default function LikeBirdApp() {
           {/* TAB: Employees (admin only) */}
           {tab === 'employees' && isAdmin && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-3">Рейтинг по выручке</h3>
                 {employeeRanking.length > 0 ? (
                   <ResponsiveContainer width="100%" height={Math.max(150, employeeRanking.length * 40)}>
@@ -2844,7 +2914,7 @@ export default function LikeBirdApp() {
                   </ResponsiveContainer>
                 ) : <p className="text-gray-400 text-sm text-center py-4">Нет данных</p>}
               </div>
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-3">Средний чек по сотруднику</h3>
                 <div className="space-y-2">
                   {employeeRanking.map((e, i) => (
@@ -2860,7 +2930,7 @@ export default function LikeBirdApp() {
               </div>
               {/* Plan/Fact */}
               {salesPlan && (
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold text-sm mb-3">План / Факт</h3>
                   {employeeRanking.map(e => {
                     const target = salesPlan.daily ? salesPlan.daily * period : salesPlan.monthly || 300000;
@@ -2887,7 +2957,7 @@ export default function LikeBirdApp() {
             <div className="space-y-4">
               {forecast ? (
                 <>
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold text-sm mb-3">Прогноз выручки (7 дней)</h3>
                     <p className="text-xs text-gray-500 mb-2">Среднедневная: {forecast.avgDaily.toLocaleString()} ₽</p>
                     <ResponsiveContainer width="100%" height={200}>
@@ -2904,7 +2974,7 @@ export default function LikeBirdApp() {
                       <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500"></span> Прогноз</span>
                     </div>
                   </div>
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold text-sm mb-3">Прогноз остатков склада</h3>
                     <div className="space-y-2 max-h-64 overflow-y-auto">
                       {forecast.stockForecast.map(s => (
@@ -3065,7 +3135,7 @@ export default function LikeBirdApp() {
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
         <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 pt-safe sticky top-0 z-10" style={{paddingTop: "max(1rem, env(safe-area-inset-top))"}}>
           <div className="flex items-center justify-between">
-            <button onClick={() => setCurrentView('menu')} className="mr-3"><ArrowLeft className="w-6 h-6" /></button>
+            <button onClick={() => setCurrentView('menu')} className="mr-3" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
             <h2 className="text-xl font-bold flex-1">🔔 Уведомления</h2>
             {unread.length > 0 && (
               <button onClick={markAllAsRead} className="text-xs bg-white/20 px-3 py-1.5 rounded-lg font-semibold">
@@ -3698,12 +3768,12 @@ export default function LikeBirdApp() {
               var v = g.lb[k];
               if (v && typeof v.score === 'number') entries.push({ login: k, score: v.score, date: v.date || '', level: v.level || 1 });
             });
-          } catch(e) {}
+          } catch (e) { /* silent */ }
           entries.sort(function(a, b) { return b.score - a.score; });
           var top10 = entries.slice(0, 10);
 
           var auth2 = {};
-          try { auth2 = JSON.parse(localStorage.getItem('likebird-auth') || '{}'); } catch(e) {}
+          try { auth2 = JSON.parse(localStorage.getItem('likebird-auth') || '{}'); } catch (e) { /* silent */ }
           var myLogin = auth2.login || '';
 
           if (top10.length === 0) {
@@ -3910,7 +3980,7 @@ export default function LikeBirdApp() {
           try {
             var saved = parseInt(localStorage.getItem('likebird-max-level') || '1');
             if (nl > saved) localStorage.setItem('likebird-max-level', '' + nl);
-          } catch(e) {}
+          } catch (e) { /* silent */ }
         }
 
         // Game over
@@ -3919,7 +3989,7 @@ export default function LikeBirdApp() {
           g.nr = g.score > g.hs;
           if (g.nr) {
             g.hs = g.score;
-            try { localStorage.setItem('likebird-game-highscore', '' + g.score); } catch(e) {}
+            try { localStorage.setItem('likebird-game-highscore', '' + g.score); } catch (e) { /* silent */ }
             // ★ Confetti for new record
             spawnConfetti();
             // ★ BLOCK 3.1 — Save to leaderboard
@@ -3931,7 +4001,7 @@ export default function LikeBirdApp() {
                 date: new Date().toLocaleDateString('ru-RU'),
                 level: g.lvl
               });
-            } catch(e) {}
+            } catch (e) { /* silent */ }
           }
         }
       };
@@ -3971,7 +4041,7 @@ export default function LikeBirdApp() {
           else if (g.phase === 'leaderboard') { drawLeaderboard(); }
           else if (g.phase === 'levelselect') { drawLevelSelect(); }
         } catch(err) {
-          try { console.error('Game render error:', err); } catch(e2) {}
+          try { console.error('Game render error:', err); } catch (e2) { /* silent */ }
         }
         raf = requestAnimationFrame(loop);
       };
@@ -3986,7 +4056,7 @@ export default function LikeBirdApp() {
         var p = getP(e); if (!p) return;
         if (g.phase === 'menu') {
           if (hit(g.mb, p)) reset();
-          else if (hit(g.lbb, p)) { g.phase = 'leaderboard'; /* Refresh leaderboard */ try { fbGet('likebird-game-leaderboard').then(function(d) { g.lb = d || {}; }).catch(function() {}); } catch(e2) {} }
+          else if (hit(g.lbb, p)) { g.phase = 'leaderboard'; /* Refresh leaderboard */ try { fbGet('likebird-game-leaderboard').then(function(d) { g.lb = d || {}; }).catch(function() {}); } catch (e2) { /* silent */ } }
           else if (hit(g.lvlb, p)) { g.phase = 'levelselect'; }
         }
         else if (g.phase === 'over') {
@@ -4041,7 +4111,7 @@ export default function LikeBirdApp() {
         canvas.removeEventListener('mousedown', onDown);
         canvas.removeEventListener('mousemove', onMv);
         window.removeEventListener('resize', doResize);
-        try { if (box.contains(canvas)) box.removeChild(canvas); } catch(e) {}
+        try { if (box.contains(canvas)) box.removeChild(canvas); } catch (e) { /* silent */ }
       };
     }, []);
 
@@ -4059,7 +4129,7 @@ export default function LikeBirdApp() {
   const SettingsView = () => (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
       <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-        <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+        <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
         <h2 className="text-xl font-bold">⚙️ Настройки</h2>
       </div>
       <div className="max-w-md mx-auto px-4 mt-4 space-y-4">
@@ -4069,7 +4139,7 @@ export default function LikeBirdApp() {
           {isOnline ? 'Онлайн' : 'Оффлайн — данные сохраняются локально'}
         </div>
 
-        <div className="bg-white rounded-xl p-4 shadow">
+        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <h3 className="font-bold mb-3 flex items-center gap-2"><Info className="w-5 h-5 text-blue-500" />Статистика</h3>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between"><span className="text-gray-600">Всего продаж:</span><span className="font-semibold">{reports.length}</span></div>
@@ -4103,7 +4173,7 @@ export default function LikeBirdApp() {
         )}
 
         {/* BLOCK 9: Dark Mode Toggle */}
-        <div className="bg-white rounded-xl p-4 shadow">
+        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <h3 className="font-bold mb-3 flex items-center gap-2">🎨 Тема оформления</h3>
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-600">Тёмная тема</span>
@@ -4115,23 +4185,24 @@ export default function LikeBirdApp() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl p-4 shadow">
+        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-green-500" />Экспорт данных</h3>
           <p className="text-sm text-gray-500 mb-3">Полный бэкап всех данных приложения</p>
           <button onClick={exportData} className="w-full py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 mb-2">📥 Скачать полный бэкап</button>
           <button onClick={() => {
             const BOM = '\uFEFF';
             // Reports CSV
+            const exportReports = filterEmployee ? reports.filter(r => r.employee === filterEmployee) : reports;
             const reportHeaders = 'Дата;Сотрудник;Товар;Категория;Количество;Цена;Сумма;Чаевые;ЗП;Тип оплаты';
-            const reportRows = reports.map(r => [
+            const reportRows = exportReports.map(r => [
               r.date?.split(',')[0] || '', r.employee || '', getProductName(r.product), r.category || '',
               r.quantity || 1, r.salePrice || 0, r.total || 0, r.tips || 0,
               getEffectiveSalary(r), r.paymentType === 'cashless' ? 'Безнал' : 'Наличные'
             ].join(';'));
-            const reportsCSV = BOM + reportHeaders + '\n' + reportRows.join('\n');
+          const reportsCSV = BOM + reportHeaders + '\n' + reportRows.join('\n');
             const blob1 = new Blob(['\uFEFF' + reportsCSV], { type: 'text/csv;charset=utf-8' });
             const url1 = URL.createObjectURL(blob1);
-            const a1 = document.createElement('a'); a1.href = url1; a1.download = `reports-${formatDate(new Date())}.csv`; a1.click();
+            const a1 = document.createElement('a'); a1.href = url1; a1.download = `reports-${formatDate(new Date())}.csv` // Разделитель ; для Excel, для Google Sheets откройте и выберите ';'; a1.click();
             URL.revokeObjectURL(url1);
             // Stock CSV
             const stockHeaders = 'Товар;Категория;Количество;Мин. остаток;Цена';
@@ -4159,7 +4230,7 @@ export default function LikeBirdApp() {
         </div>
 
         {/* Уведомления */}
-        <div className="bg-white rounded-xl p-4 shadow">
+        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <h3 className="font-bold mb-3 flex items-center gap-2"><Bell className="w-5 h-5 text-purple-500" />🔔 Уведомления</h3>
           {typeof Notification !== 'undefined' && Notification.permission !== 'granted' && (
             <button onClick={() => Notification.requestPermission().then(p => { if (p === 'granted') showNotification('Уведомления включены!'); })} className="w-full py-2 bg-purple-500 text-white rounded-lg font-semibold hover:bg-purple-600 mb-3">
@@ -4198,7 +4269,7 @@ export default function LikeBirdApp() {
         </div>
 
         {/* Аккаунт */}
-        <div className="bg-white rounded-xl p-4 shadow">
+        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <h3 className="font-bold mb-3 flex items-center gap-2"><LogOut className="w-5 h-5 text-orange-500" />Аккаунт</h3>
           <p className="text-sm text-gray-500 mb-3">Вы вошли как: <strong>{authName || employeeName || 'Пользователь'}</strong></p>
           <button onClick={() => {
@@ -4311,15 +4382,15 @@ export default function LikeBirdApp() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
         <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => { clearImport(); setCurrentView('menu'); }} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => { clearImport(); setCurrentView('menu'); }} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📝 Импорт отчёта</h2>
         </div>
         <div className="max-w-2xl mx-auto px-4 mt-4 space-y-4">
-          <div className="bg-white rounded-xl p-4 shadow">
+          <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
             <label className="block text-sm font-semibold mb-2">Имя сотрудника</label>
             <input type="text" value={localName} onChange={(e) => setLocalName(e.target.value)} placeholder="Введите имя" className="w-full p-3 border-2 rounded-lg focus:border-amber-500 focus:outline-none" />
           </div>
-          <div className="bg-white rounded-xl p-4 shadow">
+          <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
             <label className="block text-sm font-semibold mb-2">Текст отчёта</label>
             <textarea 
               value={localText} 
@@ -4378,7 +4449,7 @@ export default function LikeBirdApp() {
             {inventoryDiscrepancies.length > 0 && (<div className="bg-orange-50 rounded-xl p-4 border-2 border-orange-400"><h4 className="font-bold text-orange-700 mb-3">⚠️ Расхождения ({inventoryDiscrepancies.length})</h4>{inventoryDiscrepancies.map((d, i) => (<div key={i} className="bg-white rounded-lg p-3 border border-orange-300 mb-2"><div className="flex justify-between items-center mb-2"><span className="font-semibold">{d.emoji} {d.name}</span><span className={`font-bold px-2 py-1 rounded ${d.difference > 0 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{d.difference > 0 ? '+' : ''}{d.difference}</span></div><div className="grid grid-cols-3 gap-2 text-xs"><div className="text-center"><p className="text-gray-500">Было</p><p className="font-bold">{d.startCount}</p></div><div className="text-center"><p className="text-gray-500">Стало</p><p className="font-bold">{d.endCount}</p></div><div className="text-center"><p className="text-gray-500">По остаткам</p><p className="font-bold text-indigo-600">{d.expectedSold}</p></div></div><div className="mt-2 pt-2 border-t flex justify-between text-sm"><span>Записано:</span><span className="font-bold text-cyan-600">{d.actualSold}</span></div></div>))}</div>)}
             {(Object.keys(parsedInventory.start).length > 0 || Object.keys(parsedInventory.end).length > 0) && inventoryDiscrepancies.length === 0 && (<div className="bg-green-50 rounded-xl p-4 border border-green-300 text-center"><p className="text-green-700 font-bold">✅ Сверка сходится!</p></div>)}
             {unrecognizedSales.length > 0 && (<div className="bg-red-50 border-2 border-red-300 rounded-xl p-4"><h4 className="font-bold text-red-700 mb-3"><AlertTriangle className="w-4 h-4 inline" /> Нераспознанные ({unrecognizedSales.length})</h4>{unrecognizedSales.map((s, i) => (<div key={i} className="p-3 bg-white rounded-lg border border-red-200 mb-2"><div className="flex justify-between items-center"><div><span className="text-red-700 font-medium">❓ {s.extractedName}</span><p className="text-xs text-gray-400">{s.originalText}</p></div><div className="flex items-center gap-2"><span className="font-bold">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><button onClick={() => setUnrecognizedSales(p => p.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600"><X className="w-5 h-5" /></button></div></div>{editingIdx === i ? (<div className="mt-3 space-y-2"><div className="flex gap-2"><input type="text" value={editName} onChange={(e) => handleSearch(e.target.value)} placeholder="Название товара" className="flex-1 px-3 py-2 border-2 border-blue-300 rounded-lg text-sm" autoFocus /><button onClick={() => fixUnrecognizedInImport(i, editName)} className="px-4 py-2 bg-green-500 text-white rounded-lg font-bold">✓</button><button onClick={() => { setEditingIdx(null); setEditName(''); setSuggestions([]); }} className="px-4 py-2 bg-gray-400 text-white rounded-lg">✕</button></div>{suggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{suggestions.map((p, j) => (<button key={j} onClick={() => fixUnrecognizedInImport(i, p.name)} className="w-full text-left px-3 py-2 hover:bg-amber-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-amber-600 font-semibold">{p.price}₽</span></button>))}</div>}</div>) : (<div className="mt-2 flex gap-2"><button onClick={() => { setEditingIdx(i); setEditName(''); setSuggestions([]); setTeachingIdx(null); }} className="flex-1 flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить</button><button onClick={() => { setTeachingIdx(i); setTeachAlias(s.extractedName || ''); setTeachProduct(''); setTeachSuggestions([]); setEditingIdx(null); }} className="flex items-center gap-1 text-purple-600 bg-purple-50 hover:bg-purple-100 border border-purple-300 py-2 px-3 rounded-lg text-sm font-semibold">➕ Обучить</button></div>)}{teachingIdx === i && (<div className="mt-3 space-y-2 bg-purple-50 border border-purple-200 rounded-lg p-3"><p className="text-xs text-purple-700 font-semibold mb-1">Привязать алиас к товару:</p><input type="text" value={teachAlias} onChange={(e) => setTeachAlias(e.target.value)} placeholder="Алиас (как пишут в отчёте)" className="w-full px-3 py-2 border-2 border-purple-300 rounded-lg text-sm mb-2" /><div className="flex gap-2"><input type="text" value={teachProduct} onChange={(e) => handleTeachSearch(e.target.value)} placeholder="Выберите товар..." className="flex-1 px-3 py-2 border-2 border-purple-300 rounded-lg text-sm" /><button onClick={() => saveTeachAlias(teachAlias, teachProduct)} className="px-4 py-2 bg-purple-500 text-white rounded-lg font-bold">✓</button><button onClick={() => setTeachingIdx(null)} className="px-3 py-2 bg-gray-200 rounded-lg">✕</button></div>{teachSuggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{teachSuggestions.map((p, j) => (<button key={j} onClick={() => { setTeachProduct(p.name); setTeachSuggestions([]); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-purple-600 font-semibold">{p.price}₽</span></button>))}</div>}</div>)}</div>))}</div>)}
-            {parsedSales.length > 0 && (<div className="bg-white rounded-xl p-4 shadow"><h4 className="font-bold text-green-700 mb-2"><Check className="w-4 h-4 inline" /> Распознанные ({parsedSales.length})</h4><div className="space-y-1 max-h-64 overflow-y-auto">{parsedSales.map((s, i) => (<div key={i} className="p-2 rounded-lg flex justify-between items-center text-sm bg-green-50 border border-green-200"><span>{s.product.emoji} {s.product.name}</span><div className="flex items-center gap-2"><span className="font-bold text-green-600">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><span className="text-xs text-amber-600">ЗП:{s.salary}₽</span>{s.tips > 0 && <span className="text-xs text-orange-500">(+{s.tips})</span>}<button onClick={() => { setParsedSales(p => p.filter((_, j) => j !== i)); recalculateTotals(parsedSales.filter((_, j) => j !== i), unrecognizedSales); }} className="text-gray-400 hover:text-red-500"><X className="w-4 h-4" /></button></div></div>))}</div></div>)}
+            {parsedSales.length > 0 && (<div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}><h4 className="font-bold text-green-700 mb-2"><Check className="w-4 h-4 inline" /> Распознанные ({parsedSales.length})</h4><div className="space-y-1 max-h-64 overflow-y-auto">{parsedSales.map((s, i) => (<div key={i} className="p-2 rounded-lg flex justify-between items-center text-sm bg-green-50 border border-green-200"><span>{s.product.emoji} {s.product.name}</span><div className="flex items-center gap-2"><span className="font-bold text-green-600">{s.price}₽ {s.paymentType === 'cashless' ? '💳' : '💵'}</span><span className="text-xs text-amber-600">ЗП:{s.salary}₽</span>{s.tips > 0 && <span className="text-xs text-orange-500">(+{s.tips})</span>}<button onClick={() => { setParsedSales(p => p.filter((_, j) => j !== i)); recalculateTotals(parsedSales.filter((_, j) => j !== i), unrecognizedSales); }} className="text-gray-400 hover:text-red-500"><X className="w-4 h-4" /></button></div></div>))}</div></div>)}
             <button onClick={() => {
               if (!localName.trim()) {
                 showNotification('Введите имя сотрудника', 'error');
@@ -4628,7 +4699,7 @@ export default function LikeBirdApp() {
             </button>
           </div>
           
-          <div className="bg-white rounded-xl p-4 shadow">
+          <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
             <label className="text-sm font-semibold">Имя сотрудника</label>
             <input type="text" value={localName} onChange={(e) => setLocalName(e.target.value)} placeholder="Введите имя" className="w-full p-3 border-2 rounded-lg mt-1 focus:border-amber-500 focus:outline-none" />
           </div>
@@ -4636,7 +4707,7 @@ export default function LikeBirdApp() {
           {/* Быстрый режим */}
           {quickMode && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <label className="text-sm font-semibold block mb-2">Быстрый ввод (каждая продажа с новой строки)</label>
                 <textarea 
                   value={quickText}
@@ -4654,7 +4725,7 @@ export default function LikeBirdApp() {
               
               {/* Локация и фото для быстрого режима */}
               {activeLocations.length > 0 && (
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <label className="text-sm font-semibold flex items-center gap-2"><MapPin className="w-4 h-4" /> Точка продаж</label>
                   <select value={saleLocation} onChange={(e) => {
                       setSaleLocation(e.target.value);
@@ -4676,7 +4747,7 @@ export default function LikeBirdApp() {
               )}
               
               {quickParsed.length > 0 && (
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-semibold mb-3">Распознано: {quickParsed.length}</h3>
                   <div className="space-y-2 max-h-64 overflow-y-auto">
                     {quickParsed.map((sale, idx) => (
@@ -4712,12 +4783,12 @@ export default function LikeBirdApp() {
           
           {/* Пошаговый режим */}
           {!quickMode && (<>
-            {!selectedCategory && (<div className="bg-white rounded-xl p-4 shadow"><h3 className="font-semibold mb-3">Выберите категорию</h3>{Object.keys(PRODUCTS).map(cat => (<button key={cat} onClick={() => setSelectedCategory(cat)} className="w-full text-left p-3 bg-gray-50 rounded-lg mb-2 font-semibold hover:bg-amber-50 flex items-center gap-2"><span className="text-2xl">{CAT_ICONS[cat]}</span>{cat}</button>))}</div>)}
+            {!selectedCategory && (<div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}><h3 className="font-semibold mb-3">Выберите категорию</h3>{Object.keys(PRODUCTS).map(cat => (<button key={cat} onClick={() => setSelectedCategory(cat)} className="w-full text-left p-3 bg-gray-50 rounded-lg mb-2 font-semibold hover:bg-amber-50 flex items-center gap-2"><span className="text-2xl">{CAT_ICONS[cat]}</span>{cat}</button>))}</div>)}
             {selectedCategory && !selectedProduct && (
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <div className="flex justify-between items-center mb-3"><h3 className="font-semibold">{CAT_ICONS[selectedCategory]} {selectedCategory}</h3><button onClick={() => { setSelectedCategory(null); setProductSearch(''); }} className="text-amber-600 text-sm hover:text-amber-700">← Назад</button></div>
                 <div className="relative mb-3"><Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" /><input type="text" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} placeholder="Поиск в категории..." className="w-full pl-9 pr-4 py-2 border-2 rounded-lg text-sm focus:border-amber-500 focus:outline-none" /></div>
-                <div className="max-h-80 overflow-y-auto space-y-2">{filteredProducts.length > 0 ? filteredProducts.map((p, i) => (<button key={i} onClick={() => { setSelectedProduct(p); setLocalPrice(p.price.toString()); setLocalTips('0'); setDiscountReason(''); setShowDiscountNote(false); setProductSearch(''); }} className="w-full text-left p-3 bg-gray-50 rounded-lg flex justify-between hover:bg-amber-50"><span className="flex items-center gap-2"><span className="text-xl">{p.emoji}</span>{p.name}</span><span className="font-bold text-amber-600">{p.price}₽</span></button>)) : <p className="text-center text-gray-400 py-4">Ничего не найдено</p>}</div>
+                <div className="max-h-80 overflow-y-auto space-y-2">{filteredProducts.length > 0 ? filteredProducts.map((p, i) => (<button key={i} onClick={() => { setSelectedProduct(p); setLocalPrice(p.price.toString()); setLocalTips('0'); setDiscountReason(''); setShowDiscountNote(false); setProductSearch(''); }} className={`w-full text-left p-3 rounded-lg flex justify-between ${darkMode ? "bg-gray-700 hover:bg-gray-600" : "bg-gray-50 hover:bg-amber-50"}`}><span className="flex items-center gap-2"><span className="text-xl">{p.emoji}</span>{p.name}</span><span className="font-bold text-amber-600">{p.price}₽</span></button>)) : <p className="text-center text-gray-400 py-4">Ничего не найдено</p>}</div>
               </div>
             )}
             {selectedProduct && (
@@ -4728,7 +4799,7 @@ export default function LikeBirdApp() {
                 </div>
                 
                 {/* Цена продажи */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <label className="text-sm font-semibold">Цена продажи</label>
                   <input type="number" value={localPrice} onChange={(e) => handlePriceChange(e.target.value)} className="w-full p-3 border-2 rounded-lg text-xl font-bold text-center mt-1 focus:border-amber-500 focus:outline-none" />
                   {isBelowBase && (
@@ -4744,7 +4815,7 @@ export default function LikeBirdApp() {
                             type="text" 
                             value={discountReason} 
                             onChange={(e) => setDiscountReason(e.target.value)}
-                            placeholder="Причина скидки (например: постоянный клиент)"
+                            placeholder="Причина скидки (например: постоянный клиент)" maxLength={200}
                             className="w-full p-2 border rounded-lg text-sm focus:border-amber-500 focus:outline-none"
                           />
                         </div>
@@ -4754,7 +4825,7 @@ export default function LikeBirdApp() {
                 </div>
                 
                 {/* Чаевые — отдельная доплата от клиента */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <label className="text-sm font-semibold">Чаевые (доплата от клиента)</label>
                   <input 
                     type="number" 
@@ -4766,8 +4837,8 @@ export default function LikeBirdApp() {
                   <p className="text-xs text-gray-400 mt-1 text-center">Дополнительная сумма сверх цены продажи</p>
                 </div>
                 
-                <div className="bg-white rounded-xl p-4 shadow"><label className="text-sm font-semibold">Количество</label><div className="flex items-center justify-center gap-4 mt-2"><button onClick={() => setLocalQuantity(Math.max(1, localQuantity - 1))} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">-</button><span className="text-3xl font-bold w-16 text-center">{localQuantity}</span><button onClick={() => setLocalQuantity(localQuantity + 1)} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">+</button></div></div>
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}><label className="text-sm font-semibold">Количество</label><div className="flex items-center justify-center gap-4 mt-2"><button onClick={() => setLocalQuantity(Math.max(1, localQuantity - 1))} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">-</button><span className="text-3xl font-bold w-16 text-center">{localQuantity}</span><button onClick={() => setLocalQuantity(localQuantity + 1)} className="w-12 h-12 bg-amber-100 rounded-full text-xl font-bold hover:bg-amber-200">+</button></div></div>
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <label className="text-sm font-semibold">Способ оплаты</label>
                   <div className="mt-2 space-y-2">
                     {[{v: 'cash', l: '💵 Наличные'}, {v: 'cashless', l: '💳 Безналичный'}, {v: 'mixed', l: '💵💳 Смешанная'}].map(o => (
@@ -4795,7 +4866,7 @@ export default function LikeBirdApp() {
                 
                 {/* Локация */}
                 {activeLocations.length > 0 && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <label className="text-sm font-semibold flex items-center gap-2"><MapPin className="w-4 h-4" /> Точка продаж</label>
                     <select value={saleLocation} onChange={(e) => {
                       setSaleLocation(e.target.value);
@@ -4817,7 +4888,7 @@ export default function LikeBirdApp() {
                 )}
                 
                 {/* Фото */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <label className="text-sm font-semibold flex items-center gap-2"><Camera className="w-4 h-4" /> Фото (необязательно)</label>
                   <div className="mt-2">
                     {salePhoto ? (
@@ -4850,7 +4921,7 @@ export default function LikeBirdApp() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
         <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold mb-3">📋 Каталог</h2>
           <div className="relative"><Search className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" /><input type="text" placeholder="Поиск товара..." value={localSearch} onChange={(e) => setLocalSearch(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-xl text-gray-800 focus:outline-none" />{localSearch && <button onClick={() => setLocalSearch('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>}</div>
         </div>
@@ -4867,7 +4938,7 @@ export default function LikeBirdApp() {
               return Object.keys(grouped).map(Number).sort((a,b) => a-b).map(price => (
                 <div key={price} className="mb-4">
                   <div className="bg-amber-500 rounded-lg p-2 mb-2 shadow"><span className="text-white text-lg font-bold">{price}₽</span></div>
-                  <div className="bg-white rounded-xl shadow overflow-hidden">{grouped[price].map((p, i) => { const photo = productPhotos[p.name]; return (<div key={i} className="p-3 border-b last:border-0 flex items-center gap-3 text-sm">
+                  <div className={`rounded-xl shadow overflow-hidden ${darkMode ? "bg-gray-800" : "bg-white"}`}>{grouped[price].map((p, i) => { const photo = productPhotos[p.name]; return (<div key={i} className="p-3 border-b last:border-0 flex items-center gap-3 text-sm">
                     {photo ? <img src={photo} alt={p.name} className="w-24 h-24 rounded-xl object-cover flex-shrink-0 border border-gray-100 shadow-sm" /> : <span className="text-2xl flex-shrink-0 w-24 h-24 bg-amber-50 rounded-xl flex items-center justify-center text-4xl">{p.emoji}</span>}
                     <span className="flex-1">{p.name}</span>
                     {localSearch && <span className="text-xs text-gray-400">{CAT_ICONS[p.category]}</span>}
@@ -4892,6 +4963,7 @@ export default function LikeBirdApp() {
     const [actualInput, setActualInput] = useState({});
     const [showLow, setShowLow] = useState(false);
     const [stockSearch, setStockSearch] = useState('');
+    const debouncedStockSearch = useDebounce(stockSearch, 200);
     const [showBulkImport, setShowBulkImport] = useState(false);
     const [showPartners, setShowPartners] = useState(false);
     const [bulkText, setBulkText] = useState('');
@@ -4935,7 +5007,7 @@ export default function LikeBirdApp() {
       try { navigator.clipboard.writeText(text); showNotification('📋 Заказ скопирован (' + orderItems.length + ' поз.)'); } catch { showNotification(text); }
     };
 
-    const categoryItems = Object.entries(stock).filter(([name, data]) => data.category === stockCategory).filter(([name]) => !stockSearch || name.toLowerCase().includes(stockSearch.toLowerCase())).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
+    const categoryItems = Object.entries(stock).filter(([name, data]) => data.category === stockCategory).filter(([name]) => !debouncedStockSearch || name.toLowerCase().includes(debouncedStockSearch.toLowerCase())).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
     
     // Подсчёт всех птичек-свистулек
     const totalBirdsInStock = Object.entries(stock).filter(([_, data]) => data.category === 'Птички-свистульки').reduce((sum, [_, data]) => sum + data.count, 0);
@@ -5310,7 +5382,7 @@ export default function LikeBirdApp() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
         <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📦 Ревизия</h2>
         </div>
         <div className="max-w-md mx-auto px-4 mt-4 space-y-4">
@@ -5456,6 +5528,7 @@ export default function LikeBirdApp() {
               {(bulkParsed.length > 0 || bulkTotalBirds !== null || bulkPartnerMoves.length > 0) && (
                 <button onClick={applyBulkInventory} className="w-full bg-green-500 text-white py-3 rounded-lg font-semibold hover:bg-green-600">✅ Применить изменения</button>
               )}
+              {stockHistory.length > historyLimit && <button onClick={() => setHistoryLimit(prev => prev + 50)} className="w-full text-center py-2 text-purple-500 text-sm hover:text-purple-700">↑ Показать ещё ({stockHistory.length - historyLimit})</button>}
             </div>
           )}
           
@@ -5467,7 +5540,7 @@ export default function LikeBirdApp() {
           <div className="flex gap-2">{Object.keys(PRODUCTS).map(cat => (<button key={cat} onClick={() => setStockCategory(cat)} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${stockCategory === cat ? 'bg-amber-500 text-white shadow-md' : 'bg-white hover:bg-gray-50'}`}>{CAT_ICONS[cat]}</button>))}</div>
           <div className="relative mt-2 mb-2"><Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" /><input type="text" placeholder="Поиск по складу..." value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} className="w-full pl-9 pr-8 py-2 rounded-xl bg-white shadow text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />{stockSearch && <button onClick={() => setStockSearch('')} className="absolute right-3 top-2.5 text-gray-400"><X className="w-4 h-4" /></button>}</div>
           <div className="flex justify-between items-center"><span className="text-sm text-gray-500">{categoryItems.length} позиций</span><button onClick={resetAllStock} className="text-xs text-red-500 hover:text-red-700">Обнулить всё</button></div>
-          <div className="bg-white rounded-xl shadow overflow-hidden">
+          <div className={`rounded-xl shadow overflow-hidden ${darkMode ? "bg-gray-800" : "bg-white"}`}>
             {categoryItems.map(([name, data]) => { const sold = weekSales[name] || 0; const isLow = data.count <= data.minStock; return (
               <div key={name} className={`p-3 border-b last:border-0 ${isLow ? 'bg-orange-50' : ''}`}>
                 <div className="flex justify-between items-center">
@@ -5559,7 +5632,7 @@ export default function LikeBirdApp() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
         <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold">📜 История продаж</h2>
           {/* Поиск */}
           <div className="relative mt-2">
@@ -5609,13 +5682,13 @@ export default function LikeBirdApp() {
             <button onClick={() => navigateDate('next')} disabled={idx <= 0} className={`p-2 rounded-lg ${idx <= 0 ? 'text-gray-300' : 'text-amber-600 hover:bg-amber-50'}`}><ChevronRight className="w-6 h-6" /></button>
           </div>
           {filteredReports.length > 0 ? (
-            <div className="bg-white rounded-xl shadow overflow-hidden">{filteredReports.map(r => (
+            <div className={`rounded-xl shadow overflow-hidden ${darkMode ? "bg-gray-800" : "bg-white"}`}>{filteredReports.map(r => (
               <div key={r.id} className={`p-3 border-b last:border-0 ${r.isUnrecognized ? 'bg-red-50 border-l-4 border-l-red-500' : isBelowBasePrice(r.basePrice, r.salePrice) ? 'bg-yellow-50 border-l-4 border-l-yellow-500' : ''}`}>
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
-                    <p className="font-semibold text-sm">{getProductName(r.product)}</p>
+                    <p className="font-semibold text-sm truncate max-w-[200px]">{getProductName(r.product)}</p>
                     <div className="flex items-center gap-1 text-xs text-gray-400">
-                      <span>{r.employee}</span>
+                      <span className="truncate max-w-[100px] inline-block">{r.employee}</span>
                       <span>•</span>
                       <span>{r.paymentType === 'cashless' ? '💳' : '💵'}</span>
                       {r.quantity > 1 && <><span>•</span><span>{r.quantity} шт</span></>}
@@ -5627,9 +5700,14 @@ export default function LikeBirdApp() {
                     {r.location && <p className="text-xs text-blue-500">📍 {r.location}</p>}
                     {r.photo && <img src={r.photo} alt="" className="w-8 h-8 rounded object-cover mt-1 inline-block" />}
                   </div>
-                  <div className="flex items-center gap-2"><div className="text-right"><p className="font-bold text-green-600 text-sm">{r.total}₽{r.tips > 0 && <span className="text-amber-500 font-normal"> ({r.tips})</span>}</p><p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p></div><button onClick={() => deleteReport(r.id)} className="text-red-400 p-1 hover:text-red-600"><Trash2 className="w-4 h-4" /></button></div>
+                  <div className="flex items-center gap-2"><div className="text-right"><p className="font-bold text-green-600 text-sm">{r.total}₽{r.tips > 0 && <span className="text-amber-500 font-normal"> ({r.tips})</span>}</p><p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p></div><button onClick={() => deleteReport(r.id)} className="text-red-400 p-1 hover:text-red-600" aria-label="Удалить отчёт"><Trash2 className="w-4 h-4" /></button></div>
                 </div>
                 <FixUnrecognizedButton report={r} />
+                {r.editHistory && r.editHistory.length > 0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 mt-1">
+                    <p className="text-xs text-blue-700">✏️ Изменено {r.editHistory.length}x (посл.: {r.editHistory[r.editHistory.length-1].by}, {r.editHistory[r.editHistory.length-1].at})</p>
+                  </div>
+                )}
                 {isBelowBasePrice(r.basePrice, r.salePrice) && r.discountReason && (
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-1.5 mt-1">
                     <p className="text-xs text-yellow-700">💬 Причина скидки: {r.discountReason}</p>
@@ -5933,7 +6011,7 @@ export default function LikeBirdApp() {
     // Refresh regUsers from localStorage (was inside IIFE)
     useEffect(() => {
       const interval = setInterval(() => {
-        try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch {}
+        try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch { /* silent */ }
       }, 2000);
       return () => clearInterval(interval);
     }, []);
@@ -5941,10 +6019,12 @@ export default function LikeBirdApp() {
     const [kpiEditValue, setKpiEditValue] = useState('');
     // States moved from IIFEs to fix input focus bug
     const [stockTab, setStockTab] = useState('history');
+    const [adminPassInput, setAdminPassInput] = useState('');
+    const [historyLimit, setHistoryLimit] = useState(50);
     const [newWriteOff, setNewWriteOff] = useState({ product: '', quantity: '', reason: '' });
     const [chatText, setChatText] = useState('');
     const [chatTo, setChatTo] = useState('');
-    const [chatLimit, setChatLimit] = useState(50);
+    // chatLimit moved to parent scope
     const [newCity, setNewCity] = useState('');
     const [newLocName, setNewLocName] = useState('');
     const [selectedCity, setSelectedCity] = useState('');
@@ -6008,7 +6088,7 @@ export default function LikeBirdApp() {
     
     const todayExpenses = expenses.filter(e => e.date.startsWith(todayStr)).reduce((s, e) => s + e.amount, 0);
     const weekExpenses = expenses.filter(e => {
-      const [datePart] = e.date.split(',');
+      const [datePart] = (e.date||'').split(',');
       const [d, m, y] = datePart.split('.');
       const expDate = new Date(parseYear(y), m - 1, d);
       return expDate >= weekAgo;
@@ -6164,7 +6244,7 @@ export default function LikeBirdApp() {
       return (
         <div className="space-y-4">
           {/* Период + Вид */}
-          <div className="bg-white rounded-xl p-4 shadow">
+          <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-bold flex items-center gap-2"><Calendar className="w-5 h-5 text-blue-600" />Период графика</h3>
               <div className="flex bg-gray-100 rounded-lg p-0.5">
@@ -6281,7 +6361,7 @@ export default function LikeBirdApp() {
 
           {/* Список смен (оригинальный вид) */}
           {scheduleViewMode === 'list' && activeEmployees.map(emp => (
-            <div key={emp} className="bg-white rounded-xl p-4 shadow">
+            <div key={emp} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
               <div className="flex justify-between items-center mb-3">
                 <h3 className="font-bold text-lg">{emp}</h3>
                 <div className="flex gap-1">
@@ -6427,7 +6507,7 @@ export default function LikeBirdApp() {
               }
             };
             setTimeout(scrollToActive, 50);
-            if (el._observer) { try { el._observer.disconnect(); } catch {} }
+            if (el._observer) { try { el._observer.disconnect(); } catch { /* silent */ } }
             const observer = new MutationObserver(scrollToActive);
             el._observer = observer;
             observer.observe(el, { attributes: true, subtree: true, attributeFilter: ['data-active'] });
@@ -6480,7 +6560,7 @@ export default function LikeBirdApp() {
             }).map(([key]) => {
               const login = key.replace(`_${todayStr}`, '');
               const user = employees.find(e => e.name === login) || { name: login };
-              try { const users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); const u = users.find(u => u.login === login); if (u) return { name: u.name || login }; } catch {}
+              try { const users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); const u = users.find(u => u.login === login); if (u) return { name: u.name || login }; } catch { /* silent */ }
               return { name: login };
             });
             const lowStockItems = Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= (data.minStock || 3));
@@ -6528,7 +6608,7 @@ export default function LikeBirdApp() {
 
                 {/* Продажи сегодня по сотрудникам */}
                 {todayReports.length > 0 && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h4 className="font-bold text-gray-700 mb-3 text-sm">👥 Продажи сегодня по сотрудникам</h4>
                     <div className="space-y-2">
                       {Object.entries(todayReports.reduce((acc, r) => {
@@ -6650,7 +6730,7 @@ export default function LikeBirdApp() {
                 </div>
 
                 {/* График по дням */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-purple-600" />Выручка по дням</h3>
                   <div className="space-y-2">
                     {Object.entries(analytics.byDay).slice(-7).map(([date, data]) => (
@@ -6669,7 +6749,7 @@ export default function LikeBirdApp() {
                 </div>
 
                 {/* Топ сотрудников */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2"><Users className="w-5 h-5 text-purple-600" />Топ сотрудников</h3>
                   <div className="space-y-2">
                     {Object.entries(analytics.byEmployee).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 5).map(([emp, data], i) => (
@@ -6684,7 +6764,7 @@ export default function LikeBirdApp() {
                 </div>
 
                 {/* Топ товаров */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2"><Package className="w-5 h-5 text-purple-600" />Топ товаров</h3>
                   <div className="space-y-2">
                     {Object.entries(analytics.byProduct).sort((a, b) => b[1].sales - a[1].sales).slice(0, 5).map(([prod, data], i) => (
@@ -6701,7 +6781,7 @@ export default function LikeBirdApp() {
 
                 {/* По локациям */}
                 {Object.keys(analytics.byLocation).length > 1 && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold mb-3 flex items-center gap-2"><MapPin className="w-5 h-5 text-purple-600" />По точкам</h3>
                     <div className="space-y-2">
                       {Object.entries(analytics.byLocation).sort((a, b) => b[1].revenue - a[1].revenue).map(([loc, data]) => (
@@ -6755,7 +6835,7 @@ export default function LikeBirdApp() {
                   });
                   
                   return (
-                    <div key={dateKey} className="bg-white rounded-xl shadow overflow-hidden">
+                    <div key={dateKey} className={`rounded-xl shadow overflow-hidden ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <div className="bg-purple-100 p-3 border-b">
                         <h3 className="font-bold text-purple-800">📅 {dateKey}</h3>
                         <p className="text-xs text-purple-600">{dayReports.length} продаж</p>
@@ -7197,7 +7277,7 @@ export default function LikeBirdApp() {
 
                 {/* Рейтинг */}
                 {Object.keys(employeeStats).length > 0 && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold mb-3 flex items-center gap-2">🏆 Топ по выручке (всё время)</h3>
                     <div className="space-y-2">
                       {Object.entries(employeeStats)
@@ -7373,7 +7453,7 @@ export default function LikeBirdApp() {
                 {/* Штрафы */}
                 {personnelTab === 'penalties' && (
                   <div className="space-y-4">
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">➕ Добавить штраф</h3>
                       <div className="space-y-2">
                         <select value={newPenalty.employeeId} onChange={(e) => setNewPenalty({...newPenalty, employeeId: e.target.value})} className="w-full p-2 border rounded">
@@ -7391,7 +7471,7 @@ export default function LikeBirdApp() {
                         }} className="w-full bg-red-500 text-white py-2 rounded font-medium">Добавить штраф</button>
                       </div>
                     </div>
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">📋 История штрафов</h3>
                       <div className="space-y-2 max-h-64 overflow-y-auto">
                         {penalties.slice().reverse().slice(0, 20).map(p => {
@@ -7437,7 +7517,7 @@ export default function LikeBirdApp() {
                   
                   return (
                   <div className="space-y-4">
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">➕ Добавить бонус</h3>
                       <div className="space-y-2">
                         <select value={newBonus.employeeId} onChange={(e) => setNewBonus({...newBonus, employeeId: e.target.value})} className="w-full p-2 border rounded">
@@ -7455,7 +7535,7 @@ export default function LikeBirdApp() {
                         }} className="w-full bg-green-500 text-white py-2 rounded font-medium">Добавить бонус</button>
                       </div>
                     </div>
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">📋 История бонусов</h3>
                       <div className="space-y-2 max-h-96 overflow-y-auto">
                         {bonuses.slice().reverse().slice(0, 40).map(b => {
@@ -7503,7 +7583,7 @@ export default function LikeBirdApp() {
 
                 {/* Рейтинг */}
                 {personnelTab === 'ratings' && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold mb-3">⭐ Рейтинг сотрудников</h3>
                     <div className="space-y-3">
                       {employees.filter(e => e.active).map(emp => {
@@ -7536,7 +7616,7 @@ export default function LikeBirdApp() {
                 {/* Отпуска/Больничные */}
                 {personnelTab === 'timeoff' && (
                   <div className="space-y-4">
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">➕ Добавить отпуск/больничный</h3>
                       <div className="space-y-2">
                         <select value={newTimeOff.employeeId} onChange={(e) => setNewTimeOff({...newTimeOff, employeeId: e.target.value})} className="w-full p-2 border rounded">
@@ -7561,7 +7641,7 @@ export default function LikeBirdApp() {
                         }} className="w-full bg-blue-500 text-white py-2 rounded font-medium">Добавить</button>
                       </div>
                     </div>
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">📋 Текущие отсутствия</h3>
                       <div className="space-y-2">
                         {getActiveTimeOff().map(t => {
@@ -7625,7 +7705,7 @@ export default function LikeBirdApp() {
               </div>
 
               {/* Настройки зарплаты */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><DollarSign className="w-5 h-5 text-purple-600" />Настройки зарплаты</h3>
                 <div className="space-y-2">
                   {salarySettings.ranges.map((range, i) => (
@@ -7646,7 +7726,7 @@ export default function LikeBirdApp() {
               </div>
 
               {/* Расходы по категориям */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2">📝 Расходы по категориям</h3>
                 <div className="space-y-2">
                   {expenseCategories.map(cat => {
@@ -7670,7 +7750,7 @@ export default function LikeBirdApp() {
             return (
               <div className="space-y-4">
                 {/* Добавление точки */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2"><MapPin className="w-5 h-5 text-purple-600" />Добавить точку</h3>
                   <div className="space-y-2">
                     <div className="flex gap-2">
@@ -7702,7 +7782,7 @@ export default function LikeBirdApp() {
 
                 {/* Список точек */}
                 {(selectedCity ? [selectedCity] : cities).map(city => (
-                  <div key={city} className="bg-white rounded-xl p-4 shadow">
+                  <div key={city} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold mb-3 flex items-center gap-2">📍 {city}</h3>
                     <div className="space-y-2">
                       {getLocationsByCity(city).map(loc => (
@@ -7740,7 +7820,7 @@ export default function LikeBirdApp() {
           {adminTab === 'products' && (
             <div className="space-y-4">
               {/* Добавление товара */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Plus className="w-5 h-5 text-purple-600" />Добавить товар</h3>
                 <div className="space-y-2">
                   <input type="text" value={newProduct.name} onChange={(e) => setNewProduct({...newProduct, name: e.target.value})} placeholder="Название" className="w-full p-2 border rounded" />
@@ -7775,7 +7855,7 @@ export default function LikeBirdApp() {
 
               {/* Все товары с возможностью редактирования */}
               {Object.entries(PRODUCTS).map(([cat, items]) => (
-                <div key={cat} className="bg-white rounded-xl p-4 shadow">
+                <div key={cat} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3">{CAT_ICONS[cat]} {cat} ({items.length + customProducts.filter(p => p.category === cat).length})</h3>
                   <div className="space-y-1 max-h-64 overflow-y-auto">
                     {[...items.map(p => ({...p, category: cat, isBase: true})), ...customProducts.filter(p => p.category === cat).map(p => ({...p, isBase: false}))].map((prod, i) => (
@@ -7858,7 +7938,7 @@ export default function LikeBirdApp() {
               </button>
 
               {/* Статистика по категориям */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2">📊 Остатки по категориям</h3>
                 <div className="space-y-2">
                   {Object.keys(PRODUCTS).map(cat => {
@@ -7879,7 +7959,7 @@ export default function LikeBirdApp() {
               </div>
 
               {/* Быстрый ввод птичек */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3">🐦 Быстрый ввод птичек по ревизии</h3>
                 <div className="flex gap-2">
                   <input type="number" value={totalBirds || ''} onChange={(e) => { setTotalBirds(parseInt(e.target.value) || 0); save('likebird-totalbirds', parseInt(e.target.value) || 0); }} placeholder="Количество" className="flex-1 p-3 border rounded-lg" />
@@ -7909,10 +7989,10 @@ export default function LikeBirdApp() {
 
                 {/* История движения */}
                 {stockTab === 'history' && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold mb-3">📜 История движения товаров</h3>
                     <div className="space-y-2 max-h-96 overflow-y-auto">
-                      {stockHistory.slice(0, 50).map(entry => (
+                      {stockHistory.slice(0, historyLimit).map(entry => (
                         <div key={entry.id} className={`flex justify-between items-center p-2 rounded ${entry.action === 'sale' ? 'bg-green-50' : entry.action === 'writeoff' ? 'bg-red-50' : entry.action === 'add' ? 'bg-blue-50' : 'bg-gray-50'}`}>
                           <div>
                             <p className="font-medium text-sm">{entry.productName}</p>
@@ -7932,7 +8012,7 @@ export default function LikeBirdApp() {
                 {/* Списания */}
                 {stockTab === 'writeoff' && (
                   <div className="space-y-4">
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">➕ Списать товар</h3>
                       <div className="space-y-2">
                         <select value={newWriteOff.product} onChange={(e) => setNewWriteOff({...newWriteOff, product: e.target.value})} className="w-full p-2 border rounded">
@@ -7956,7 +8036,7 @@ export default function LikeBirdApp() {
                         }} className="w-full bg-red-500 text-white py-2 rounded font-medium">Списать</button>
                       </div>
                     </div>
-                    <div className="bg-white rounded-xl p-4 shadow">
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <h3 className="font-bold mb-3">📋 История списаний</h3>
                       <div className="space-y-2 max-h-64 overflow-y-auto">
                         {writeOffs.slice().reverse().slice(0, 20).map(w => (
@@ -7983,7 +8063,7 @@ export default function LikeBirdApp() {
                     </button>
                     {autoOrderList.length > 0 && (
                       <>
-                        <div className="bg-white rounded-xl p-4 shadow">
+                        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                           <h3 className="font-bold mb-3">📦 Список для заказа</h3>
                           <div className="space-y-2">
                             {autoOrderList.map((item, i) => (
@@ -8006,11 +8086,11 @@ export default function LikeBirdApp() {
                             ))}
                           </div>
                         </div>
-                        <div className="bg-white rounded-xl p-4 shadow">
+                        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                           <h3 className="font-bold mb-3">📝 Текст для заказа</h3>
                           <textarea value={getAutoOrderText()} readOnly className="w-full p-3 border rounded-lg bg-gray-50 text-sm" rows={6} />
                           <button onClick={() => {
-                            const orderText = getAutoOrderText(); navigator.clipboard.writeText(orderText); if (navigator.share) { try { navigator.share({ title: 'Автозаказ', text: orderText }); } catch {} }
+                            const orderText = getAutoOrderText(); navigator.clipboard.writeText(orderText); if (navigator.share) { try { navigator.share({ title: 'Автозаказ', text: orderText }); } catch { /* silent */ } }
                             showNotification('Скопировано в буфер обмена');
                           }} className="w-full mt-2 bg-green-500 text-white py-2 rounded font-medium">
                             📋 Копировать список
@@ -8029,7 +8109,7 @@ export default function LikeBirdApp() {
 
                 {/* Себестоимость */}
                 {stockTab === 'cost' && (
-                  <div className="bg-white rounded-xl p-4 shadow">
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                     <h3 className="font-bold mb-3">💰 Себестоимость товаров</h3>
                     <p className="text-xs text-gray-500 mb-3">⚠️ Эта информация видна только администратору</p>
                     <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -8062,7 +8142,7 @@ export default function LikeBirdApp() {
           {adminTab === 'chat' && (
               <div className="space-y-4">
                 {/* Отправка сообщения */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2"><MessageCircle className="w-5 h-5 text-purple-600" />Новое сообщение</h3>
                   <div className="space-y-2">
                     <select value={chatTo} onChange={(e) => setChatTo(e.target.value)} className="w-full p-2 border rounded">
@@ -8081,7 +8161,7 @@ export default function LikeBirdApp() {
                 </div>
 
                 {/* Список сообщений */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3">💬 История сообщений</h3>
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {chatMessages.slice().reverse().slice(0, 30).map(msg => {
@@ -8252,7 +8332,7 @@ export default function LikeBirdApp() {
           {/* BLOCK 8: Audit Log */}
           {adminTab === 'audit' && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2">📋 Журнал действий ({auditLog.length})</h3>
                 <div className="space-y-2 max-h-96 overflow-y-auto">
                   {auditLog.length === 0 ? (
@@ -8275,7 +8355,7 @@ export default function LikeBirdApp() {
           {/* BLOCK 7: Challenges Management */}
           {adminTab === 'challenges' && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2">🏆 Челленджи</h3>
                 {/* New challenge form */}
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 space-y-2">
@@ -8345,7 +8425,7 @@ export default function LikeBirdApp() {
 
           {adminTab === 'settings' && (
             <div className="space-y-4">
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Settings className="w-5 h-5 text-purple-600" />Общие настройки</h3>
                 <div className="space-y-3">
                   <div className="p-3 bg-gray-50 rounded-lg">
@@ -8387,7 +8467,7 @@ export default function LikeBirdApp() {
               </div>
 
               {/* Экспорт/Импорт */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-purple-600" />Резервное копирование</h3>
                 <div className="space-y-2">
                   <button onClick={() => {
@@ -8432,7 +8512,7 @@ export default function LikeBirdApp() {
           {adminTab === 'security' && (
             <div className="space-y-4">
               {/* Коды приглашения для сотрудников */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Key className="w-5 h-5 text-green-600" />Коды приглашения</h3>
                 <p className="text-sm text-gray-500 mb-3">Сгенерируйте код и передайте сотруднику для регистрации</p>
                 <button onClick={() => {
@@ -8477,22 +8557,21 @@ export default function LikeBirdApp() {
               </div>
 
               {/* Пароль */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Lock className="w-5 h-5 text-purple-600" />Пароль админ-панели</h3>
                 <p className="text-sm text-gray-600 mb-3">{adminPassword ? '🔒 Пароль установлен' : '🔓 Пароль не установлен'}</p>
-                <input type="password" placeholder="Новый пароль (оставьте пустым для отключения)" className="w-full p-2 border rounded mb-2" id="new-admin-password" />
+                <input type="password" value={adminPassInput || ''} onChange={e => setAdminPassInput(e.target.value)} placeholder="Новый пароль (оставьте пустым для отключения)" className="w-full p-2 border rounded mb-2" />
                 <button onClick={() => {
-                  const newPass = document.getElementById('new-admin-password').value;
-                  setAdminPass(newPass);
-                  showNotification(newPass ? 'Пароль установлен' : 'Пароль отключён');
-                  document.getElementById('new-admin-password').value = '';
+                  setAdminPass(adminPassInput || '');
+                  showNotification(adminPassInput ? 'Пароль установлен' : 'Пароль отключён');
+                  setAdminPassInput('');
                 }} className="w-full bg-purple-500 text-white py-2 rounded hover:bg-purple-600">
                   {adminPassword ? 'Изменить пароль' : 'Установить пароль'}
                 </button>
               </div>
 
               {/* Журнал действий */}
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><FileText className="w-5 h-5 text-purple-600" />Журнал действий</h3>
                 <div className="max-h-64 overflow-y-auto space-y-2">
                   {auditLog.length > 0 ? auditLog.slice(0, 20).map(entry => (
@@ -8547,7 +8626,7 @@ export default function LikeBirdApp() {
             return (
               <div className="space-y-4">
                 {/* Форма добавления/редактирования */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2">
                     <FileText className="w-5 h-5 text-purple-600" />
                     {editingManual ? 'Редактировать мануал' : 'Добавить мануал'}
@@ -8607,7 +8686,7 @@ export default function LikeBirdApp() {
                 </div>
 
                 {/* Список мануалов */}
-                <div className="bg-white rounded-xl p-4 shadow">
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2">
                     <FileText className="w-5 h-5 text-purple-600" />
                     Все мануалы ({manuals.length})
@@ -9006,7 +9085,7 @@ export default function LikeBirdApp() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6">
         <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <h2 className="text-xl font-bold flex items-center gap-2"><Users className="w-6 h-6" />Команда</h2>
         </div>
 
@@ -9116,7 +9195,7 @@ export default function LikeBirdApp() {
               </div>
               
               {activeEmployees.map(emp => scheduleData.shifts?.[emp] && (
-                <div key={emp} className="bg-white rounded-xl p-4 shadow">
+                <div key={emp} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3">{emp}</h3>
                   <div className="space-y-2">
                     {scheduleData.shifts[emp].map((shift, idx) => (
@@ -9380,7 +9459,7 @@ export default function LikeBirdApp() {
                     setUserNotifications(updatedNotifs);
                     save('likebird-notifications', updatedNotifs);
                   }
-                } catch {}
+                } catch { /* silent */ }
               }
               updateChatMessages([...chatMessages, msg]);
               setChatText('');
@@ -9415,6 +9494,7 @@ export default function LikeBirdApp() {
             const handleChatPhoto = async (e) => {
               const file = e.target.files?.[0];
               if (!file) return;
+              if (file.size > 10 * 1024 * 1024) { showNotification('Фото слишком большое (макс 10MB)', 'error'); return; }
               try {
                 const compressed = await compressImage(file, 800, 0.7);
                 const msg = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), from: employeeName || 'Аноним', text: '', image: compressed, date: new Date().toISOString(), read: false, reactions: {}, pinned: false };
@@ -9656,13 +9736,14 @@ export default function LikeBirdApp() {
     const [shiftElapsed, setShiftElapsed] = useState('');
     useEffect(() => {
       if (!myShift?.openTime || myShift?.status !== 'open') { setShiftElapsed(''); return; }
-      const calc = () => { try { const [h,m] = myShift.openTime.split(':'); const o = new Date(); o.setHours(parseInt(h),parseInt(m),0,0); const d = Date.now() - o.getTime(); if (d < 0 || d > 86400000) { setShiftElapsed(''); return; } setShiftElapsed(Math.floor(d/3600000) + 'ч ' + Math.floor((d%3600000)/60000) + 'м'); } catch {} };
+      const calc = () => { try { const [h,m] = myShift.openTime.split(':'); const o = new Date(); o.setHours(parseInt(h,10),parseInt(m,10),0,0); let d = Date.now() - o.getTime(); if (d < 0) d += 86400000; if (d > 86400000) { setShiftElapsed(''); return; } setShiftElapsed(Math.floor(d/3600000) + 'ч ' + Math.floor((d%3600000)/60000) + 'м'); } catch { /* silent */ } };
       calc(); const t = setInterval(calc, 60000); return () => clearInterval(t);
     }, [myShift?.openTime, myShift?.status]);
 
     const openShift = async (time) => {
+      if (myShift?.status === 'open') { showNotification('Смена уже открыта', 'error'); return; }
       const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      const geo = await getGeoLocation();
+      let geo = null; try { geo = await getGeoLocation(); } catch { /* silent */ }
       const updated = { ...shiftsData, [shiftKey]: { openTime: t, status: 'open', openedAt: Date.now(), openGeo: geo } };
       updateShiftsData(updated);
       setShowTimeModal(null);
@@ -9687,7 +9768,13 @@ export default function LikeBirdApp() {
     };
 
     const closeShift = (time) => {
+      if (myShift?.status !== 'open') { showNotification('Смена не открыта', 'error'); return; }
       const t = time || new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      // Валидация: closeTime не раньше openTime (кроме ночных смен)
+      if (myShift?.openTime && t < myShift.openTime) {
+        const isNightShift = parseInt(myShift.openTime.split(':')[0], 10) >= 18;
+        if (!isNightShift) { showNotification('Время закрытия не может быть раньше открытия', 'error'); return; }
+      }
       // Показываем сводку перед закрытием
       const topProduct = myTodayReports.reduce((acc, r) => {
         const name = getProductName(r.product);
@@ -9801,7 +9888,7 @@ export default function LikeBirdApp() {
       <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-8">
         {/* Шапка */}
         <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
-          <button onClick={() => setCurrentView('menu')} className="mb-2"><ArrowLeft className="w-6 h-6" /></button>
+          <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-bold">🔄 Смена</h2>
@@ -10263,7 +10350,7 @@ export default function LikeBirdApp() {
       if (newPassword.length < 4) { setPassError('Минимум 4 символа'); return; }
       if (newPassword !== confirmNewPassword) { setPassError('Пароли не совпадают'); return; }
       let users = [];
-      try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+      try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { /* silent */ }
       const idx = users.findIndex(u => u.login === currentLogin);
       if (idx === -1) { setPassError('Пользователь не найден'); return; }
       const hashed = await hashPassword(newPassword);
@@ -10404,7 +10491,7 @@ export default function LikeBirdApp() {
                         hours = (ch * 60 + cm - oh * 60 - om) / 60;
                       }
                       if (hours > 0 && hours < 24) { totalHours += hours; daysWorked++; if (hours > 8) overtimeDays++; }
-                    } catch {}
+                    } catch { /* silent */ }
                   });
                   totalHours = Math.round(totalHours * 10) / 10;
                   return (
@@ -10604,7 +10691,7 @@ export default function LikeBirdApp() {
                   const pct = progress ? Math.min(100, Math.round((progress.current / progress.target) * 100)) : 0;
                   const goalLabels = { sales: '🛒 Количество продаж', sales_count: '🛒 Количество продаж', revenue: '💰 Выручка', avg_check: '📊 Средний чек' };
                   return (
-                    <div key={`${goal.employeeId}_${goal.goalType}_${goal.period}`} className="bg-white rounded-xl p-4 shadow">
+                    <div key={`${goal.employeeId}_${goal.goalType}_${goal.period}`} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                       <div className="flex items-center justify-between mb-3">
                         <div>
                           <p className="font-bold">{goalLabels[goal.goalType] || goal.goalType}</p>
@@ -10802,7 +10889,7 @@ export default function LikeBirdApp() {
 
       // Дополняем из localStorage на случай если Firebase недоступен
       if (codes.length === 0) {
-        try { codes = JSON.parse(localStorage.getItem('likebird-invite-codes') || '[]'); } catch {}
+        try { codes = JSON.parse(localStorage.getItem('likebird-invite-codes') || '[]'); } catch { /* silent */ }
       }
 
       const validCode = codes.find(c => c.code === normalizedCode && !c.used);
@@ -10812,7 +10899,7 @@ export default function LikeBirdApp() {
       let users = (await fbGet('likebird-users')) || [];
       if (!Array.isArray(users)) users = [];
       if (users.length === 0) {
-        try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+        try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { /* silent */ }
       }
 
       if (users.find(u => u.login.toLowerCase() === login.trim().toLowerCase())) { setError('Этот логин уже занят'); return; }
@@ -10860,7 +10947,7 @@ export default function LikeBirdApp() {
       // Читаем пользователей напрямую из Firebase для актуальности
       let users = (await fbGet('likebird-users')) || [];
       if (!Array.isArray(users) || users.length === 0) {
-        try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch {}
+        try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { /* silent */ }
       }
       // Кэшируем локально
       if (users.length > 0) localStorage.setItem('likebird-users', JSON.stringify(users));
@@ -11049,7 +11136,7 @@ export default function LikeBirdApp() {
       <div ref={inputModalRef} style={{display: 'none'}} className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
           <h3 data-input-title className="text-lg font-bold mb-3"></h3>
-          <input ref={inputModalInputRef} type="text" className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" onKeyDown={e => { if (e.key === 'Enter') handleInputModalSave(); if (e.key === 'Escape') hideInputModal(); }} />
+          <input ref={inputModalInputRef} type="text" value={inputModalValue || ""} onChange={e => setInputModalValue(e.target.value)} className="w-full p-3 border-2 border-gray-200 rounded-xl mb-4 focus:border-amber-500 focus:outline-none" onKeyDown={e => { if (e.key === 'Enter') handleInputModalSave(); if (e.key === 'Escape') hideInputModal(); }} />
           <div className="flex gap-3">
             <button onClick={hideInputModal} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
             <button onClick={handleInputModalSave} className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-semibold hover:bg-amber-600">Сохранить</button>
