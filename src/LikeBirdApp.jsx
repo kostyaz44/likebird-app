@@ -2696,16 +2696,22 @@ export default function LikeBirdApp() {
               <div className="bg-white rounded-xl p-4 shadow">
                 <h3 className="font-bold text-sm mb-3">Нал / Безнал</h3>
                 {revenueData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={180}>
-                    <BarChart data={revenueData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="date" tick={{fontSize: 9}} />
-                      <YAxis tick={{fontSize: 10}} />
-                      <Tooltip formatter={(v) => v.toLocaleString() + ' ₽'} />
-                      <Bar dataKey="cash" stackId="a" fill="#22c55e" name="Нал" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="cashless" stackId="a" fill="#3b82f6" name="Безнал" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <BarChart data={revenueData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" tick={{fontSize: 9}} />
+                        <YAxis tick={{fontSize: 10}} />
+                        <Tooltip formatter={(v) => v.toLocaleString() + ' ₽'} />
+                        <Bar dataKey="cash" stackId="a" fill="#22c55e" name="Нал" radius={[0, 0, 0, 0]} />
+                        <Bar dataKey="cashless" stackId="a" fill="#3b82f6" name="Безнал" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                    <div className="flex items-center justify-center gap-6 mt-2">
+                      <div className="flex items-center gap-2"><div className="w-4 h-4 rounded" style={{backgroundColor: '#22c55e'}}></div><span className="text-xs text-gray-600">Наличные</span></div>
+                      <div className="flex items-center gap-2"><div className="w-4 h-4 rounded" style={{backgroundColor: '#3b82f6'}}></div><span className="text-xs text-gray-600">Безнал</span></div>
+                    </div>
+                  </>
                 ) : null}
               </div>
             </div>
