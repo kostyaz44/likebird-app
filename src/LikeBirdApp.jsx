@@ -2278,7 +2278,7 @@ function LikeBirdAppInner() {
     const priceNum = parseInt(price), tipsNum = parseInt(tips) || 0;
     const salary = calculateSalary(product.price, priceNum, category, tipsNum, 'normal', salarySettings);
     const now = Date.now();
-    const dateStr = new Date().toLocaleString('ru-RU');
+    const dateStr = params.customDate || new Date().toLocaleString('ru-RU');
     // Каждая единица — отдельная запись
     const newReports = Array.from({ length: qty }, (_, i) => {
       let cashAmt = 0, cashlessAmt = 0;
@@ -2299,6 +2299,7 @@ function LikeBirdAppInner() {
         location: location || null,
         discountReason: discountNote || null,
         isBelowBase: priceNum < product.price,
+        ...(params.addedBy ? { addedBy: params.addedBy } : {}),
       };
     });
     updateReports([...newReports, ...reports]);
@@ -2313,7 +2314,7 @@ function LikeBirdAppInner() {
     setSalePrice(''); setQuantity(1); setPaymentType('cash'); setTipsAmount(''); setSelectedProduct(null); setSelectedCategory(null); setMixedCash(''); setMixedCashless('');
     setSalePhotoGlobal(null); setSaleLocationGlobal('');
     showNotification(`Продажа сохранена: ${product.name}${qty > 1 ? ' x' + qty : ''}`);
-    setCurrentView('shift');
+    if (!params.noRedirect) setCurrentView('shift');
   };
 
   const saveParsedReports = (empNameParam) => {
@@ -5708,6 +5709,11 @@ function LikeBirdAppInner() {
                     <p className="text-xs text-blue-700">✏️ Изменено {r.editHistory.length}x (посл.: {r.editHistory[r.editHistory.length-1].by}, {r.editHistory[r.editHistory.length-1].at})</p>
                   </div>
                 )}
+                {r.addedBy && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5 mt-1">
+                    <p className="text-xs text-purple-700">👤 Добавлено: {r.addedBy}</p>
+                  </div>
+                )}
                 {isBelowBasePrice(r.basePrice, r.salePrice) && r.discountReason && (
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-1.5 mt-1">
                     <p className="text-xs text-yellow-700">💬 Причина скидки: {r.discountReason}</p>
@@ -5739,6 +5745,155 @@ function LikeBirdAppInner() {
     const [editingShift, setEditingShift] = useState(null); // login сотрудника
     const [editOpen, setEditOpen] = useState('');
     const [editClose, setEditClose] = useState('');
+    
+    // Админ: добавление продажи за сотрудника
+    const [adminReport, setAdminReport] = useState(null); // { employee: string } или null
+    const [arProduct, setArProduct] = useState(null);
+    const [arPrice, setArPrice] = useState('');
+    const [arTips, setArTips] = useState('0');
+    const [arPayment, setArPayment] = useState('cash');
+    const [arQty, setArQty] = useState(1);
+    const [arSearch, setArSearch] = useState('');
+    const [arLocation, setArLocation] = useState('');
+    const [arDiscount, setArDiscount] = useState('');
+    
+    const activeEmployeesList = employees.filter(e => e.active);
+    
+    const adminSaveReport = () => {
+      if (!adminReport?.employee) { showNotification('Выберите сотрудника', 'error'); return; }
+      if (!arProduct) { showNotification('Выберите товар', 'error'); return; }
+      const price = parseInt(arPrice, 10);
+      if (!price || price <= 0) { showNotification('Введите цену', 'error'); return; }
+      // Формируем дату: если выбрана дата не сегодня, используем её
+      const today = new Date().toLocaleDateString('ru-RU');
+      const customDate = selectedDate !== today ? (selectedDate + ', ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })) : null;
+      saveReport({
+        employeeName: adminReport.employee,
+        selectedProduct: arProduct,
+        selectedCategory: arProduct.category,
+        salePrice: price,
+        tipsAmount: parseInt(arTips, 10) || 0,
+        paymentType: arPayment,
+        quantity: arQty,
+        location: arLocation || null,
+        discountReason: arDiscount || null,
+        photo: null,
+        customDate: customDate,
+        noRedirect: true,
+        addedBy: employeeName || 'Админ',
+      });
+      showNotification(`Продажа ${arProduct.name} добавлена за ${adminReport.employee}`);
+      setAdminReport(null); setArProduct(null); setArPrice(''); setArTips('0');
+      setArPayment('cash'); setArQty(1); setArSearch(''); setArDiscount('');
+    };
+    
+    const AdminReportModal = () => {
+      if (!adminReport) return null;
+      const filteredProds = arSearch.length >= 1
+        ? DYNAMIC_ALL_PRODUCTS.filter(p => !(archivedProducts||[]).includes(p.name))
+            .filter(p => p.name.toLowerCase().includes(arSearch.toLowerCase()) || p.aliases?.some(a => a.includes(arSearch.toLowerCase())))
+            .slice(0, 8)
+        : [];
+      const isBelowBase = arProduct && arPrice && parseInt(arPrice, 10) < arProduct.price;
+      return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setAdminReport(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">📝 Продажа за сотрудника</h3>
+              <button onClick={() => setAdminReport(null)} className="text-gray-400" aria-label="Закрыть"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-500 mb-1 block">Сотрудник</label>
+                <select value={adminReport.employee} onChange={e => setAdminReport({ employee: e.target.value })} className="w-full p-2.5 border-2 border-gray-200 rounded-xl focus:border-amber-500 focus:outline-none">
+                  <option value="">— Выберите —</option>
+                  {activeEmployeesList.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+                </select>
+              </div>
+              
+              <div>
+                <label className="text-xs font-semibold text-gray-500 mb-1 block">Товар</label>
+                {arProduct ? (
+                  <div className="flex items-center justify-between p-2.5 bg-amber-50 border-2 border-amber-200 rounded-xl">
+                    <span>{arProduct.emoji} {arProduct.name} — {arProduct.price}₽</span>
+                    <button onClick={() => { setArProduct(null); setArPrice(''); setArSearch(''); }} className="text-gray-400"><X className="w-4 h-4" /></button>
+                  </div>
+                ) : (
+                  <div>
+                    <input type="text" value={arSearch} onChange={e => setArSearch(e.target.value)} placeholder="Поиск товара..." className="w-full p-2.5 border-2 border-gray-200 rounded-xl focus:border-amber-500 focus:outline-none" autoFocus />
+                    {filteredProds.length > 0 && (
+                      <div className="mt-1 border rounded-xl max-h-40 overflow-y-auto">
+                        {filteredProds.map(p => (
+                          <button key={p.name} onClick={() => { setArProduct(p); setArPrice(String(p.price)); setArSearch(''); }} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-sm flex justify-between border-b last:border-0">
+                            <span>{p.emoji} {p.name}</span>
+                            <span className="text-amber-600 font-semibold">{p.price}₽</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Цена продажи</label>
+                  <input type="number" value={arPrice} onChange={e => setArPrice(e.target.value)} className={`w-full p-2.5 border-2 rounded-xl focus:outline-none ${isBelowBase ? 'border-yellow-400 bg-yellow-50' : 'border-gray-200 focus:border-amber-500'}`} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Чаевые</label>
+                  <input type="number" value={arTips} onChange={e => setArTips(e.target.value)} className="w-full p-2.5 border-2 border-gray-200 rounded-xl focus:border-amber-500 focus:outline-none" />
+                </div>
+              </div>
+              
+              {isBelowBase && (
+                <input type="text" value={arDiscount} onChange={e => setArDiscount(e.target.value)} placeholder="Причина скидки" maxLength={200} className="w-full p-2.5 border-2 border-yellow-300 rounded-xl bg-yellow-50 focus:outline-none" />
+              )}
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Оплата</label>
+                  <select value={arPayment} onChange={e => setArPayment(e.target.value)} className="w-full p-2.5 border-2 border-gray-200 rounded-xl focus:border-amber-500 focus:outline-none">
+                    <option value="cash">💵 Наличные</option>
+                    <option value="cashless">💳 Безнал</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Кол-во</label>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setArQty(Math.max(1, arQty - 1))} className="w-10 h-10 bg-gray-100 rounded-xl font-bold text-lg">−</button>
+                    <span className="font-bold text-lg flex-1 text-center">{arQty}</span>
+                    <button onClick={() => setArQty(arQty + 1)} className="w-10 h-10 bg-gray-100 rounded-xl font-bold text-lg">+</button>
+                  </div>
+                </div>
+              </div>
+              
+              {locations.filter(l => l.active).length > 1 && (
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 mb-1 block">Точка продаж</label>
+                  <select value={arLocation} onChange={e => setArLocation(e.target.value)} className="w-full p-2.5 border-2 border-gray-200 rounded-xl focus:border-amber-500 focus:outline-none">
+                    <option value="">— Не указана —</option>
+                    {locations.filter(l => l.active).map(l => <option key={l.id} value={`${l.city} — ${l.name}`}>{l.city} — {l.name}</option>)}
+                  </select>
+                </div>
+              )}
+              
+              {arProduct && arPrice && (
+                <div className="bg-gray-50 rounded-xl p-3 text-sm">
+                  <div className="flex justify-between"><span className="text-gray-500">ЗП сотрудника:</span><span className="font-bold text-amber-600">{calculateSalary(arProduct.price, parseInt(arPrice,10), arProduct.category, parseInt(arTips,10)||0, 'normal', salarySettings)}₽</span></div>
+                  {arQty > 1 && <div className="flex justify-between"><span className="text-gray-500">Итого ({arQty} шт):</span><span className="font-bold">{parseInt(arPrice,10) * arQty}₽</span></div>}
+                </div>
+              )}
+              
+              <button onClick={adminSaveReport} disabled={!adminReport.employee || !arProduct || !arPrice} className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold text-lg hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+                ✅ Сохранить продажу
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
     
     // Получить login сотрудника по имени
     const getLoginByName = (empName) => {
@@ -5884,6 +6039,7 @@ function LikeBirdAppInner() {
                       <p className="text-white/80 text-xs">{empReports.length} продаж{Object.entries(byCat).map(([cat, cnt]) => (<span key={cat} className="ml-2">{CAT_ICONS[cat]}{cnt}</span>))}</p>
                     </div>
                     <button onClick={() => copyDayReport(emp, empReports, { cashTotal, cashlessTotal, totalTips, totalSalary, empExpenses, toGive })} className="bg-white/20 p-1.5 rounded hover:bg-white/30" title="Скопировать"><Copy className="w-4 h-4" /></button>
+                    {isAdminUser && <button onClick={() => setAdminReport({ employee: emp })} className="bg-white/20 p-1.5 rounded hover:bg-white/30" title="Добавить продажу"><Plus className="w-4 h-4" /></button>}
                   </div>
                 </div>
                 <div className="p-3 space-y-3">
@@ -5954,7 +6110,7 @@ function LikeBirdAppInner() {
                   )}
                   
                   {unrec.length > 0 && (<div className="bg-red-50 border border-red-200 rounded-lg p-2"><h4 className="font-bold text-red-700 text-xs mb-1"><AlertTriangle className="w-3 h-3 inline" /> Нераспознанные ({unrec.length})</h4>{unrec.map(r => (<div key={r.id} className="py-1 border-b border-red-200 last:border-0"><div className="flex justify-between items-center text-xs"><span className="text-red-600">❓ {getProductName(r.product)}</span><div className="flex items-center gap-1"><span>{r.total}₽</span>{canEdit(r) ? (<button onClick={() => deleteReport(r.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>) : (<Lock className="w-3 h-3 text-gray-400" />)}</div></div><FixUnrecognizedButton report={r} /></div>))}</div>)}
-                  {belowPrice.length > 0 && (<div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2"><h4 className="font-bold text-yellow-700 text-xs mb-1"><AlertCircle className="w-3 h-3 inline" /> Со скидкой ({belowPrice.length})</h4>{belowPrice.map(r => (<div key={r.id} className="py-1 border-b border-yellow-200 last:border-0"><div className="flex justify-between items-center text-xs"><span>{getProductName(r.product)}</span><span>{r.total}₽ <span className="text-gray-400">(база: {r.basePrice}₽)</span></span></div>{r.discountReason && <p className="text-xs text-yellow-600 mt-0.5">💬 {r.discountReason}</p>}{isAdmin && <SalaryDecisionButtons report={r} compact />}</div>))}</div>)}
+                  {belowPrice.length > 0 && (<div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2"><h4 className="font-bold text-yellow-700 text-xs mb-1"><AlertCircle className="w-3 h-3 inline" /> Со скидкой ({belowPrice.length})</h4>{belowPrice.map(r => (<div key={r.id} className="py-1 border-b border-yellow-200 last:border-0"><div className="flex justify-between items-center text-xs"><span>{getProductName(r.product)}</span><span>{r.total}₽ <span className="text-gray-400">(база: {r.basePrice}₽)</span></span></div>{r.discountReason && <p className="text-xs text-yellow-600 mt-0.5">💬 {r.discountReason}</p>}{isAdminUser && <SalaryDecisionButtons report={r} compact />}</div>))}</div>)}
                   <div className="space-y-1 text-sm">
                     <div className="flex justify-between py-1 border-b"><span>💰 Итого</span><span className="font-bold">{grandTotal.toLocaleString()}{totalTips > 0 && <span className="text-amber-500"> ({(grandTotal+totalTips).toLocaleString()})</span>}₽</span></div>
                     <div className="flex justify-between py-1 border-b"><span>💵 Наличные</span><span className="font-bold text-green-600">{cashTotal.toLocaleString()}₽</span></div>
@@ -5972,13 +6128,20 @@ function LikeBirdAppInner() {
                     <p className="text-xs opacity-80 mt-1">{ownCard ? `(${cashTotal}+${cashlessTotal}+${totalTips})-${totalSalary}-${empExpenses}-${given}` : `(${cashTotal}+${totalTips})-${totalSalary}-${empExpenses}-${given}`}</p>
                     {!ownCard && cashlessTotal > 0 && <p className="text-xs opacity-80">💳 Безнал {cashlessTotal}₽ на карте компании</p>}
                   </div>
-                  <details className="group"><summary className="cursor-pointer text-amber-600 font-semibold text-sm flex items-center gap-1"><ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />Все продажи ({empReports.length})</summary><div className="mt-2 space-y-1 max-h-64 overflow-y-auto">{empReports.map(r => { const isDiscount = isBelowBasePrice(r.basePrice, r.salePrice); return (<div key={r.id} className={`py-1.5 text-xs px-2 rounded ${isDiscount ? 'bg-yellow-50 border border-yellow-200' : r.isUnrecognized ? 'bg-red-50' : 'bg-gray-50'}`}><div className="flex justify-between items-center"><span className="truncate flex-1">{r.isUnrecognized ? '❓ ' : ''}{getProductName(r.product)}{isDiscount && ' ⚠️'}</span><div className="flex items-center gap-1 ml-2"><span>{r.total}₽ {r.paymentType === 'cashless' ? '💳' : '💵'}</span><span className="text-amber-600">ЗП:{getEffectiveSalary(r)}</span>{canEdit(r) ? (<button onClick={() => deleteReport(r.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>) : (<Lock className="w-3 h-3 text-gray-400" title="Заблокировано" />)}</div></div>{isDiscount && <p className="text-yellow-600 mt-0.5">Скидка: {r.basePrice - r.salePrice}₽{r.discountReason ? ` — ${r.discountReason}` : ''}</p>}</div>); })}</div></details>
+                  <details className="group"><summary className="cursor-pointer text-amber-600 font-semibold text-sm flex items-center gap-1"><ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />Все продажи ({empReports.length})</summary><div className="mt-2 space-y-1 max-h-64 overflow-y-auto">{empReports.map(r => { const isDiscount = isBelowBasePrice(r.basePrice, r.salePrice); return (<div key={r.id} className={`py-1.5 text-xs px-2 rounded ${isDiscount ? 'bg-yellow-50 border border-yellow-200' : r.isUnrecognized ? 'bg-red-50' : 'bg-gray-50'}`}><div className="flex justify-between items-center"><span className="truncate flex-1">{r.isUnrecognized ? '❓ ' : ''}{getProductName(r.product)}{isDiscount && ' ⚠️'}</span><div className="flex items-center gap-1 ml-2"><span>{r.total}₽ {r.paymentType === 'cashless' ? '💳' : '💵'}</span><span className="text-amber-600">ЗП:{getEffectiveSalary(r)}</span>{canEdit(r) ? (<button onClick={() => deleteReport(r.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>) : (<Lock className="w-3 h-3 text-gray-400" title="Заблокировано" />)}</div></div>{isDiscount && <p className="text-yellow-600 mt-0.5">Скидка: {r.basePrice - r.salePrice}₽{r.discountReason ? ` — ${r.discountReason}` : ''}</p>}{r.addedBy && <p className="text-purple-500 mt-0.5">👤 {r.addedBy}</p>}</div>); })}</div></details>
                 </div>
               </div>
             );
           })}
           {Object.keys(byEmployee).length === 0 && (<div className="text-center py-10"><BarChart3 className="w-12 h-12 mx-auto text-gray-300 mb-2" /><p className="text-gray-400">Нет продаж за этот день</p></div>)}
+          
+          {isAdminUser && (
+            <button onClick={() => setAdminReport({ employee: '' })} className="w-full py-3 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg">
+              <Plus className="w-5 h-5" /> Добавить продажу за сотрудника
+            </button>
+          )}
         </div>
+        <AdminReportModal />
       </div>
     );
   };
