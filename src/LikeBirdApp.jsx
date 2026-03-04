@@ -543,6 +543,160 @@ class LikeBirdErrorBoundary extends React.Component {
   }
 }
 
+// ═══ Pure revision text parser (extracted for stable reference) ═══
+const parseRevisionText = (text) => {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  let totalBirds = 0;
+  const birdsByPrice = {};
+  const items = [];
+  let section = 'birds';
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (/^(3[дd]|зд|здэ|здшк|другое|мех|игрушк)/i.test(lower)) { section = 'items'; continue; }
+    if (/^птиц/i.test(lower)) { const m = lower.match(/(\d+)/); if (m) totalBirds = parseInt(m[1], 10); section = 'birds'; continue; }
+    const birdMatch = line.match(/^(\d+)\s*[хxХX×]\s*(\d+)$/);
+    if (birdMatch && section === 'birds') { birdsByPrice[parseInt(birdMatch[2], 10)] = (birdsByPrice[parseInt(birdMatch[2], 10)] || 0) + parseInt(birdMatch[1], 10); continue; }
+    const itemMatch = line.match(/^(\d+)\s+(.+)$/);
+    if (itemMatch) { items.push({ name: itemMatch[2].trim(), qty: parseInt(itemMatch[1], 10) }); continue; }
+    if (line.length > 1 && !/^\d/.test(line)) items.push({ name: line, qty: 1 });
+  }
+  const birdCount = Object.values(birdsByPrice).reduce((s, c) => s + c, 0);
+  return { totalBirds: totalBirds || birdCount, birdsByPrice, items };
+};
+
+// ═══ Extracted stable components (prevent input reset on parent re-render) ═══
+const BirdPriceEditor = React.memo(function BirdPriceEditor({ birdsByPrice, setBirdsByPrice, totalBirds, setTotalBirds, birdPriceTiers, darkMode, isAdmin }) {
+  const [newCount, setNewCount] = useState('');
+  const [newPrice, setNewPrice] = useState('');
+  const sortedPrices = Object.keys(birdPriceTiers).sort((a, b) => parseInt(a) - parseInt(b));
+  const birdCount = Object.values(birdsByPrice).reduce((s, c) => s + c, 0);
+  return (
+    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="font-bold text-sm flex items-center gap-2">🐦 Птицы-свистульки</h4>
+      </div>
+      <div className="flex items-center gap-3 mb-3 bg-amber-50 rounded-lg p-2.5">
+        <span className="text-sm font-semibold text-amber-700">Всего птиц:</span>
+        <input type="number" value={totalBirds || ''} onChange={e => setTotalBirds(parseInt(e.target.value, 10) || 0)}
+          className="w-20 text-center border-2 border-amber-300 rounded-lg p-1.5 font-bold text-lg focus:border-amber-500 focus:outline-none" placeholder="0" />
+        {birdCount > 0 && birdCount !== totalBirds && (
+          <span className="text-xs text-orange-500">по ценам: {birdCount}</span>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        {sortedPrices.map(price => {
+          const count = birdsByPrice[price] || 0;
+          const names = birdPriceTiers[price];
+          return (
+            <div key={price} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-bold text-sm">{parseInt(price, 10)}₽</span>
+                <p className="text-[10px] text-gray-400 truncate">{names.join(', ')}</p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button onClick={() => setBirdsByPrice(prev => ({...prev, [price]: Math.max(0, (prev[price]||0) - 1)}))}
+                  className="w-8 h-8 bg-gray-200 rounded-lg font-bold text-lg leading-none hover:bg-red-100 active:bg-red-200">−</button>
+                <input type="number" value={count || ''} onChange={e => setBirdsByPrice(prev => ({...prev, [price]: Math.max(0, parseInt(e.target.value,10)||0)}))}
+                  className="w-12 h-8 text-center border rounded-lg text-sm font-bold focus:border-amber-500 focus:outline-none" placeholder="0" />
+                <button onClick={() => setBirdsByPrice(prev => ({...prev, [price]: (prev[price]||0) + 1}))}
+                  className="w-8 h-8 bg-gray-200 rounded-lg font-bold text-lg leading-none hover:bg-green-100 active:bg-green-200">+</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-2 mt-2 items-center">
+        <input type="number" value={newCount} onChange={e => setNewCount(e.target.value)} placeholder="Кол" className="w-14 p-1.5 border rounded-lg text-sm text-center" />
+        <span className="text-gray-400 text-sm">×</span>
+        <input type="number" value={newPrice} onChange={e => setNewPrice(e.target.value)} placeholder="Цена" className="flex-1 p-1.5 border rounded-lg text-sm" />
+        <button onClick={() => {
+          const c = parseInt(newCount,10), p = parseInt(newPrice,10);
+          if (c > 0 && p > 0) { setBirdsByPrice(prev => ({...prev, [p]: (prev[p]||0) + c})); setNewCount(''); setNewPrice(''); }
+        }} className="bg-amber-500 text-white px-3 py-1.5 rounded-lg text-sm font-bold">+</button>
+      </div>
+      {isAdmin && birdCount > 0 && (
+        <div className="mt-2 pt-2 border-t text-right text-xs text-gray-400">
+          💰 {Object.entries(birdsByPrice).reduce((s, [p, c]) => s + parseInt(p,10) * c, 0).toLocaleString()}₽
+        </div>
+      )}
+    </div>
+  );
+});
+
+const ItemsEditor = React.memo(function ItemsEditor({ items, setItems, otherProducts, darkMode }) {
+  const [search, setSearch] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newQty, setNewQty] = useState('1');
+  const filteredProducts = search.length >= 1
+    ? otherProducts.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || p.emoji.includes(search)).slice(0, 10) : [];
+  const catOrder = ['3D игрушки', 'Меховые игрушки'];
+  const grouped = {};
+  items.forEach((item, i) => { const prod = otherProducts.find(p => p.name === item.name); const cat = prod?.category || 'Другое'; if (!grouped[cat]) grouped[cat] = []; grouped[cat].push({ ...item, idx: i, emoji: prod?.emoji || '📦' }); });
+  const updateQty = (idx, delta) => setItems(prev => prev.map((x, i) => i === idx ? { ...x, qty: Math.max(0, x.qty + delta) } : x).filter(x => x.qty > 0));
+  return (
+    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+      <h4 className="font-bold text-sm mb-3 flex items-center gap-2">🎮 3D, Мех и другие</h4>
+      {catOrder.concat(['Другое']).map(cat => {
+        const catItems = grouped[cat]; if (!catItems || catItems.length === 0) return null;
+        const catIcon = cat === '3D игрушки' ? '🎮' : cat === 'Меховые игрушки' ? '🧸' : '📦';
+        return (<div key={cat} className="mb-3"><p className="text-xs font-semibold text-gray-400 mb-1">{catIcon} {cat}</p><div className="space-y-1">{catItems.map(item => (
+          <div key={item.idx} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-1.5"><span className="text-sm">{item.emoji} {item.name}</span><div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => updateQty(item.idx, -1)} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold active:bg-red-100">−</button>
+            <span className="font-bold w-6 text-center text-sm">{item.qty}</span>
+            <button onClick={() => updateQty(item.idx, 1)} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold active:bg-green-100">+</button>
+          </div></div>))}</div></div>);
+      })}
+      <div className="relative mt-2">
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="🔍 Найти товар из каталога..." className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-purple-500 focus:outline-none" />
+        {filteredProducts.length > 0 && (
+          <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
+            {filteredProducts.map(p => {
+              const existing = items.find(i => i.name === p.name);
+              return (<button key={p.name} onClick={() => { if (existing) { setItems(prev => prev.map(i => i.name === p.name ? { ...i, qty: i.qty + 1 } : i)); } else { setItems(prev => [...prev, { name: p.name, qty: 1 }]); } setSearch(''); }} className="w-full text-left px-3 py-2 hover:bg-purple-50 text-sm flex justify-between border-b last:border-0">
+                <span>{p.emoji} {p.name}</span><span className="text-gray-400">{existing ? `(уже ${existing.qty})` : ''}</span></button>);
+            })}
+          </div>
+        )}
+      </div>
+      <div className="flex gap-2 mt-2">
+        <input type="number" value={newQty} onChange={e => setNewQty(e.target.value)} className="w-12 p-1.5 border rounded-lg text-sm text-center" placeholder="1" />
+        <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Или вручную..."
+          className="flex-1 p-1.5 border rounded-lg text-sm"
+          onKeyDown={e => { if (e.key === 'Enter' && newName.trim()) { setItems(prev => [...prev, { name: newName.trim(), qty: parseInt(newQty,10)||1 }]); setNewName(''); setNewQty('1'); }}} />
+        <button onClick={() => { if (newName.trim()) { setItems(prev => [...prev, { name: newName.trim(), qty: parseInt(newQty,10)||1 }]); setNewName(''); setNewQty('1'); }}}
+          className="bg-purple-500 text-white px-3 rounded-lg text-sm font-bold">+</button>
+      </div>
+    </div>
+  );
+});
+
+const RevisionTextInput = React.memo(function RevisionTextInput({ onSave, onCancel }) {
+  const [text, setText] = useState('');
+  const parsed = text.trim() ? parseRevisionText(text) : null;
+  const birdCount = parsed ? Object.values(parsed.birdsByPrice).reduce((s,c)=>s+c, 0) : 0;
+  return (
+    <div className="space-y-3">
+      <textarea value={text} onChange={e => setText(e.target.value)}
+        placeholder={"Птиц: 62\n30х300\n20х400\n10х500\n2х600\n\n3д\n6 птиц\n1 коала\n2 собаки\n3 хомяка"}
+        className="w-full h-48 p-3 border-2 border-gray-200 rounded-xl text-sm font-mono focus:border-purple-500 focus:outline-none resize-none" autoFocus />
+      {parsed && (birdCount > 0 || parsed.items.length > 0) && (
+        <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-sm space-y-1">
+          {parsed.totalBirds > 0 && (<div><p className="font-semibold">🐦 Птицы: {parsed.totalBirds} шт</p><div className="flex flex-wrap gap-1 mt-1">{Object.entries(parsed.birdsByPrice).sort((a,b)=>parseInt(a[0])-parseInt(b[0])).map(([p,c])=>(<span key={p} className="bg-white px-2 py-0.5 rounded text-xs border">{c}×{p}₽</span>))}</div></div>)}
+          {parsed.items.length > 0 && (<div className="mt-1"><p className="font-semibold">🎮 Другие: {parsed.items.reduce((s,i)=>s+i.qty, 0)} шт</p><div className="flex flex-wrap gap-1 mt-1">{parsed.items.map((item, i) => <span key={i} className="bg-white px-2 py-0.5 rounded text-xs border">{item.qty}× {item.name}</span>)}</div></div>)}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button onClick={onCancel} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Назад</button>
+        <button onClick={() => { if (!text.trim()) return; onSave(parseRevisionText(text)); }}
+          disabled={!text.trim()} className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
+          ✅ Сохранить
+        </button>
+      </div>
+    </div>
+  );
+});
+
 function LikeBirdAppInner() {
   // ===== АВТОРИЗАЦИЯ =====
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -568,7 +722,38 @@ function LikeBirdAppInner() {
 
   const [currentView, _setCurrentView] = useState('menu');
   const [chatLimit, setChatLimit] = useState(50);
-  const setCurrentView = (v) => { _setCurrentView(v); try { window.scrollTo(0, 0); } catch { /* silent */ } };
+  const viewHistoryRef = useRef(['menu']);
+  const skipPopRef = useRef(false);
+  const setCurrentView = useCallback((v, { replace = false } = {}) => {
+    _setCurrentView(v);
+    try { window.scrollTo(0, 0); } catch { /* silent */ }
+    if (replace) {
+      viewHistoryRef.current[viewHistoryRef.current.length - 1] = v;
+      try { window.history.replaceState({ view: v }, ''); } catch { /* silent */ }
+    } else {
+      viewHistoryRef.current.push(v);
+      try { window.history.pushState({ view: v }, ''); } catch { /* silent */ }
+    }
+  }, []);
+  // Browser back/forward button support
+  useEffect(() => {
+    const onPopState = (e) => {
+      const hist = viewHistoryRef.current;
+      if (hist.length > 1) {
+        hist.pop();
+        const prev = hist[hist.length - 1] || 'menu';
+        _setCurrentView(prev);
+        try { window.scrollTo(0, 0); } catch { /* silent */ }
+      } else {
+        // Already at menu — push state back so user can't leave app
+        try { window.history.pushState({ view: 'menu' }, ''); } catch { /* silent */ }
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    // Push initial state
+    try { window.history.replaceState({ view: 'menu' }, ''); } catch { /* silent */ }
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   const [reports, setReports] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [stock, setStock] = useState(getInitialStock);
@@ -9922,42 +10107,6 @@ function LikeBirdAppInner() {
     }, [customProducts, archivedProducts]);
     
     // Parse text input into structured data
-    const parseRevisionText = (text) => {
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-      let totalBirds = 0;
-      const birdsByPrice = {};
-      const items = []; // { name, qty }
-      let section = 'birds';
-      
-      for (const line of lines) {
-        const lower = line.toLowerCase();
-        if (/^(3[дd]|зд|здэ|здшк|другое|мех|игрушк)/i.test(lower)) { section = 'items'; continue; }
-        if (/^птиц/i.test(lower)) {
-          const m = lower.match(/(\d+)/);
-          if (m) totalBirds = parseInt(m[1], 10);
-          section = 'birds';
-          continue;
-        }
-        // Bird price: "30х300" or "30x300"
-        const birdMatch = line.match(/^(\d+)\s*[хxХX×]\s*(\d+)$/);
-        if (birdMatch && section === 'birds') {
-          const count = parseInt(birdMatch[1], 10);
-          const price = parseInt(birdMatch[2], 10);
-          birdsByPrice[price] = (birdsByPrice[price] || 0) + count;
-          continue;
-        }
-        // Item: "6 птиц" or "1 коала"
-        const itemMatch = line.match(/^(\d+)\s+(.+)$/);
-        if (itemMatch) {
-          items.push({ name: itemMatch[2].trim(), qty: parseInt(itemMatch[1], 10) });
-          continue;
-        }
-        if (line.length > 1 && !/^\d/.test(line)) items.push({ name: line, qty: 1 });
-      }
-      const birdCount = Object.values(birdsByPrice).reduce((s, c) => s + c, 0);
-      return { totalBirds: totalBirds || birdCount, birdsByPrice, items };
-    };
-    
     // Save inventory
     const saveInventoryData = (data, photo) => {
       // data = { totalBirds, birdsByPrice: { 300: 10, 400: 20 }, items: [{ name, qty }] }
@@ -9990,205 +10139,8 @@ function LikeBirdAppInner() {
     };
     
     // ═══ Bird Price Editor ═══
-    const BirdPriceEditor = ({ birdsByPrice, setBirdsByPrice, totalBirds, setTotalBirds }) => {
-      const [newCount, setNewCount] = useState('');
-      const [newPrice, setNewPrice] = useState('');
-      const sortedPrices = Object.keys(birdPriceTiers).sort((a, b) => parseInt(a) - parseInt(b));
-      const birdCount = Object.values(birdsByPrice).reduce((s, c) => s + c, 0);
-      
-      return (
-        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-bold text-sm flex items-center gap-2">🐦 Птицы-свистульки</h4>
-          </div>
-          
-          {/* Total birds input */}
-          <div className="flex items-center gap-3 mb-3 bg-amber-50 rounded-lg p-2.5">
-            <span className="text-sm font-semibold text-amber-700">Всего птиц:</span>
-            <input type="number" value={totalBirds || ''} onChange={e => setTotalBirds(parseInt(e.target.value, 10) || 0)}
-              className="w-20 text-center border-2 border-amber-300 rounded-lg p-1.5 font-bold text-lg focus:border-amber-500 focus:outline-none" placeholder="0" />
-            {birdCount > 0 && birdCount !== totalBirds && (
-              <span className="text-xs text-orange-500">по ценам: {birdCount}</span>
-            )}
-          </div>
-          
-          {/* Price tiers */}
-          <div className="space-y-1.5">
-            {sortedPrices.map(price => {
-              const count = birdsByPrice[price] || 0;
-              const names = birdPriceTiers[price];
-              return (
-                <div key={price} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                  <div className="flex-1 min-w-0">
-                    <span className="font-bold text-sm">{parseInt(price, 10)}₽</span>
-                    <p className="text-[10px] text-gray-400 truncate">{names.join(', ')}</p>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => setBirdsByPrice(prev => ({...prev, [price]: Math.max(0, (prev[price]||0) - 1)}))}
-                      className="w-8 h-8 bg-gray-200 rounded-lg font-bold text-lg leading-none hover:bg-red-100 active:bg-red-200">−</button>
-                    <input type="number" value={count || ''} onChange={e => setBirdsByPrice(prev => ({...prev, [price]: Math.max(0, parseInt(e.target.value,10)||0)}))}
-                      className="w-12 h-8 text-center border rounded-lg text-sm font-bold focus:border-amber-500 focus:outline-none" placeholder="0" />
-                    <button onClick={() => setBirdsByPrice(prev => ({...prev, [price]: (prev[price]||0) + 1}))}
-                      className="w-8 h-8 bg-gray-200 rounded-lg font-bold text-lg leading-none hover:bg-green-100 active:bg-green-200">+</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          
-          {/* Custom price row */}
-          <div className="flex gap-2 mt-2 items-center">
-            <input type="number" value={newCount} onChange={e => setNewCount(e.target.value)} placeholder="Кол" className="w-14 p-1.5 border rounded-lg text-sm text-center" />
-            <span className="text-gray-400 text-sm">×</span>
-            <input type="number" value={newPrice} onChange={e => setNewPrice(e.target.value)} placeholder="Цена" className="flex-1 p-1.5 border rounded-lg text-sm" />
-            <button onClick={() => {
-              const c = parseInt(newCount,10), p = parseInt(newPrice,10);
-              if (c > 0 && p > 0) { setBirdsByPrice(prev => ({...prev, [p]: (prev[p]||0) + c})); setNewCount(''); setNewPrice(''); }
-            }} className="bg-amber-500 text-white px-3 py-1.5 rounded-lg text-sm font-bold">+</button>
-          </div>
-          
-          {/* Admin-only: total value */}
-          {isAdmin && birdCount > 0 && (
-            <div className="mt-2 pt-2 border-t text-right text-xs text-gray-400">
-              💰 {Object.entries(birdsByPrice).reduce((s, [p, c]) => s + parseInt(p,10) * c, 0).toLocaleString()}₽
-            </div>
-          )}
-        </div>
-      );
-    };
-    
     // ═══ Items Editor (3D / Мех / Кастомные — by name) ═══
-    const ItemsEditor = ({ items, setItems }) => {
-      const [search, setSearch] = useState('');
-      const [newName, setNewName] = useState('');
-      const [newQty, setNewQty] = useState('1');
-      
-      const filteredProducts = search.length >= 1
-        ? otherProducts.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || p.emoji.includes(search)).slice(0, 10)
-        : [];
-      
-      // Group items by category for display
-      const catOrder = ['3D игрушки', 'Меховые игрушки'];
-      const grouped = {};
-      items.forEach((item, i) => {
-        const prod = otherProducts.find(p => p.name === item.name);
-        const cat = prod?.category || 'Другое';
-        if (!grouped[cat]) grouped[cat] = [];
-        grouped[cat].push({ ...item, idx: i, emoji: prod?.emoji || '📦' });
-      });
-      
-      const updateQty = (idx, delta) => setItems(prev => prev.map((x, i) => i === idx ? { ...x, qty: Math.max(0, x.qty + delta) } : x).filter(x => x.qty > 0));
-      
-      return (
-        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-          <h4 className="font-bold text-sm mb-3 flex items-center gap-2">🎮 3D, Мех и другие</h4>
-          
-          {/* Existing items by category */}
-          {catOrder.concat(['Другое']).map(cat => {
-            const catItems = grouped[cat];
-            if (!catItems || catItems.length === 0) return null;
-            const catIcon = cat === '3D игрушки' ? '🎮' : cat === 'Меховые игрушки' ? '🧸' : '📦';
-            return (
-              <div key={cat} className="mb-3">
-                <p className="text-xs font-semibold text-gray-400 mb-1">{catIcon} {cat}</p>
-                <div className="space-y-1">
-                  {catItems.map(item => (
-                    <div key={item.idx} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-1.5">
-                      <span className="text-sm">{item.emoji} {item.name}</span>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button onClick={() => updateQty(item.idx, -1)} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold active:bg-red-100">−</button>
-                        <span className="font-bold w-6 text-center text-sm">{item.qty}</span>
-                        <button onClick={() => updateQty(item.idx, 1)} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold active:bg-green-100">+</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-          
-          {/* Quick-add from catalog */}
-          <div className="relative mt-2">
-            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="🔍 Найти товар из каталога..." className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-purple-500 focus:outline-none" />
-            {filteredProducts.length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
-                {filteredProducts.map(p => {
-                  const existing = items.find(i => i.name === p.name);
-                  return (
-                    <button key={p.name} onClick={() => {
-                      if (existing) { setItems(prev => prev.map(i => i.name === p.name ? { ...i, qty: i.qty + 1 } : i)); }
-                      else { setItems(prev => [...prev, { name: p.name, qty: 1 }]); }
-                      setSearch('');
-                    }} className="w-full text-left px-3 py-2 hover:bg-purple-50 text-sm flex justify-between border-b last:border-0">
-                      <span>{p.emoji} {p.name}</span>
-                      <span className="text-gray-400">{existing ? `(уже ${existing.qty})` : ''}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          
-          {/* Manual add */}
-          <div className="flex gap-2 mt-2">
-            <input type="number" value={newQty} onChange={e => setNewQty(e.target.value)} className="w-12 p-1.5 border rounded-lg text-sm text-center" placeholder="1" />
-            <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Или вручную..."
-              className="flex-1 p-1.5 border rounded-lg text-sm"
-              onKeyDown={e => { if (e.key === 'Enter' && newName.trim()) { setItems(prev => [...prev, { name: newName.trim(), qty: parseInt(newQty,10)||1 }]); setNewName(''); setNewQty('1'); }}} />
-            <button onClick={() => { if (newName.trim()) { setItems(prev => [...prev, { name: newName.trim(), qty: parseInt(newQty,10)||1 }]); setNewName(''); setNewQty('1'); }}}
-              className="bg-purple-500 text-white px-3 rounded-lg text-sm font-bold">+</button>
-          </div>
-        </div>
-      );
-    };
-    
     // ═══ Text Input Mode ═══
-    const TextInputMode = ({ onSave, onCancel }) => {
-      const [text, setText] = useState('');
-      const parsed = text.trim() ? parseRevisionText(text) : null;
-      const birdCount = parsed ? Object.values(parsed.birdsByPrice).reduce((s,c)=>s+c, 0) : 0;
-      
-      return (
-        <div className="space-y-3">
-          <textarea value={text} onChange={e => setText(e.target.value)}
-            placeholder={"Птиц: 62\n30х300\n20х400\n10х500\n2х600\n\n3д\n6 птиц\n1 коала\n2 собаки\n3 хомяка"}
-            className="w-full h-48 p-3 border-2 border-gray-200 rounded-xl text-sm font-mono focus:border-purple-500 focus:outline-none resize-none" autoFocus />
-          
-          {parsed && (birdCount > 0 || parsed.items.length > 0) && (
-            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-sm space-y-1">
-              {parsed.totalBirds > 0 && (
-                <div>
-                  <p className="font-semibold">🐦 Птицы: {parsed.totalBirds} шт</p>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {Object.entries(parsed.birdsByPrice).sort((a,b) => parseInt(a[0])-parseInt(b[0])).map(([p,c]) => (
-                      <span key={p} className="bg-white px-2 py-0.5 rounded text-xs border">{c}×{p}₽</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {parsed.items.length > 0 && (
-                <div className="mt-1">
-                  <p className="font-semibold">🎮 Другие: {parsed.items.reduce((s,i)=>s+i.qty, 0)} шт</p>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {parsed.items.map((item, i) => <span key={i} className="bg-white px-2 py-0.5 rounded text-xs border">{item.qty}× {item.name}</span>)}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          
-          <div className="flex gap-2">
-            <button onClick={onCancel} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Назад</button>
-            <button onClick={() => { if (!text.trim()) return; onSave(parseRevisionText(text)); }}
-              disabled={!text.trim()} className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
-              ✅ Сохранить
-            </button>
-          </div>
-        </div>
-      );
-    };
-    
     // ═══ Inventory Modal (after shift open) ═══
     const InventoryModal = () => {
       if (!showInventoryModal) return null;
@@ -10206,7 +10158,7 @@ function LikeBirdAppInner() {
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInventoryModal(false)}>
             <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto p-4" onClick={e => e.stopPropagation()}>
               <h3 className="text-lg font-bold mb-3">📋 Текстовый ввод</h3>
-              <TextInputMode onSave={(parsed) => {
+              <RevisionTextInput onSave={(parsed) => {
                 saveInventoryData(parsed, invPhotoUrl);
                 setShowInventoryModal(false); setInvPhotoUrl(null);
               }} onCancel={() => setMTextMode(false)} />
@@ -10228,8 +10180,8 @@ function LikeBirdAppInner() {
               </div>
             </div>
             <div className="p-4 space-y-3">
-              <BirdPriceEditor birdsByPrice={mBirdsByPrice} setBirdsByPrice={setMBirdsByPrice} totalBirds={mTotalBirds} setTotalBirds={setMTotalBirds} />
-              <ItemsEditor items={mItems} setItems={setMItems} />
+              <BirdPriceEditor birdsByPrice={mBirdsByPrice} setBirdsByPrice={setMBirdsByPrice} totalBirds={mTotalBirds} setTotalBirds={setMTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
+              <ItemsEditor items={mItems} setItems={setMItems} otherProducts={otherProducts} darkMode={darkMode} />
               
               {/* Photo */}
               {invPhotoUrl ? (
@@ -10275,7 +10227,7 @@ function LikeBirdAppInner() {
       // No inventory — creation mode
       if (!inventory && !editMode) {
         if (textMode) {
-          return <TextInputMode onSave={(parsed) => { saveInventoryData(parsed, null); setTextMode(false); }} onCancel={() => setTextMode(false)} />;
+          return <RevisionTextInput onSave={(parsed) => { saveInventoryData(parsed, null); setTextMode(false); }} onCancel={() => setTextMode(false)} />;
         }
         return (
           <div className="space-y-3">
@@ -10285,8 +10237,8 @@ function LikeBirdAppInner() {
               <p className="text-sm text-purple-500 mt-1">Укажите количество товара на витрине</p>
             </div>
             
-            <BirdPriceEditor birdsByPrice={birdsByPrice} setBirdsByPrice={setBirdsByPrice} totalBirds={totalBirds} setTotalBirds={setTotalBirds} />
-            <ItemsEditor items={items} setItems={setItems} />
+            <BirdPriceEditor birdsByPrice={birdsByPrice} setBirdsByPrice={setBirdsByPrice} totalBirds={totalBirds} setTotalBirds={setTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
+            <ItemsEditor items={items} setItems={setItems} otherProducts={otherProducts} darkMode={darkMode} />
             
             <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
               <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
@@ -10311,7 +10263,7 @@ function LikeBirdAppInner() {
       // Edit mode
       if (editMode) {
         if (textMode) {
-          return <TextInputMode onSave={(parsed) => { saveInventoryData(parsed, null); setEditMode(false); setTextMode(false); }} onCancel={() => setTextMode(false)} />;
+          return <RevisionTextInput onSave={(parsed) => { saveInventoryData(parsed, null); setEditMode(false); setTextMode(false); }} onCancel={() => setTextMode(false)} />;
         }
         return (
           <div className="space-y-3">
@@ -10319,8 +10271,8 @@ function LikeBirdAppInner() {
               <p className="font-bold text-purple-700 text-sm">✏️ Редактирование ревизии</p>
               {((totalBirds||birdCount) + itemCount) > 0 && <span className="text-xs text-purple-500">{(totalBirds||birdCount) + itemCount} шт</span>}
             </div>
-            <BirdPriceEditor birdsByPrice={birdsByPrice} setBirdsByPrice={setBirdsByPrice} totalBirds={totalBirds} setTotalBirds={setTotalBirds} />
-            <ItemsEditor items={items} setItems={setItems} />
+            <BirdPriceEditor birdsByPrice={birdsByPrice} setBirdsByPrice={setBirdsByPrice} totalBirds={totalBirds} setTotalBirds={setTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
+            <ItemsEditor items={items} setItems={setItems} otherProducts={otherProducts} darkMode={darkMode} />
             <div className="flex gap-2">
               <button onClick={() => setTextMode(true)} className="py-3 px-3 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600">📝</button>
               <button onClick={() => setEditMode(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
