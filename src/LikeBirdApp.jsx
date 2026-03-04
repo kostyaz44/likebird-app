@@ -9895,75 +9895,63 @@ function LikeBirdAppInner() {
     const mySalary = myTodayReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
 
     const [shiftPhotoMode, setShiftPhotoMode] = useState(null); // 'open' | 'close'
-    const [showInventoryModal, setShowInventoryModal] = useState(false); // after shift open
-    const [invText, setInvText] = useState(''); // text input for inventory
-    const [invPhotoUrl, setInvPhotoUrl] = useState(null); // showcase photo preview
+    const [showInventoryModal, setShowInventoryModal] = useState(false);
+    const [invPhotoUrl, setInvPhotoUrl] = useState(null);
 
     // Inventory data from shift
     const inventory = myShift?.inventory || null;
     
-    // Parse inventory text into structured data
-    const parseInventoryText = (text) => {
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-      const birds = {}; // price → count
-      const items = []; // { name, qty }
-      let totalBirds = 0;
-      let section = 'birds'; // birds | items
-      
-      for (const line of lines) {
-        const lower = line.toLowerCase();
-        
-        // Section headers
-        if (/^(3[дd]|зд|здэ|здэшки|здшки|3d)/i.test(lower)) { section = 'items'; continue; }
-        if (/^птиц[ыа]?:?\s*\d+/i.test(lower)) {
-          const m = lower.match(/(\d+)/);
-          if (m) totalBirds = parseInt(m[1], 10);
-          continue;
-        }
-        
-        // Bird price breakdown: "30х300" or "30x300" or "30 х 300"
-        const birdMatch = line.match(/^(\d+)\s*[хxХX×]\s*(\d+)$/);
-        if (birdMatch && section === 'birds') {
-          const count = parseInt(birdMatch[1], 10);
-          const price = parseInt(birdMatch[2], 10);
-          birds[price] = (birds[price] || 0) + count;
-          continue;
-        }
-        
-        // Item: "6 птиц" or "1 коала" or "2 собаки"
-        const itemMatch = line.match(/^(\d+)\s+(.+)$/);
-        if (itemMatch) {
-          items.push({ name: itemMatch[2].trim(), qty: parseInt(itemMatch[1], 10) });
-          continue;
-        }
-        
-        // Single word without number — treat as 1 item
-        if (line.length > 1 && !/^\d/.test(line)) {
-          items.push({ name: line, qty: 1 });
-        }
-      }
-      
-      // Calculate totals
-      const birdCount = Object.values(birds).reduce((s, c) => s + c, 0);
-      const birdValue = Object.entries(birds).reduce((s, [p, c]) => s + parseInt(p, 10) * c, 0);
-      const itemCount = items.reduce((s, i) => s + i.qty, 0);
-      
-      return { birds, items, totalBirds: totalBirds || birdCount, birdCount, birdValue, itemCount };
+    // Build price tiers from catalog
+    const priceTiers = useMemo(() => {
+      const cats = {};
+      DYNAMIC_ALL_PRODUCTS.forEach(p => {
+        if ((archivedProducts||[]).includes(p.name)) return;
+        const cat = p.category || 'Другое';
+        if (!cats[cat]) cats[cat] = {};
+        if (!cats[cat][p.price]) cats[cat][p.price] = [];
+        cats[cat][p.price].push(p.name);
+      });
+      return cats;
+    }, [customProducts, archivedProducts]);
+    
+    // Category display config
+    const CAT_CONFIG = {
+      'Птички-свистульки': { icon: '🐦', short: 'Птицы', bgClass: 'bg-amber-50 hover:bg-amber-100', badgeClass: 'bg-amber-200 text-amber-800' },
+      'Меховые игрушки': { icon: '🧸', short: 'Мех', bgClass: 'bg-pink-50 hover:bg-pink-100', badgeClass: 'bg-pink-200 text-pink-800' },
+      '3D игрушки': { icon: '🎮', short: '3D', bgClass: 'bg-blue-50 hover:bg-blue-100', badgeClass: 'bg-blue-200 text-blue-800' },
     };
     
-    const saveInventory = (parsed, photo) => {
+    const getCatConf = (cat) => CAT_CONFIG[cat] || { icon: '📦', short: cat, bgClass: 'bg-gray-50 hover:bg-gray-100', badgeClass: 'bg-gray-200 text-gray-800' };
+    
+    // Save inventory from tier counts
+    const saveInventoryFromTiers = (tierCounts, customItems, photo) => {
+      // tierCounts = { "Птички-свистульки": { "300": 10, "400": 20 }, "3D игрушки": { "500": 3 } }
+      // customItems = [{ name, qty }]
+      let totalCount = 0, totalValue = 0;
+      const breakdown = {};
+      for (const [cat, prices] of Object.entries(tierCounts)) {
+        breakdown[cat] = {};
+        for (const [price, count] of Object.entries(prices)) {
+          if (count > 0) {
+            breakdown[cat][price] = count;
+            totalCount += count;
+            totalValue += count * parseInt(price, 10);
+          }
+        }
+      }
+      const customCount = (customItems || []).reduce((s, i) => s + i.qty, 0);
+      
       const inv = {
-        birds: parsed.birds,
-        items: parsed.items,
-        totalBirds: parsed.totalBirds,
-        birdValue: parsed.birdValue,
+        tiers: breakdown,
+        customItems: customItems || inventory?.customItems || [],
+        totalCount: totalCount + customCount,
+        totalValue,
         photos: [...(inventory?.photos || []), ...(photo ? [photo] : [])],
         createdAt: inventory?.createdAt || Date.now(),
         updatedAt: Date.now(),
-        rawText: invText || inventory?.rawText || '',
         history: [
           ...(inventory?.history || []),
-          { time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), action: inventory ? 'Обновлена ревизия' : 'Начальная ревизия', by: employeeName }
+          { time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), action: inventory ? 'Обновлена' : 'Создана', by: employeeName }
         ]
       };
       const updated = { ...shiftsData, [shiftKey]: { ...myShift, inventory: inv } };
@@ -9978,89 +9966,171 @@ function LikeBirdAppInner() {
       if (file.size > 10 * 1024 * 1024) { showNotification('Фото слишком большое', 'error'); return; }
       try {
         const compressed = await compressImage(file, 800, 0.6);
-        if (!compressed) { showNotification('Ошибка сжатия', 'error'); return; }
-        setInvPhotoUrl(compressed);
+        if (compressed) setInvPhotoUrl(compressed);
       } catch { showNotification('Ошибка загрузки', 'error'); }
     };
     
-    // Inventory modal — shown after shift open
-    const InventoryModal = () => {
-      if (!showInventoryModal) return null;
-      const parsed = invText.trim() ? parseInventoryText(invText) : null;
+    // ═══ Price Tier Editor Component ═══
+    const TierEditor = ({ tierCounts, setTierCounts, customItems, setCustomItems, compact }) => {
+      const [newItemName, setNewItemName] = useState('');
+      const [newItemQty, setNewItemQty] = useState('1');
+      const [expandedCat, setExpandedCat] = useState(null);
+      
+      const updateTier = (cat, price, delta) => {
+        setTierCounts(prev => {
+          const next = { ...prev };
+          if (!next[cat]) next[cat] = {};
+          next[cat] = { ...next[cat], [price]: Math.max(0, (next[cat][price] || 0) + delta) };
+          return next;
+        });
+      };
+      
+      const setTierValue = (cat, price, val) => {
+        setTierCounts(prev => {
+          const next = { ...prev };
+          if (!next[cat]) next[cat] = {};
+          next[cat] = { ...next[cat], [price]: Math.max(0, parseInt(val, 10) || 0) };
+          return next;
+        });
+      };
       
       return (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => { setShowInventoryModal(false); }}>
+        <div className="space-y-3">
+          {Object.entries(priceTiers).map(([cat, prices]) => {
+            const conf = getCatConf(cat);
+            const catCounts = tierCounts[cat] || {};
+            const catTotal = Object.entries(catCounts).reduce((s, [p, c]) => s + c, 0);
+            const catValue = Object.entries(catCounts).reduce((s, [p, c]) => s + c * parseInt(p, 10), 0);
+            const sortedPrices = Object.keys(prices).sort((a, b) => parseInt(a) - parseInt(b));
+            const isExpanded = expandedCat === cat;
+            
+            return (
+              <div key={cat} className={`rounded-xl shadow overflow-hidden ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <button onClick={() => setExpandedCat(isExpanded ? null : cat)} className={`w-full flex items-center justify-between p-3 ${conf.bgClass}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">{conf.icon}</span>
+                    <span className="font-bold text-sm">{cat}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {catTotal > 0 && <span className={`${conf.badgeClass} px-2 py-0.5 rounded-full text-xs font-bold`}>{catTotal} шт = {catValue.toLocaleString()}₽</span>}
+                    <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                  </div>
+                </button>
+                
+                {isExpanded && (
+                  <div className="p-3 space-y-2">
+                    {sortedPrices.map(price => {
+                      const names = prices[price];
+                      const count = catCounts[price] || 0;
+                      const priceNum = parseInt(price, 10);
+                      return (
+                        <div key={price} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-sm text-amber-700">{priceNum}₽</span>
+                              {count > 0 && <span className="text-xs text-gray-500">= {(count * priceNum).toLocaleString()}₽</span>}
+                            </div>
+                            <p className="text-[10px] text-gray-400 truncate">{names.join(', ')}</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button onClick={() => updateTier(cat, price, -1)} className="w-8 h-8 bg-gray-200 rounded-lg font-bold text-lg leading-none hover:bg-red-100">−</button>
+                            <input
+                              type="number"
+                              value={count || ''}
+                              onChange={e => setTierValue(cat, price, e.target.value)}
+                              className="w-12 h-8 text-center border-2 border-gray-200 rounded-lg text-sm font-bold focus:border-amber-500 focus:outline-none"
+                              placeholder="0"
+                            />
+                            <button onClick={() => updateTier(cat, price, 1)} className="w-8 h-8 bg-gray-200 rounded-lg font-bold text-lg leading-none hover:bg-green-100">+</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          
+          {/* Custom items */}
+          {setCustomItems && (
+            <div className={`rounded-xl p-3 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+              <h4 className="font-bold text-sm mb-2">📝 Дополнительно</h4>
+              {customItems.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {customItems.map((item, i) => (
+                    <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-1.5">
+                      <span className="text-sm">{item.name}</span>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setCustomItems(prev => prev.map((x, j) => j === i ? { ...x, qty: Math.max(0, x.qty - 1) } : x).filter(x => x.qty > 0))} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold">−</button>
+                        <span className="font-bold w-6 text-center text-sm">{item.qty}</span>
+                        <button onClick={() => setCustomItems(prev => prev.map((x, j) => j === i ? { ...x, qty: x.qty + 1 } : x))} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold">+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input type="number" value={newItemQty} onChange={e => setNewItemQty(e.target.value)} className="w-12 p-1.5 border rounded-lg text-sm text-center" placeholder="1" />
+                <input type="text" value={newItemName} onChange={e => setNewItemName(e.target.value)} placeholder="Название товара" className="flex-1 p-1.5 border rounded-lg text-sm" onKeyDown={e => { if (e.key === 'Enter' && newItemName.trim()) { setCustomItems(prev => [...prev, { name: newItemName.trim(), qty: parseInt(newItemQty, 10) || 1 }]); setNewItemName(''); setNewItemQty('1'); } }} />
+                <button onClick={() => { if (newItemName.trim()) { setCustomItems(prev => [...prev, { name: newItemName.trim(), qty: parseInt(newItemQty, 10) || 1 }]); setNewItemName(''); setNewItemQty('1'); } }} className="bg-purple-500 text-white px-3 rounded-lg text-sm font-bold">+</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+    
+    // ═══ Inventory Modal (shown after shift open) ═══
+    const InventoryModal = () => {
+      if (!showInventoryModal) return null;
+      const [mTierCounts, setMTierCounts] = useState(() => {
+        // Pre-fill from inventory if exists
+        if (inventory?.tiers) return JSON.parse(JSON.stringify(inventory.tiers));
+        return {};
+      });
+      const [mCustomItems, setMCustomItems] = useState(() => inventory?.customItems ? [...inventory.customItems] : []);
+      
+      const totalCount = Object.values(mTierCounts).reduce((s, prices) => s + Object.values(prices).reduce((ss, c) => ss + c, 0), 0) + mCustomItems.reduce((s, i) => s + i.qty, 0);
+      const totalValue = Object.entries(mTierCounts).reduce((s, [cat, prices]) => s + Object.entries(prices).reduce((ss, [p, c]) => ss + c * parseInt(p, 10), 0), 0);
+      
+      return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInventoryModal(false)}>
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-4 rounded-t-2xl">
               <h3 className="text-lg font-bold">📋 Ревизия при открытии</h3>
-              <p className="text-white/70 text-sm">Укажите количество товара на витрине</p>
-            </div>
-            
-            <div className="p-4 space-y-3">
-              <textarea
-                value={invText}
-                onChange={e => setInvText(e.target.value)}
-                placeholder={`Птиц: 62\n30х300\n20х400\n10х500\n2х600\n\n3д\n6 птиц\n1 коала\n2 собаки\n3 хомяка`}
-                className="w-full h-48 p-3 border-2 border-gray-200 rounded-xl text-sm font-mono focus:border-purple-500 focus:outline-none resize-none"
-                autoFocus
-              />
-              
-              {parsed && (parsed.birdCount > 0 || parsed.items.length > 0) && (
-                <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-2">
-                  <p className="font-bold text-purple-700 text-sm">📊 Распознано:</p>
-                  {parsed.totalBirds > 0 && (
-                    <div>
-                      <p className="font-semibold text-sm">🐦 Птицы: {parsed.totalBirds} шт ({parsed.birdValue.toLocaleString()}₽)</p>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {Object.entries(parsed.birds).sort((a,b) => parseInt(a[0]) - parseInt(b[0])).map(([price, count]) => (
-                          <span key={price} className="bg-white px-2 py-0.5 rounded text-xs border">{count}×{price}₽</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {parsed.items.length > 0 && (
-                    <div>
-                      <p className="font-semibold text-sm mt-2">🎮 Другие товары: {parsed.itemCount} шт</p>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {parsed.items.map((item, i) => (
-                          <span key={i} className="bg-white px-2 py-0.5 rounded text-xs border">{item.qty}× {item.name}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+              <p className="text-white/70 text-sm">Укажите количество по ценам</p>
+              {totalCount > 0 && (
+                <div className="mt-2 bg-white/15 rounded-lg px-3 py-1.5 text-sm">
+                  Итого: <strong>{totalCount} шт</strong> на <strong>{totalValue.toLocaleString()}₽</strong>
                 </div>
               )}
+            </div>
+            <div className="p-4 space-y-3">
+              <TierEditor tierCounts={mTierCounts} setTierCounts={setMTierCounts} customItems={mCustomItems} setCustomItems={setMCustomItems} compact />
               
-              {/* Фото витрины */}
-              <div>
-                <label className="text-xs font-semibold text-gray-500 mb-1 block">📷 Фото витрины (опционально)</label>
-                {invPhotoUrl ? (
-                  <div className="relative">
-                    <img src={invPhotoUrl} alt="Витрина" className="w-full h-32 object-cover rounded-xl" />
-                    <button onClick={() => setInvPhotoUrl(null)} className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs">✕</button>
-                  </div>
-                ) : (
-                  <label className="flex items-center justify-center h-16 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
-                    <Camera className="w-5 h-5 text-gray-400 mr-2" /><span className="text-sm text-gray-500">Добавить фото</span>
-                    <input type="file" accept="image/*" capture="environment" onChange={handleInvPhoto} className="hidden" />
-                  </label>
-                )}
-              </div>
+              {/* Photo */}
+              {invPhotoUrl ? (
+                <div className="relative">
+                  <img src={invPhotoUrl} alt="Витрина" className="w-full h-28 object-cover rounded-xl" />
+                  <button onClick={() => setInvPhotoUrl(null)} className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs">✕</button>
+                </div>
+              ) : (
+                <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
+                  <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
+                  <input type="file" accept="image/*" capture="environment" onChange={handleInvPhoto} className="hidden" />
+                </label>
+              )}
               
               <div className="flex gap-2">
-                <button onClick={() => setShowInventoryModal(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold hover:bg-gray-300">
-                  Пропустить
-                </button>
+                <button onClick={() => setShowInventoryModal(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Пропустить</button>
                 <button
                   onClick={() => {
-                    if (!invText.trim()) { setShowInventoryModal(false); return; }
-                    const p = parseInventoryText(invText);
-                    saveInventory(p, invPhotoUrl);
+                    saveInventoryFromTiers(mTierCounts, mCustomItems, invPhotoUrl);
                     setShowInventoryModal(false);
-                    setInvText('');
                     setInvPhotoUrl(null);
                   }}
-                  disabled={!invText.trim()}
+                  disabled={totalCount === 0}
                   className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50"
                 >
                   ✅ Сохранить
@@ -10072,107 +10142,54 @@ function LikeBirdAppInner() {
       );
     };
     
-    // ═══ Revision Tab Component ═══
+    // ═══ Revision Tab ═══
     const RevisionTab = () => {
-      const [revText, setRevText] = useState('');
+      const [editMode, setEditMode] = useState(false);
       const [revPhotoUrl, setRevPhotoUrl] = useState(null);
-      const [addMode, setAddMode] = useState(false); // false = view, true = edit/add
+      const [tierCounts, setTierCounts] = useState(() => {
+        if (inventory?.tiers) return JSON.parse(JSON.stringify(inventory.tiers));
+        return {};
+      });
+      const [customItems, setCustomItems] = useState(() => inventory?.customItems ? [...inventory.customItems] : []);
       
-      // Editable inventory items
-      const [editBirds, setEditBirds] = useState(() => inventory?.birds ? { ...inventory.birds } : {});
-      const [editItems, setEditItems] = useState(() => inventory?.items ? [...inventory.items] : []);
-      const [editTotalBirds, setEditTotalBirds] = useState(() => inventory?.totalBirds || 0);
-      const [newItemName, setNewItemName] = useState('');
-      const [newItemQty, setNewItemQty] = useState('1');
-      const [newBirdPrice, setNewBirdPrice] = useState('');
-      const [newBirdCount, setNewBirdCount] = useState('');
+      const totalCount = Object.values(tierCounts).reduce((s, prices) => s + Object.values(prices).reduce((ss, c) => ss + c, 0), 0) + customItems.reduce((s, i) => s + i.qty, 0);
+      const totalValue = Object.entries(tierCounts).reduce((s, [cat, prices]) => s + Object.entries(prices).reduce((ss, [p, c]) => ss + c * parseInt(p, 10), 0), 0);
       
-      const birdCount = Object.values(editBirds).reduce((s, c) => s + c, 0);
-      const birdValue = Object.entries(editBirds).reduce((s, [p, c]) => s + parseInt(p, 10) * c, 0);
-      const itemCount = editItems.reduce((s, i) => s + i.qty, 0);
-      
-      const handleRevPhoto = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        try {
-          const compressed = await compressImage(file, 800, 0.6);
-          if (compressed) setRevPhotoUrl(compressed);
-        } catch { /* silent */ }
-      };
-      
-      const saveRevision = (photo) => {
-        const inv = {
-          birds: { ...editBirds },
-          items: [...editItems],
-          totalBirds: editTotalBirds || birdCount,
-          birdValue,
-          photos: [...(inventory?.photos || []), ...(photo ? [photo] : [])],
-          createdAt: inventory?.createdAt || Date.now(),
-          updatedAt: Date.now(),
-          rawText: inventory?.rawText || '',
-          history: [
-            ...(inventory?.history || []),
-            { time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), action: addMode ? 'Обновлена ревизия' : 'Сохранена ревизия', by: employeeName }
-          ]
-        };
-        const updated = { ...shiftsData, [shiftKey]: { ...myShift, inventory: inv } };
-        updateShiftsData(updated);
-        setAddMode(false);
-        if (photo) setRevPhotoUrl(null);
-        showNotification('Ревизия сохранена ✓');
-      };
-      
-      // Quick text import
-      if (!inventory && !addMode) {
+      // No inventory yet — show editor directly
+      if (!inventory && !editMode) {
         return (
           <div className="space-y-3">
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 text-center">
               <p className="text-4xl mb-2">📋</p>
               <p className="font-bold text-purple-700">Ревизия не проведена</p>
-              <p className="text-sm text-purple-500 mt-1">Укажите количество товара на витрине</p>
+              <p className="text-sm text-purple-500 mt-1">Укажите количество товара по ценам</p>
             </div>
             
-            <textarea
-              value={revText}
-              onChange={e => setRevText(e.target.value)}
-              placeholder={`Птиц: 62\n30х300\n20х400\n10х500\n2х600\n\n3д\n6 птиц\n1 коала\n2 собаки\n3 хомяка`}
-              className="w-full h-52 p-3 border-2 border-gray-200 rounded-xl text-sm font-mono focus:border-purple-500 focus:outline-none resize-none"
-            />
+            <TierEditor tierCounts={tierCounts} setTierCounts={setTierCounts} customItems={customItems} setCustomItems={setCustomItems} />
             
-            {revText.trim() && (() => {
-              const p = parseInventoryText(revText);
-              return (p.birdCount > 0 || p.items.length > 0) ? (
-                <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-1 text-sm">
-                  {p.totalBirds > 0 && <p>🐦 Птицы: <strong>{p.totalBirds} шт</strong> = <strong>{p.birdValue.toLocaleString()}₽</strong></p>}
-                  {p.items.length > 0 && <p>🎮 Товары: <strong>{p.itemCount} шт</strong> ({p.items.length} позиций)</p>}
-                </div>
-              ) : null;
-            })()}
-            
-            {/* Фото витрины */}
+            {/* Photo */}
             {revPhotoUrl ? (
               <div className="relative">
-                <img src={revPhotoUrl} alt="Витрина" className="w-full h-32 object-cover rounded-xl" />
-                <button onClick={() => setRevPhotoUrl(null)} className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs">✕</button>
+                <img src={revPhotoUrl} alt="Витрина" className="w-full h-28 object-cover rounded-xl" />
+                <button onClick={() => setRevPhotoUrl(null)} className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full text-xs flex items-center justify-center">✕</button>
               </div>
             ) : (
-              <label className="flex items-center justify-center h-14 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
-                <Camera className="w-5 h-5 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
-                <input type="file" accept="image/*" capture="environment" onChange={handleRevPhoto} className="hidden" />
+              <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
+                <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
+                <input type="file" accept="image/*" capture="environment" onChange={async (e) => {
+                  const file = e.target.files?.[0]; if (!file) return;
+                  try { const c = await compressImage(file, 800, 0.6); if (c) setRevPhotoUrl(c); } catch { /* silent */ }
+                }} className="hidden" />
               </label>
             )}
             
             <button
               onClick={() => {
-                if (!revText.trim()) { showNotification('Введите данные ревизии', 'error'); return; }
-                const p = parseInventoryText(revText);
-                setEditBirds(p.birds);
-                setEditItems(p.items);
-                setEditTotalBirds(p.totalBirds);
-                saveRevision(revPhotoUrl);
-                setRevText('');
+                if (totalCount === 0) { showNotification('Введите количество', 'error'); return; }
+                saveInventoryFromTiers(tierCounts, customItems, revPhotoUrl);
+                setRevPhotoUrl(null);
               }}
-              disabled={!revText.trim()}
+              disabled={totalCount === 0}
               className="w-full py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50"
             >
               ✅ Сохранить ревизию
@@ -10181,158 +10198,128 @@ function LikeBirdAppInner() {
         );
       }
       
-      // View/Edit mode (inventory exists)
+      // View mode (inventory exists)
+      if (!editMode) {
+        return (
+          <div className="space-y-3">
+            {/* Summary */}
+            <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-2xl p-4 shadow-lg">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-white/70 text-xs">Товаров на витрине</p>
+                  <p className="font-bold text-2xl">{inventory.totalCount || 0} шт</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-white/70 text-xs">Стоимость</p>
+                  <p className="font-bold text-2xl">{(inventory.totalValue || 0).toLocaleString()}₽</p>
+                </div>
+              </div>
+              {inventory.updatedAt && <p className="text-white/60 text-xs mt-2">Обновлено: {new Date(inventory.updatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</p>}
+            </div>
+            
+            {/* Breakdown by category */}
+            {Object.entries(inventory.tiers || {}).map(([cat, prices]) => {
+              const conf = getCatConf(cat);
+              const catTotal = Object.values(prices).reduce((s, c) => s + c, 0);
+              const catValue = Object.entries(prices).reduce((s, [p, c]) => s + c * parseInt(p, 10), 0);
+              if (catTotal === 0) return null;
+              return (
+                <div key={cat} className={`rounded-xl p-3 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-sm">{conf.icon} {cat}</span>
+                    <span className="text-purple-600 font-bold text-sm">{catTotal} шт = {catValue.toLocaleString()}₽</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(prices).filter(([,c]) => c > 0).sort((a,b) => parseInt(a[0]) - parseInt(b[0])).map(([price, count]) => (
+                      <div key={price} className="bg-gray-50 rounded-lg px-2.5 py-1.5 flex flex-col items-center min-w-[60px]">
+                        <span className="font-bold text-sm">{count} шт</span>
+                        <span className="text-xs text-amber-600">{parseInt(price, 10)}₽</span>
+                        <span className="text-[9px] text-gray-400">{(count * parseInt(price, 10)).toLocaleString()}₽</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            
+            {/* Custom items */}
+            {(inventory.customItems || []).length > 0 && (
+              <div className={`rounded-xl p-3 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <h4 className="font-bold text-sm mb-2">📝 Дополнительно</h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {inventory.customItems.map((item, i) => (
+                    <span key={i} className="bg-gray-50 rounded-lg px-2.5 py-1.5 text-sm">{item.qty}× {item.name}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* Photos */}
+            {(inventory.photos || []).length > 0 && (
+              <div className={`rounded-xl p-3 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <h4 className="font-bold text-sm mb-2">📷 Фото витрины</h4>
+                <div className="flex gap-2 flex-wrap">
+                  {inventory.photos.map((photo, i) => (
+                    <img key={i} src={photo} alt={`Витрина ${i+1}`} className="w-20 h-20 object-cover rounded-lg" />
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* History */}
+            {(inventory.history || []).length > 0 && (
+              <details className="group">
+                <summary className="cursor-pointer text-gray-500 text-sm font-semibold flex items-center gap-1">
+                  <ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" /> История ({inventory.history.length})
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {inventory.history.map((h, i) => (
+                    <div key={i} className="bg-gray-50 rounded px-3 py-1 text-xs flex justify-between">
+                      <span>{h.action}</span><span className="text-gray-400">{h.time} · {h.by}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            
+            {/* Add photo button */}
+            <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
+              <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Добавить фото витрины</span>
+              <input type="file" accept="image/*" capture="environment" onChange={async (e) => {
+                const file = e.target.files?.[0]; if (!file) return;
+                try {
+                  const c = await compressImage(file, 800, 0.6);
+                  if (c) {
+                    const inv = { ...inventory, photos: [...(inventory.photos || []), c], updatedAt: Date.now(), history: [...(inventory.history || []), { time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), action: 'Добавлено фото', by: employeeName }] };
+                    updateShiftsData({ ...shiftsData, [shiftKey]: { ...myShift, inventory: inv } });
+                    showNotification('📷 Фото добавлено');
+                  }
+                } catch { /* silent */ }
+              }} className="hidden" />
+            </label>
+            
+            <button onClick={() => { setTierCounts(inventory.tiers ? JSON.parse(JSON.stringify(inventory.tiers)) : {}); setCustomItems(inventory.customItems ? [...inventory.customItems] : []); setEditMode(true); }} className="w-full py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2">
+              <Edit3 className="w-4 h-4" /> Обновить ревизию
+            </button>
+          </div>
+        );
+      }
+      
+      // Edit mode
       return (
         <div className="space-y-3">
-          {/* Summary card */}
-          <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-2xl p-4 shadow-lg">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-white/70 text-xs">Ревизия при открытии</p>
-                <p className="font-bold text-lg">{(inventory?.totalBirds || birdCount) + itemCount} товаров</p>
-              </div>
-              <div className="text-right">
-                <p className="text-white/70 text-xs">Стоимость птиц</p>
-                <p className="font-bold text-lg">{(inventory?.birdValue || birdValue).toLocaleString()}₽</p>
-              </div>
+          <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
+            <div>
+              <p className="font-bold text-purple-700 text-sm">✏️ Редактирование ревизии</p>
+              {totalCount > 0 && <p className="text-xs text-purple-500">Итого: {totalCount} шт на {totalValue.toLocaleString()}₽</p>}
             </div>
-            {inventory?.updatedAt && (
-              <p className="text-white/60 text-xs mt-2">Обновлено: {new Date(inventory.updatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</p>
-            )}
           </div>
           
-          {/* Birds breakdown */}
-          {Object.keys(editBirds).length > 0 && (
-            <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-              <div className="flex justify-between items-center mb-2">
-                <h4 className="font-bold text-sm">🐦 Птицы-свистульки</h4>
-                <span className="text-purple-600 font-bold text-sm">{editTotalBirds || birdCount} шт</span>
-              </div>
-              <div className="space-y-1.5">
-                {Object.entries(editBirds).sort((a,b) => parseInt(a[0]) - parseInt(b[0])).map(([price, count]) => (
-                  <div key={price} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-3">
-                      {addMode ? (
-                        <input type="number" value={count} onChange={e => { const v = parseInt(e.target.value, 10) || 0; setEditBirds(prev => ({ ...prev, [price]: v })); }} className="w-14 text-center border rounded p-1 text-sm font-bold" />
-                      ) : (
-                        <span className="font-bold text-lg w-10 text-center">{count}</span>
-                      )}
-                      <span className="text-gray-500">× {parseInt(price, 10).toLocaleString()}₽</span>
-                    </div>
-                    <span className="font-semibold text-amber-600">{(count * parseInt(price, 10)).toLocaleString()}₽</span>
-                    {addMode && <button onClick={() => { const nb = { ...editBirds }; delete nb[price]; setEditBirds(nb); }} className="text-red-400 ml-2"><Trash2 className="w-4 h-4" /></button>}
-                  </div>
-                ))}
-              </div>
-              {addMode && (
-                <div className="flex gap-2 mt-2">
-                  <input type="number" value={newBirdCount} onChange={e => setNewBirdCount(e.target.value)} placeholder="Кол." className="w-16 p-2 border rounded-lg text-sm text-center" />
-                  <span className="self-center text-gray-400">×</span>
-                  <input type="number" value={newBirdPrice} onChange={e => setNewBirdPrice(e.target.value)} placeholder="Цена ₽" className="flex-1 p-2 border rounded-lg text-sm" />
-                  <button onClick={() => {
-                    const c = parseInt(newBirdCount, 10), p = parseInt(newBirdPrice, 10);
-                    if (c > 0 && p > 0) { setEditBirds(prev => ({ ...prev, [p]: (prev[p] || 0) + c })); setNewBirdCount(''); setNewBirdPrice(''); }
-                  }} className="bg-purple-500 text-white px-3 rounded-lg text-sm font-bold">+</button>
-                </div>
-              )}
-              <div className="border-t mt-2 pt-2 flex justify-between font-bold text-sm">
-                <span>Итого птиц:</span>
-                <span className="text-purple-700">{birdValue.toLocaleString()}₽</span>
-              </div>
-            </div>
-          )}
+          <TierEditor tierCounts={tierCounts} setTierCounts={setTierCounts} customItems={customItems} setCustomItems={setCustomItems} />
           
-          {/* Other items */}
-          {editItems.length > 0 && (
-            <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-              <div className="flex justify-between items-center mb-2">
-                <h4 className="font-bold text-sm">🎮 Другие товары</h4>
-                <span className="text-purple-600 font-bold text-sm">{itemCount} шт</span>
-              </div>
-              <div className="space-y-1">
-                {editItems.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-1.5">
-                    <span className="text-sm">{item.name}</span>
-                    <div className="flex items-center gap-2">
-                      {addMode ? (
-                        <>
-                          <button onClick={() => { const ni = [...editItems]; ni[i] = { ...ni[i], qty: Math.max(0, ni[i].qty - 1) }; setEditItems(ni.filter(x => x.qty > 0)); }} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold">−</button>
-                          <span className="font-bold w-6 text-center">{item.qty}</span>
-                          <button onClick={() => { const ni = [...editItems]; ni[i] = { ...ni[i], qty: ni[i].qty + 1 }; setEditItems(ni); }} className="w-7 h-7 bg-gray-200 rounded text-sm font-bold">+</button>
-                        </>
-                      ) : (
-                        <span className="font-bold">{item.qty} шт</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {addMode && (
-                <div className="flex gap-2 mt-2">
-                  <input type="number" value={newItemQty} onChange={e => setNewItemQty(e.target.value)} placeholder="Кол" className="w-14 p-2 border rounded-lg text-sm text-center" />
-                  <input type="text" value={newItemName} onChange={e => setNewItemName(e.target.value)} placeholder="Название товара" className="flex-1 p-2 border rounded-lg text-sm" onKeyDown={e => { if (e.key === 'Enter' && newItemName.trim()) { setEditItems(prev => [...prev, { name: newItemName.trim(), qty: parseInt(newItemQty, 10) || 1 }]); setNewItemName(''); setNewItemQty('1'); } }} />
-                  <button onClick={() => { if (newItemName.trim()) { setEditItems(prev => [...prev, { name: newItemName.trim(), qty: parseInt(newItemQty, 10) || 1 }]); setNewItemName(''); setNewItemQty('1'); } }} className="bg-purple-500 text-white px-3 rounded-lg text-sm font-bold">+</button>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Photos */}
-          {(inventory?.photos?.length > 0 || addMode) && (
-            <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-              <h4 className="font-bold text-sm mb-2">📷 Фото витрины</h4>
-              <div className="flex gap-2 flex-wrap">
-                {(inventory?.photos || []).map((photo, i) => (
-                  <div key={i} className="relative">
-                    <img src={photo} alt={`Витрина ${i+1}`} className="w-20 h-20 object-cover rounded-lg" />
-                    {addMode && <button onClick={() => {
-                      const photos = [...(inventory?.photos || [])]; photos.splice(i, 1);
-                      const inv = { ...inventory, photos };
-                      updateShiftsData({ ...shiftsData, [shiftKey]: { ...myShift, inventory: inv } });
-                    }} className="absolute -top-1 -right-1 bg-red-500 text-white w-5 h-5 rounded-full text-xs flex items-center justify-center">✕</button>}
-                  </div>
-                ))}
-                {addMode && (
-                  <label className="w-20 h-20 border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-purple-400">
-                    <Camera className="w-5 h-5 text-gray-400" />
-                    <span className="text-[10px] text-gray-400">Фото</span>
-                    <input type="file" accept="image/*" capture="environment" onChange={async (e) => {
-                      const file = e.target.files?.[0]; if (!file) return;
-                      try { const c = await compressImage(file, 800, 0.6); if (c) { saveRevision(c); } } catch { /* silent */ }
-                    }} className="hidden" />
-                  </label>
-                )}
-              </div>
-            </div>
-          )}
-          
-          {/* History */}
-          {inventory?.history?.length > 0 && (
-            <details className="group">
-              <summary className="cursor-pointer text-gray-500 text-sm font-semibold flex items-center gap-1"><ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" /> История изменений ({inventory.history.length})</summary>
-              <div className="mt-2 space-y-1">
-                {inventory.history.map((h, i) => (
-                  <div key={i} className="bg-gray-50 rounded px-3 py-1 text-xs flex justify-between">
-                    <span>{h.action}</span>
-                    <span className="text-gray-400">{h.time} · {h.by}</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-          
-          {/* Action buttons */}
           <div className="flex gap-2">
-            {addMode ? (
-              <>
-                <button onClick={() => setAddMode(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
-                <button onClick={() => { setEditTotalBirds(birdCount); saveRevision(null); }} className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold">💾 Сохранить</button>
-              </>
-            ) : (
-              <button onClick={() => setAddMode(true)} className="w-full py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2">
-                <Edit3 className="w-4 h-4" /> Редактировать ревизию
-              </button>
-            )}
+            <button onClick={() => setEditMode(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
+            <button onClick={() => { saveInventoryFromTiers(tierCounts, customItems, null); setEditMode(false); }} className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold">💾 Сохранить</button>
           </div>
         </div>
       );
@@ -10550,7 +10537,7 @@ function LikeBirdAppInner() {
                     )}
                     {inventory && (
                       <button onClick={() => setShiftTab('revision')} className="mt-2 bg-white/15 rounded-lg px-3 py-1.5 text-xs text-white/90 w-full text-center hover:bg-white/25">
-                        📦 Ревизия: {inventory.totalBirds || 0} птиц + {(inventory.items||[]).reduce((s,i) => s + i.qty, 0)} товаров = {(inventory.birdValue || 0).toLocaleString()}₽
+                        📦 Ревизия: {inventory.totalCount || 0} шт на {(inventory.totalValue || 0).toLocaleString()}₽
                       </button>
                     )}
                     {!inventory && myShift.status === 'open' && (
