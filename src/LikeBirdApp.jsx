@@ -6426,6 +6426,17 @@ function LikeBirdAppInner() {
     const [editingProduct, setEditingProduct] = useState(null);
     const [editProductData, setEditProductData] = useState({ name: '', price: '', emoji: '', category: '' });
     const [productPhoto, setProductPhoto] = useState(null);
+    // Revision tab states (moved from IIFE to fix hooks order)
+    const [revMode, setRevMode] = useState('overview');
+    const [revText, setRevText] = useState('');
+    const [revParsed, setRevParsed] = useState(null);
+    const [revHistory, setRevHistory] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-revision-history') || '[]'); } catch { return []; } });
+    const [viewingRev, setViewingRev] = useState(null);
+    const [editingItem, setEditingItem] = useState(null);
+    const [itemSearch, setItemSearch] = useState('');
+    const [addingProduct, setAddingProduct] = useState(null);
+    const [newProdPrice, setNewProdPrice] = useState('');
+    const [newProdCat, setNewProdCat] = useState('3D игрушки');
     // productPhotos & setProductPhotos — using global state (synced via Firebase)
     // FIX: inviteCodes перенесён в глобальное состояние LikeBirdApp (синхронизируется через Firebase)
     
@@ -8330,11 +8341,6 @@ function LikeBirdAppInner() {
 
           {/* ВКЛАДКА: Ревизия */}
           {adminTab === 'stock' && (() => {
-            const [revMode, setRevMode] = useState('overview'); // overview | input | preview | history
-            const [revText, setRevText] = useState('');
-            const [revParsed, setRevParsed] = useState(null);
-            const [revHistory, setRevHistory] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-revision-history') || '[]'); } catch { return []; } });
-            const [viewingRev, setViewingRev] = useState(null);
             
             // Parse warehouse revision text
             const parseWarehouseRevision = (text) => {
@@ -8720,11 +8726,6 @@ function LikeBirdAppInner() {
             // PREVIEW MODE
             if (revMode === 'preview' && revParsed) {
               const p = revParsed;
-              const [editingItem, setEditingItem] = useState(null); // index of item being edited
-              const [itemSearch, setItemSearch] = useState('');
-              const [addingProduct, setAddingProduct] = useState(null); // { name, currentCount }
-              const [newProdPrice, setNewProdPrice] = useState('');
-              const [newProdCat, setNewProdCat] = useState('3D игрушки');
               
               const searchResults = itemSearch.length >= 1
                 ? DYNAMIC_ALL_PRODUCTS.filter(pr => pr.name.toLowerCase().includes(itemSearch.toLowerCase()) || (pr.aliases||[]).some(a => a.includes(itemSearch.toLowerCase()))).slice(0, 8)
