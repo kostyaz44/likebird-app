@@ -1038,6 +1038,26 @@ function LikeBirdAppInner() {
   const [employeeKPI, setEmployeeKPI] = useState({});
   // Пользовательские алиасы для распознавания товаров
   const [customAliases, setCustomAliases] = useState({});
+  
+  // Global alias save function
+  const saveAlias = (alias, productName) => {
+    if (!alias?.trim() || !productName) return;
+    const key = alias.toLowerCase().trim();
+    const updated = { ...customAliases, [key]: productName };
+    setCustomAliases(updated);
+    localStorage.setItem('likebird-custom-aliases', JSON.stringify(updated));
+    CUSTOM_ALIASES = updated;
+    save('likebird-custom-aliases', updated);
+    showNotification(`Алиас «${alias}» → ${productName} ✓`);
+  };
+  const removeAlias = (alias) => {
+    const updated = { ...customAliases };
+    delete updated[alias.toLowerCase().trim()];
+    setCustomAliases(updated);
+    localStorage.setItem('likebird-custom-aliases', JSON.stringify(updated));
+    CUSTOM_ALIASES = updated;
+    save('likebird-custom-aliases', updated);
+  };
   // Онлайн-присутствие сотрудников { login: { displayName, lastSeen, online } }
   const [presenceData, setPresenceData] = useState({});
 
@@ -8226,6 +8246,42 @@ function LikeBirdAppInner() {
               </div>
 
               {/* Все товары с возможностью редактирования */}
+              {/* Alias management */}
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <details className="group">
+                  <summary className="cursor-pointer font-bold flex items-center gap-2 text-sm">
+                    <ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />📝 Алиасы товаров ({Object.keys(customAliases).length})
+                  </summary>
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-gray-500">Алиасы позволяют распознавать товары по альтернативным названиям (из отчётов, ревизий)</p>
+                    {Object.entries(customAliases).length > 0 && (
+                      <div className="space-y-1 max-h-40 overflow-y-auto">
+                        {Object.entries(customAliases).map(([alias, prod]) => (
+                          <div key={alias} className="flex items-center justify-between bg-purple-50 rounded-lg px-3 py-1.5 text-sm">
+                            <span>«{alias}» → <strong>{prod}</strong></span>
+                            <button onClick={() => { removeAlias(alias); showNotification('Алиас удалён'); }} className="text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <input type="text" id="admin-alias-input" placeholder="Алиас (как пишут)" className="flex-1 p-2 border rounded-lg text-sm" />
+                      <input type="text" id="admin-alias-product" placeholder="Товар из каталога" className="flex-1 p-2 border rounded-lg text-sm" list="admin-alias-prodlist" />
+                      <datalist id="admin-alias-prodlist">{DYNAMIC_ALL_PRODUCTS.map(p => <option key={p.name} value={p.name}>{p.emoji} {p.name}</option>)}</datalist>
+                      <button onClick={() => {
+                        const al = document.getElementById('admin-alias-input')?.value;
+                        const pr = document.getElementById('admin-alias-product')?.value;
+                        if (al && pr && DYNAMIC_ALL_PRODUCTS.find(p => p.name === pr)) {
+                          saveAlias(al, pr);
+                          document.getElementById('admin-alias-input').value = '';
+                          document.getElementById('admin-alias-product').value = '';
+                        } else { showNotification('Укажите алиас и выберите товар из каталога', 'error'); }
+                      }} className="bg-purple-500 text-white px-3 rounded-lg text-sm font-bold">+</button>
+                    </div>
+                  </div>
+                </details>
+              </div>
+              
               {Object.entries(PRODUCTS).map(([cat, items]) => (
                 <div key={cat} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3">{CAT_ICONS[cat]} {cat} ({items.length + customProducts.filter(p => p.category === cat).length})</h3>
@@ -8254,6 +8310,10 @@ function LikeBirdAppInner() {
                               {!prod.isBase && <button onClick={() => { setEditingProduct(prod.name); setEditProductData({ name: prod.name, price: prod.price, emoji: prod.emoji, category: prod.category }); }} className="text-gray-400 hover:text-blue-500"><Edit3 className="w-3.5 h-3.5" /></button>}
                               {!prod.isBase && <button onClick={() => showConfirm(`Удалить ${prod.name}?`, () => removeCustomProduct(prod.id))} className="text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>}
                               <button onClick={() => { toggleArchiveProduct(prod.name); showNotification(archivedProducts.includes(prod.name) ? 'Товар восстановлен' : 'Товар в архиве'); }} className={`text-xs ${archivedProducts.includes(prod.name) ? 'text-green-500' : 'text-gray-400 hover:text-amber-500'}`} title={archivedProducts.includes(prod.name) ? 'Восстановить' : 'Архивировать'}>{archivedProducts.includes(prod.name) ? '♻️' : '📦'}</button>
+                              <button onClick={() => {
+                                const alias = prompt(`Добавить алиас для «${prod.name}»:\n(как товар называют в отчёте/ревизии)`);
+                                if (alias?.trim()) saveAlias(alias.trim(), prod.name);
+                              }} className="text-gray-400 hover:text-purple-500" title="Добавить алиас">📝</button>
                               {productPhotos[prod.name] && <button onClick={() => { deleteMediaPhoto(prod.name); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs">🗑️</button>}
                             </div>
                           </>
@@ -8611,6 +8671,47 @@ function LikeBirdAppInner() {
             // PREVIEW MODE
             if (revMode === 'preview' && revParsed) {
               const p = revParsed;
+              const [editingItem, setEditingItem] = useState(null); // index of item being edited
+              const [itemSearch, setItemSearch] = useState('');
+              const [addingProduct, setAddingProduct] = useState(null); // { name, currentCount }
+              const [newProdPrice, setNewProdPrice] = useState('');
+              const [newProdCat, setNewProdCat] = useState('3D игрушки');
+              
+              const searchResults = itemSearch.length >= 1
+                ? DYNAMIC_ALL_PRODUCTS.filter(pr => pr.name.toLowerCase().includes(itemSearch.toLowerCase()) || (pr.aliases||[]).some(a => a.includes(itemSearch.toLowerCase()))).slice(0, 8)
+                : [];
+              
+              // Reassign item to a product
+              const assignItem = (idx, product, teachAlias) => {
+                const items = [...p.items];
+                const oldName = items[idx].name;
+                items[idx] = { ...items[idx], matchedProduct: product, matchScore: 100 };
+                setRevParsed({ ...p, items });
+                if (teachAlias && oldName.toLowerCase() !== product.name.toLowerCase()) {
+                  saveAlias(oldName, product.name);
+                }
+                setEditingItem(null);
+                setItemSearch('');
+              };
+              
+              // Add new product from unmatched
+              const addNewFromRevision = (item) => {
+                if (!newProdPrice) { showNotification('Укажите цену', 'error'); return; }
+                const prod = { name: item.name, price: parseInt(newProdPrice, 10), category: newProdCat, emoji: '📦', aliases: [item.name.toLowerCase()] };
+                addCustomProduct(prod);
+                // Re-match this item
+                const idx = p.items.findIndex(i => i.name === item.name);
+                if (idx >= 0) {
+                  const newProd = { ...prod };
+                  const items = [...p.items];
+                  items[idx] = { ...items[idx], matchedProduct: newProd, matchScore: 100 };
+                  setRevParsed({ ...p, items });
+                }
+                setAddingProduct(null);
+                setNewProdPrice('');
+                showNotification(`✅ Товар «${item.name}» добавлен в каталог`);
+              };
+              
               const matched = p.items.filter(i => i.matchedProduct);
               const unmatched = p.items.filter(i => !i.matchedProduct);
               
@@ -8645,80 +8746,109 @@ function LikeBirdAppInner() {
                           ))}
                         </div>
                       )}
-                      {/* Auto-calculated shortage */}
                       <div className="mt-3 pt-2 border-t border-amber-200">
-                        <div className="flex justify-between text-sm">
-                          <span>Ожидаемый остаток:</span>
-                          <strong>{p.birdSection.expected}</strong>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span>Фактический:</span>
-                          <strong>{p.birdSection.totalNow}</strong>
-                        </div>
-                        {p.birdSection.calculatedShortage > 0 && (
-                          <div className="flex justify-between text-sm mt-1 text-red-600 font-bold">
-                            <span>⚠️ Недосдача:</span>
-                            <span>{p.birdSection.calculatedShortage} шт</span>
-                          </div>
-                        )}
-                        {p.birdSection.found > 0 && (
-                          <div className="flex justify-between text-sm text-green-600">
-                            <span>Найдено:</span><span>+{p.birdSection.found}</span>
-                          </div>
-                        )}
-                        {p.birdSection.netShortage > 0 && (
-                          <div className="flex justify-between text-sm mt-1 bg-red-100 rounded px-2 py-1 font-bold text-red-700">
-                            <span>Итоговая недосдача:</span><span>{p.birdSection.netShortage} шт</span>
-                          </div>
-                        )}
+                        <div className="flex justify-between text-sm"><span>Ожидаемый:</span><strong>{p.birdSection.expected}</strong></div>
+                        <div className="flex justify-between text-sm"><span>Фактический:</span><strong>{p.birdSection.totalNow}</strong></div>
+                        {p.birdSection.calculatedShortage > 0 && <div className="flex justify-between text-sm mt-1 text-red-600 font-bold"><span>⚠️ Недосдача:</span><span>{p.birdSection.calculatedShortage} шт</span></div>}
+                        {p.birdSection.found > 0 && <div className="flex justify-between text-sm text-green-600"><span>Найдено:</span><span>+{p.birdSection.found}</span></div>}
+                        {p.birdSection.netShortage > 0 && <div className="flex justify-between text-sm mt-1 bg-red-100 rounded px-2 py-1 font-bold text-red-700"><span>Итоговая недосдача:</span><span>{p.birdSection.netShortage} шт</span></div>}
                       </div>
                     </div>
                   )}
                   
-                  {/* Matched items */}
-                  {matched.length > 0 && (
-                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-                      <h4 className="font-bold mb-2 text-sm">✅ Распознанные товары ({matched.length})</h4>
-                      <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                        {matched.map((item, i) => {
-                          const inStock = stock[item.matchedProduct.name]?.count ?? '?';
-                          const diff = item.currentCount - inStock;
-                          return (
-                            <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm">
+                  {/* ALL items — editable */}
+                  <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                    <h4 className="font-bold mb-2 text-sm">📦 Товары ({p.items.length}) <span className="text-xs text-gray-400 font-normal">— нажмите для редактирования</span></h4>
+                    <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                      {p.items.map((item, idx) => {
+                        const isMatched = !!item.matchedProduct;
+                        const isEditing = editingItem === idx;
+                        const inStock = isMatched ? (stock[item.matchedProduct.name]?.count ?? '?') : '—';
+                        const diff = isMatched ? item.currentCount - (stock[item.matchedProduct.name]?.count || 0) : 0;
+                        const isAdding = addingProduct?.name === item.name;
+                        
+                        return (
+                          <div key={idx} className={`rounded-lg border ${isMatched ? 'bg-gray-50 border-gray-200' : 'bg-red-50 border-red-200'} overflow-hidden`}>
+                            {/* Item row */}
+                            <div className="flex items-center justify-between px-3 py-2 text-sm cursor-pointer hover:bg-gray-100" onClick={() => { if (!isEditing && !isAdding) { setEditingItem(isEditing ? null : idx); setItemSearch(''); setAddingProduct(null); } }}>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
-                                  <span className="font-medium truncate">{item.matchedProduct.emoji} {item.name}</span>
-                                  {item.name !== item.matchedProduct.name && <span className="text-[10px] text-purple-400">→ {item.matchedProduct.name}</span>}
+                                  <span className={isMatched ? '' : 'text-red-600'}>{isMatched ? item.matchedProduct.emoji : '❓'} {item.name}</span>
+                                  {isMatched && item.name.toLowerCase() !== item.matchedProduct.name.toLowerCase() && (
+                                    <span className="text-[10px] text-purple-500 bg-purple-50 px-1 rounded">→ {item.matchedProduct.name}</span>
+                                  )}
                                 </div>
                                 {item.salesCount > 0 && <span className="text-[10px] text-gray-400">Продаж: {item.salesCount}</span>}
                               </div>
-                              <div className="text-right shrink-0">
+                              <div className="text-right shrink-0 flex items-center gap-2">
                                 <span className="font-bold">{item.currentCount}</span>
-                                <span className="text-xs text-gray-400 ml-1">({inStock} в сист.)</span>
-                                {diff !== 0 && <span className={`text-xs ml-1 font-bold ${diff > 0 ? 'text-green-600' : 'text-red-500'}`}>{diff > 0 ? '+' : ''}{diff}</span>}
+                                {isMatched && <span className="text-xs text-gray-400">({inStock})</span>}
+                                {isMatched && diff !== 0 && <span className={`text-xs font-bold ${diff > 0 ? 'text-green-600' : 'text-red-500'}`}>{diff > 0 ? '+' : ''}{diff}</span>}
+                                <Edit3 className="w-3 h-3 text-gray-300" />
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Unmatched items */}
-                  {unmatched.length > 0 && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                      <h4 className="font-bold text-red-700 mb-2 text-sm">❓ Не найдено в каталоге ({unmatched.length})</h4>
-                      <div className="space-y-1">
-                        {unmatched.map((item, i) => (
-                          <div key={i} className="flex justify-between bg-white rounded-lg px-3 py-1.5 text-sm">
-                            <span>{item.name}</span>
-                            <span className="font-bold">{item.currentCount} шт</span>
+                            
+                            {/* Edit panel */}
+                            {isEditing && (
+                              <div className="border-t px-3 py-2 bg-white space-y-2">
+                                <p className="text-xs text-gray-500">Привязать «{item.name}» к товару из каталога:</p>
+                                <div className="relative">
+                                  <input type="text" value={itemSearch} onChange={e => setItemSearch(e.target.value)}
+                                    placeholder="🔍 Найти товар..." className="w-full p-2 border-2 border-purple-200 rounded-lg text-sm focus:border-purple-500 focus:outline-none" autoFocus />
+                                  {searchResults.length > 0 && (
+                                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto">
+                                      {searchResults.map(pr => (
+                                        <button key={pr.name} onClick={() => assignItem(idx, pr, true)}
+                                          className="w-full text-left px-3 py-2 hover:bg-purple-50 text-sm flex justify-between border-b last:border-0">
+                                          <span>{pr.emoji} {pr.name}</span>
+                                          <span className="text-gray-400">{pr.price}₽</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex gap-2">
+                                  {isMatched && (
+                                    <button onClick={() => {
+                                      const items = [...p.items];
+                                      items[idx] = { ...items[idx], matchedProduct: null, matchScore: 0 };
+                                      setRevParsed({ ...p, items });
+                                      setEditingItem(null);
+                                    }} className="text-xs text-red-500 bg-red-50 px-2 py-1 rounded">Отвязать</button>
+                                  )}
+                                  {!isMatched && (
+                                    <button onClick={() => { setAddingProduct(item); setEditingItem(null); }} className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded flex items-center gap-1">
+                                      <Plus className="w-3 h-3" />Создать товар
+                                    </button>
+                                  )}
+                                  <button onClick={() => { setEditingItem(null); setItemSearch(''); }} className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded ml-auto">Закрыть</button>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Add new product panel */}
+                            {isAdding && (
+                              <div className="border-t px-3 py-2 bg-green-50 space-y-2">
+                                <p className="text-xs text-green-700 font-semibold">Добавить «{item.name}» в каталог:</p>
+                                <div className="flex gap-2">
+                                  <input type="number" value={newProdPrice} onChange={e => setNewProdPrice(e.target.value)} placeholder="Цена ₽" className="w-24 p-2 border rounded-lg text-sm" />
+                                  <select value={newProdCat} onChange={e => setNewProdCat(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm">
+                                    {Object.keys(PRODUCTS).map(c => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={() => setAddingProduct(null)} className="flex-1 py-2 bg-gray-200 rounded-lg text-sm font-semibold">Отмена</button>
+                                  <button onClick={() => addNewFromRevision(item)} disabled={!newProdPrice} className="flex-1 py-2 bg-green-500 text-white rounded-lg text-sm font-bold disabled:opacity-50">
+                                    ✅ Добавить и привязать
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                      <p className="text-[10px] text-red-400 mt-2">Эти товары будут сохранены в отчёте, но не обновят склад</p>
+                        );
+                      })}
                     </div>
-                  )}
+                  </div>
                   
                   {/* Actions */}
                   <div className="flex gap-2">
