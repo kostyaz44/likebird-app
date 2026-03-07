@@ -49,9 +49,9 @@ const SyncManager = {
     'likebird-challenges', 'likebird-dark-mode', 'likebird-sync-queue', 'likebird-product-photos-data',
   ],
 
-  // Экспорт всех данных
+  // Экспорт всех данных (localStorage only — component state added by caller)
   exportAll: () => {
-    const data = { _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _syncId: SyncManager.getSyncId(), _mediaPhotos: productPhotos, _shiftPhotos: shiftPhotos, _mediaIndex: [...(mediaKeysRef.current || [])] };
+    const data = { _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _syncId: SyncManager.getSyncId() };
     SyncManager.ALL_KEYS.forEach(key => {
       try { const v = localStorage.getItem(key); if (v) data[key] = JSON.parse(v); } catch { const v = localStorage.getItem(key); if (v) data[key] = v; }
     });
@@ -372,6 +372,29 @@ const getInitialStock = () => {
 };
 
 const formatDate = (date) => typeof date === 'string' ? date : date.toLocaleDateString('ru-RU');
+
+// Mobile-compatible file download helper
+const downloadBlob = (blob, filename) => {
+  try {
+    const url = URL.createObjectURL(blob);
+    // Method 1: Standard download via <a> click
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try { document.body.removeChild(a); } catch {} URL.revokeObjectURL(url); }, 1000);
+  } catch (err) {
+    // Method 2: Fallback — open in new tab
+    try {
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch { /* final fallback - do nothing */ }
+  }
+};
+const dateForFile = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
 
 // ИСПРАВЛЕНИЕ: Безопасный парсинг года (поддержка и 2-х и 4-х значных форматов)
 const logErr = (ctx, e) => { try { console.warn('[LikeBird]', ctx, e?.message || e); } catch { /* silent */ } };
@@ -2626,34 +2649,44 @@ function LikeBirdAppInner() {
   
   const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0,0,0,0); const sales = {}; reports.filter(r => { const [d, m, y] = (r.date||'').split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
 
+  // Helper: enrich backup with component-level media data
+  const enrichBackup = (data) => ({
+    ...data,
+    _mediaPhotos: productPhotos,
+    _shiftPhotos: shiftPhotos,
+    _mediaIndex: [...(mediaKeysRef.current || [])],
+  });
+
   const exportData = async () => {
-    showNotification('⏳ Получаем актуальные данные из Firebase...');
+    const fname = `likebird-backup-${dateForFile()}.json`;
+    
+    // Быстрый локальный бэкап — готовим сразу как fallback
+    let localBackup;
+    try { localBackup = enrichBackup(SyncManager.exportAll()); } catch { localBackup = { _version: 2, _error: 'exportAll failed', _date: new Date().toISOString() }; }
+    
+    showNotification('⏳ Получаем данные...');
     try {
-      // Тянем свежие данные из Firebase для всех ключей
       const fbData = {};
       const keys = [...SyncManager.ALL_KEYS];
+      const fetchWithTimeout = (key) => new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), 5000);
+        try { fbGet(key).then(val => { clearTimeout(timer); resolve(val); }).catch(() => { clearTimeout(timer); resolve(null); }); } catch { clearTimeout(timer); resolve(null); }
+      });
       await Promise.all(keys.map(async (key) => {
-        try {
-          const val = await fbGet(key);
-          if (val !== null && val !== undefined) fbData[key] = val;
-        } catch { /* silent */ }
+        const val = await fetchWithTimeout(key);
+        if (val !== null && val !== undefined) fbData[key] = val;
       }));
-      // Мержим: Firebase приоритетнее localStorage
-      const localData = SyncManager.exportAll();
-      const merged = { ...localData, ...fbData, _version: 2, _appVersion: APP_VERSION, _exportDate: new Date().toISOString(), _source: 'firebase+local' };
-      const blob = new Blob([JSON.stringify(merged, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `likebird-backup-${formatDate(new Date())}.json`; a.click();
-      URL.revokeObjectURL(url);
-      showNotification('✅ Полный бэкап из Firebase сохранён');
+      const fbKeyCount = Object.keys(fbData).length;
+      const finalData = fbKeyCount > 0 ? enrichBackup({ ...localBackup, ...fbData, _source: 'firebase+local' }) : localBackup;
+      downloadBlob(new Blob([JSON.stringify(finalData)], { type: 'application/json' }), fname);
+      showNotification(fbKeyCount > 0 ? `✅ Бэкап сохранён (Firebase: ${fbKeyCount})` : '✅ Бэкап сохранён');
     } catch (err) {
-      // Fallback на localStorage
-      const data = SyncManager.exportAll();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `likebird-backup-${formatDate(new Date())}.json`; a.click();
-      URL.revokeObjectURL(url);
-      showNotification('⚠️ Бэкап из локального хранилища (Firebase недоступен)');
+      try {
+        downloadBlob(new Blob([JSON.stringify(localBackup)], { type: 'application/json' }), fname);
+        showNotification('✅ Бэкап сохранён (локально)');
+      } catch (e2) {
+        showNotification('❌ Ошибка: ' + (e2.message || 'неизвестная'), 'error');
+      }
     }
   };
 
@@ -4375,31 +4408,21 @@ function LikeBirdAppInner() {
           <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-green-500" />Экспорт данных</h3>
           <p className="text-sm text-gray-500 mb-3">Полный бэкап всех данных приложения</p>
           <button onClick={exportData} className="w-full py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 mb-2">📥 Скачать полный бэкап</button>
+          <button onClick={() => { try { downloadBlob(new Blob([JSON.stringify(enrichBackup(SyncManager.exportAll()))], { type: 'application/json' }), `likebird-backup-${dateForFile()}.json`); showNotification('✅ Бэкап сохранён'); } catch (e) { showNotification('❌ ' + e.message, 'error'); } }} className="w-full py-2 bg-gray-100 text-gray-600 rounded-lg text-sm mb-2 hover:bg-gray-200">📦 Быстрый бэкап (без ожидания Firebase)</button>
           <button onClick={() => {
             const BOM = '\uFEFF';
-            // Reports CSV
-            const exportReports = filterEmployee ? reports.filter(r => r.employee === filterEmployee) : reports;
             const reportHeaders = 'Дата;Сотрудник;Товар;Категория;Количество;Цена;Сумма;Чаевые;ЗП;Тип оплаты';
-            const reportRows = exportReports.map(r => [
+            const reportRows = reports.map(r => [
               r.date?.split(',')[0] || '', r.employee || '', getProductName(r.product), r.category || '',
               r.quantity || 1, r.salePrice || 0, r.total || 0, r.tips || 0,
               getEffectiveSalary(r), r.paymentType === 'cashless' ? 'Безнал' : 'Наличные'
             ].join(';'));
-          const reportsCSV = BOM + reportHeaders + '\n' + reportRows.join('\n');
-            const blob1 = new Blob(['\uFEFF' + reportsCSV], { type: 'text/csv;charset=utf-8' });
-            const url1 = URL.createObjectURL(blob1);
-            const a1 = document.createElement('a'); a1.href = url1; a1.download = `reports-${formatDate(new Date())}.csv` // Разделитель ; для Excel, для Google Sheets откройте и выберите ';'; a1.click();
-            URL.revokeObjectURL(url1);
-            // Stock CSV
+            downloadBlob(new Blob([BOM + reportHeaders + '\n' + reportRows.join('\n')], { type: 'text/csv;charset=utf-8' }), `reports-${dateForFile()}.csv`);
             const stockHeaders = 'Товар;Категория;Количество;Мин. остаток;Цена';
             const stockRows = Object.entries(stock).map(([name, data]) => [
               name, data.category || '', data.count || 0, data.minStock || 3, data.price || 0
             ].join(';'));
-            const stockCSV = BOM + stockHeaders + '\n' + stockRows.join('\n');
-            const blob2 = new Blob(['\uFEFF' + stockCSV], { type: 'text/csv;charset=utf-8' });
-            const url2 = URL.createObjectURL(blob2);
-            const a2 = document.createElement('a'); a2.href = url2; a2.download = `stock-${formatDate(new Date())}.csv`; a2.click();
-            URL.revokeObjectURL(url2);
+            downloadBlob(new Blob([BOM + stockHeaders + '\n' + stockRows.join('\n')], { type: 'text/csv;charset=utf-8' }), `stock-${dateForFile()}.csv`);
             showNotification('📊 CSV файлы скачаны');
           }} className="w-full py-3 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600">📊 Экспорт CSV (отчёты + остатки)</button>
         </div>
@@ -6825,6 +6848,7 @@ function LikeBirdAppInner() {
       { id: 'schedule', label: '📅 График', icon: Calendar },
       { id: 'chat', label: '💬 Чат', icon: MessageCircle },
       { id: 'settings', label: '⚙️ Настройки', icon: Settings },
+      { id: 'notifications', label: '🔔 Уведомления', icon: Bell },
       { id: 'security', label: '🔐 Доступ', icon: Lock },
       { id: 'manuals', label: '📚 Мануалы', icon: FileText },
       { id: 'achievements-admin', label: '🏅 Достижения', icon: Award },
@@ -8245,77 +8269,541 @@ function LikeBirdAppInner() {
           )}
 
           {/* ВКЛАДКА: Ревизия */}
-          {adminTab === 'stock' && (
-            <div className="space-y-4">
-              {/* Общая информация */}
-              <div className="bg-gradient-to-r from-amber-100 to-orange-100 rounded-xl p-4 border-2 border-amber-300">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="font-bold text-amber-700">🐦 Всего птичек-свистулек</p>
-                    <p className="text-xs text-amber-600">По ревизии / В системе</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold text-amber-700">
-                      {totalBirds > 0 ? totalBirds : '—'} 
-                      <span className="text-lg text-amber-500"> / {Object.entries(stock).filter(([_, data]) => data.category === 'Птички-свистульки').reduce((sum, [_, data]) => sum + data.count, 0)}</span>
-                    </p>
+          {adminTab === 'stock' && (() => {
+            const [revMode, setRevMode] = useState('overview'); // overview | input | preview | history
+            const [revText, setRevText] = useState('');
+            const [revParsed, setRevParsed] = useState(null);
+            const [revHistory, setRevHistory] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-revision-history') || '[]'); } catch { return []; } });
+            const [viewingRev, setViewingRev] = useState(null);
+            
+            // Parse warehouse revision text
+            const parseWarehouseRevision = (text) => {
+              const lines = text.split('\n');
+              let period = '';
+              let category = '';
+              let currentItem = null;
+              const items = []; // { name, startCount, currentCount, sales: [], arrivals: [], writeoffs: [], salesCount }
+              let birdSection = null; // { totalNow, startCount, arrivals: [], sales, writeoffs: [], shortage }
+              
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                const lower = line.toLowerCase();
+                
+                // Period
+                if (/^период/i.test(line)) { period = line.replace(/^период:\s*/i, ''); continue; }
+                
+                // Category header
+                if (/^вид товар/i.test(line)) {
+                  const catMatch = line.match(/:\s*(.+)/);
+                  if (catMatch) category = catMatch[1].trim();
+                  continue;
+                }
+                
+                // Bird section
+                if (/^вид товар.*птиц/i.test(line) || (category && /птиц/i.test(category))) {
+                  if (!birdSection) birdSection = { totalNow: 0, startCount: 0, arrivals: [], salesCount: 0, writeoffs: [], shortage: 0, found: 0 };
+                }
+                
+                // "На данный момент: N" — current count
+                const currentMatch = line.match(/на данный момент:\s*(\d+)/i);
+                if (currentMatch) {
+                  const count = parseInt(currentMatch[1], 10);
+                  if (birdSection && !currentItem) { birdSection.totalNow = count; }
+                  else if (currentItem) { currentItem.currentCount = count; }
+                  continue;
+                }
+                
+                // "Количество продаж: N"
+                const salesCountMatch = line.match(/количество продаж:\s*(\d+)/i);
+                if (salesCountMatch) {
+                  const cnt = parseInt(salesCountMatch[1], 10);
+                  if (birdSection && !currentItem) birdSection.salesCount = cnt;
+                  else if (currentItem) currentItem.salesCount = cnt;
+                  continue;
+                }
+                
+                // Date with start count: "15.01: 22" or "15.01: 8, 1 свет"
+                const dateCountMatch = line.match(/^(\d{1,2}\.\d{1,2}(?:\.\d{2,4})?)\s*:\s*(.+)/);
+                if (dateCountMatch && currentItem) {
+                  const val = dateCountMatch[2].trim();
+                  const numMatch = val.match(/^\+?\s*(\d+)/);
+                  if (numMatch) {
+                    if (val.startsWith('+')) {
+                      currentItem.arrivals.push({ date: dateCountMatch[1], count: parseInt(numMatch[1], 10), note: val });
+                    } else if (!currentItem.startDate) {
+                      currentItem.startCount = parseInt(numMatch[1], 10);
+                      currentItem.startDate = dateCountMatch[1];
+                      currentItem.extra = val.replace(/^\d+/, '').trim();
+                    }
+                  }
+                  continue;
+                }
+                
+                // Bird section date lines
+                if (dateCountMatch && birdSection && !currentItem) {
+                  const val = dateCountMatch[2].trim();
+                  const numMatch = val.match(/^\+?\s*(\d+)/);
+                  if (numMatch) {
+                    if (val.startsWith('+')) birdSection.arrivals.push({ date: dateCountMatch[1], count: parseInt(numMatch[1], 10), note: val });
+                    else if (!birdSection.startDate) { birdSection.startCount = parseInt(numMatch[1], 10); birdSection.startDate = dateCountMatch[1]; }
+                  }
+                  continue;
+                }
+                
+                // Sale line: "1 Алиса 14.02"
+                const saleMatch = line.match(/^(\d+)\s+([А-Яа-яЁёA-Za-z]+)\s+(\d{1,2}\.\d{1,2})/);
+                if (saleMatch) {
+                  const sale = { qty: parseInt(saleMatch[1], 10), employee: saleMatch[2], date: saleMatch[3] };
+                  if (currentItem) currentItem.sales.push(sale);
+                  continue;
+                }
+                
+                // Write-off lines: "Брак/разбиты: 8" or "Отдали Антону: 65"
+                const writeoffMatch = line.match(/^(.+?):\s*(\d+)\s*(.*?)(?:\[.*\])?$/);
+                if (writeoffMatch && birdSection && !currentItem) {
+                  const reason = writeoffMatch[1].trim();
+                  const cnt = parseInt(writeoffMatch[2], 10);
+                  if (/брак|разб|списан|отдал|подарок|забрал|зп|недосдач|найден/i.test(reason)) {
+                    birdSection.writeoffs.push({ reason, count: cnt, note: writeoffMatch[3]?.trim() || '' });
+                    continue;
+                  }
+                }
+                
+                // Shortage lines
+                const shortageMatch = line.match(/(\d+)\s*недосдач/i);
+                if (shortageMatch && birdSection) { birdSection.shortage = parseInt(shortageMatch[1], 10); continue; }
+                const foundMatch = line.match(/найден.*?:\s*(\d+)/i);
+                if (foundMatch && birdSection) { birdSection.found = parseInt(foundMatch[1], 10); continue; }
+                
+                // New item header (product name, possibly with ✅)
+                const itemLine = line.replace(/✅|✔️|☑️/g, '').trim();
+                if (itemLine.length > 1 && !/^[\d(]/.test(itemLine) && !/количество|на данный|период|вид товар|мелкие|итого/i.test(itemLine) && !saleMatch) {
+                  // Check if next lines have "На данный момент" — confirms it's an item
+                  let isItem = false;
+                  for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+                    if (/на данный момент|количество продаж|\d{1,2}\.\d{1,2}.*:\s*\d/i.test(lines[j])) { isItem = true; break; }
+                  }
+                  if (isItem || (/новые|лежали|штук/i.test(lines[i + 1] || ''))) {
+                    if (currentItem) items.push(currentItem);
+                    currentItem = { name: itemLine, startCount: 0, currentCount: 0, sales: [], arrivals: [], writeoffs: [], salesCount: 0, startDate: '', extra: '' };
+                    continue;
+                  }
+                }
+                
+                // Handle "(Лежали с декабря, 10.12 3 шт)" or "Новые 8 штук 01.03"
+                const specialMatch = line.match(/(\d+)\s*(?:шт|штук)/i);
+                if (specialMatch && currentItem && currentItem.currentCount === 0) {
+                  currentItem.currentCount = parseInt(specialMatch[1], 10);
+                  if (!currentItem.startCount) currentItem.startCount = currentItem.currentCount;
+                }
+              }
+              if (currentItem) items.push(currentItem);
+              
+              // Match items to catalog products
+              items.forEach(item => {
+                const nameLow = item.name.toLowerCase();
+                let bestMatch = null;
+                let bestScore = 0;
+                DYNAMIC_ALL_PRODUCTS.forEach(p => {
+                  const pLow = p.name.toLowerCase();
+                  // Exact match
+                  if (pLow === nameLow) { bestMatch = p; bestScore = 100; return; }
+                  // Alias match
+                  for (const alias of (p.aliases || [])) {
+                    if (nameLow.includes(alias) || alias.includes(nameLow)) {
+                      const score = Math.min(alias.length, nameLow.length) / Math.max(alias.length, nameLow.length) * 80;
+                      if (score > bestScore) { bestMatch = p; bestScore = score; }
+                    }
+                  }
+                  // Partial match
+                  if (pLow.includes(nameLow) || nameLow.includes(pLow)) {
+                    const score = Math.min(pLow.length, nameLow.length) / Math.max(pLow.length, nameLow.length) * 60;
+                    if (score > bestScore) { bestMatch = p; bestScore = score; }
+                  }
+                });
+                item.matchedProduct = bestMatch;
+                item.matchScore = bestScore;
+              });
+              
+              // Auto-calculate bird shortage
+              if (birdSection) {
+                const totalArrivals = birdSection.arrivals.reduce((s, a) => s + a.count, 0);
+                const totalWriteoffs = birdSection.writeoffs.reduce((s, w) => s + w.count, 0);
+                const expected = birdSection.startCount + totalArrivals - birdSection.salesCount - totalWriteoffs;
+                birdSection.expected = expected;
+                birdSection.calculatedShortage = expected - birdSection.totalNow;
+                birdSection.netShortage = birdSection.calculatedShortage - (birdSection.found || 0);
+              }
+              
+              return { period, category, items, birdSection };
+            };
+            
+            // Apply revision: update stock + write-offs + save doc
+            const applyRevision = (parsed) => {
+              const newStock = { ...stock };
+              let updatedCount = 0;
+              let createdWriteoffs = 0;
+              
+              // Update item counts
+              parsed.items.forEach(item => {
+                if (!item.matchedProduct) return;
+                const pName = item.matchedProduct.name;
+                if (newStock[pName]) {
+                  const oldCount = newStock[pName].count;
+                  newStock[pName] = { ...newStock[pName], count: item.currentCount };
+                  if (oldCount !== item.currentCount) {
+                    addStockHistoryEntry(pName, 'revision', item.currentCount - oldCount, `Ревизия: ${oldCount} → ${item.currentCount}`);
+                    updatedCount++;
+                  }
+                }
+                // Create write-offs for discrepancies
+                if (item.startCount > 0 && item.salesCount >= 0) {
+                  const expected = item.startCount + item.arrivals.reduce((s, a) => s + a.count, 0) - item.salesCount;
+                  const diff = expected - item.currentCount;
+                  if (diff > 0) {
+                    addWriteOff(item.matchedProduct.name, diff, `Ревизия: недосдача (ожидалось ${expected}, факт ${item.currentCount})`);
+                    createdWriteoffs++;
+                  }
+                }
+              });
+              
+              // Bird section write-offs
+              if (parsed.birdSection) {
+                parsed.birdSection.writeoffs.forEach(wo => {
+                  const reason = `${wo.reason}: ${wo.count} шт${wo.note ? ' ' + wo.note : ''}`;
+                  // Generic bird write-off
+                  addWriteOff('Попугай', wo.count, reason);
+                  createdWriteoffs++;
+                });
+              }
+              
+              updateStock(newStock);
+              
+              // Save revision as document
+              const doc = {
+                id: Date.now() + '_rev',
+                date: new Date().toISOString(),
+                period: parsed.period,
+                category: parsed.category,
+                itemCount: parsed.items.length,
+                birdSection: parsed.birdSection,
+                items: parsed.items.map(i => ({ name: i.name, matched: i.matchedProduct?.name, current: i.currentCount, start: i.startCount, sales: i.salesCount })),
+                rawText: revText,
+                appliedBy: employeeName,
+                updatedCount,
+                createdWriteoffs
+              };
+              const hist = [doc, ...revHistory].slice(0, 50);
+              setRevHistory(hist);
+              try { localStorage.setItem('likebird-revision-history', JSON.stringify(hist)); } catch {}
+              save('likebird-revision-history', hist);
+              
+              logAction('Ревизия склада', `${parsed.items.length} позиций, ${updatedCount} обновлено, ${createdWriteoffs} списаний`);
+              showNotification(`✅ Ревизия применена: ${updatedCount} обновлено, ${createdWriteoffs} списаний`);
+              setRevMode('overview');
+              setRevText('');
+              setRevParsed(null);
+            };
+            
+            // OVERVIEW MODE
+            if (revMode === 'overview') return (
+              <div className="space-y-4">
+                {/* Summary card */}
+                <div className="bg-gradient-to-r from-amber-100 to-orange-100 rounded-xl p-4 border-2 border-amber-300">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="font-bold text-amber-700">🐦 Всего птичек-свистулек</p>
+                      <p className="text-xs text-amber-600">По ревизии / В системе</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-bold text-amber-700">
+                        {totalBirds > 0 ? totalBirds : '—'} 
+                        <span className="text-lg text-amber-500"> / {Object.entries(stock).filter(([_, d]) => d.category === 'Птички-свистульки').reduce((s, [_, d]) => s + d.count, 0)}</span>
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-
-              {/* Низкие остатки */}
-              {getLowStockItems().length > 0 && (
-                <div className="bg-orange-50 border border-orange-300 rounded-xl p-4">
-                  <h3 className="font-bold text-orange-700 mb-3 flex items-center gap-2">
-                    <Bell className="w-5 h-5" />Требуется дозаказ ({getLowStockItems().length})
-                  </h3>
-                  <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {getLowStockItems().map(item => (
-                      <div key={item.name} className="flex justify-between items-center p-2 bg-white rounded-lg text-sm">
-                        <span>{item.emoji} {item.name}</span>
-                        <span className="font-bold text-orange-600">{item.count} шт (мин: {item.minStock})</span>
-                      </div>
-                    ))}
+                
+                {/* Low stock alert */}
+                {getLowStockItems().length > 0 && (
+                  <div className="bg-orange-50 border border-orange-300 rounded-xl p-4">
+                    <h3 className="font-bold text-orange-700 mb-2 flex items-center gap-2"><Bell className="w-4 h-4" />Дозаказ ({getLowStockItems().length})</h3>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {getLowStockItems().map(item => (
+                        <div key={item.name} className="flex justify-between items-center p-1.5 bg-white rounded text-sm">
+                          <span>{item.emoji} {item.name}</span>
+                          <span className="font-bold text-orange-600">{item.count} шт</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Quick bird input */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-2">🐦 Птицы по ревизии</h3>
+                  <div className="flex gap-2">
+                    <input type="number" value={totalBirds || ''} onChange={(e) => { const v = parseInt(e.target.value) || 0; setTotalBirds(v); save('likebird-totalbirds', v); }} placeholder="Кол-во" className="flex-1 p-3 border rounded-lg" />
+                    <button onClick={() => showNotification('✅ Сохранено')} className="bg-amber-500 text-white px-4 rounded-lg hover:bg-amber-600">💾</button>
                   </div>
                 </div>
-              )}
-
-              {/* Переход к полной ревизии */}
-              <button onClick={() => setCurrentView('stock')} className="w-full bg-amber-500 text-white py-4 rounded-xl font-bold hover:bg-amber-600 flex items-center justify-center gap-2">
-                <Package className="w-6 h-6" />Открыть полную ревизию
-              </button>
-
-              {/* Статистика по категориям */}
-              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-                <h3 className="font-bold mb-3 flex items-center gap-2">📊 Остатки по категориям</h3>
-                <div className="space-y-2">
+                
+                {/* Categories summary */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3">📊 Остатки по категориям</h3>
                   {Object.keys(PRODUCTS).map(cat => {
-                    const catItems = Object.entries(stock).filter(([_, data]) => data.category === cat);
-                    const total = catItems.reduce((sum, [_, data]) => sum + data.count, 0);
-                    const lowCount = catItems.filter(([_, data]) => data.count <= data.minStock).length;
+                    const catItems = Object.entries(stock).filter(([_, d]) => d.category === cat);
+                    const total = catItems.reduce((s, [_, d]) => s + d.count, 0);
+                    const low = catItems.filter(([_, d]) => d.count <= d.minStock && d.count > 0).length;
                     return (
-                      <div key={cat} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <span className="font-medium">{CAT_ICONS[cat]} {cat}</span>
+                      <div key={cat} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg mb-1.5">
+                        <span className="font-medium text-sm">{CAT_ICONS[cat]} {cat}</span>
                         <div className="text-right">
                           <span className="font-bold">{total} шт</span>
-                          {lowCount > 0 && <span className="text-orange-500 text-xs ml-2">({lowCount} мало)</span>}
+                          {low > 0 && <span className="text-orange-500 text-xs ml-1">({low} ⚠️)</span>}
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              </div>
-
-              {/* Быстрый ввод птичек */}
-              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-                <h3 className="font-bold mb-3">🐦 Быстрый ввод птичек по ревизии</h3>
+                
+                {/* Main buttons */}
+                <button onClick={() => setRevMode('input')} className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 text-lg shadow-lg">
+                  📝 Вставить текст ревизии
+                </button>
                 <div className="flex gap-2">
-                  <input type="number" value={totalBirds || ''} onChange={(e) => { setTotalBirds(parseInt(e.target.value) || 0); save('likebird-totalbirds', parseInt(e.target.value) || 0); }} placeholder="Количество" className="flex-1 p-3 border rounded-lg" />
-                  <button onClick={() => showNotification('Сохранено')} className="bg-amber-500 text-white px-4 rounded-lg hover:bg-amber-600">Сохранить</button>
+                  <button onClick={() => setCurrentView('stock')} className="flex-1 bg-amber-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+                    <Package className="w-5 h-5" />Склад (позиции)
+                  </button>
+                  <button onClick={() => setRevMode('history')} className="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+                    📜 История ({revHistory.length})
+                  </button>
                 </div>
               </div>
-            </div>
-          )}
+            );
+            
+            // INPUT MODE
+            if (revMode === 'input') return (
+              <div className="space-y-3">
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+                  <h3 className="font-bold text-purple-700 mb-1">📝 Вставьте текст ревизии</h3>
+                  <p className="text-xs text-purple-500">Формат: «Название✅ / дата: кол-во / На данный момент: N / Количество продаж: N»</p>
+                </div>
+                <textarea value={revText} onChange={e => setRevText(e.target.value)}
+                  placeholder={"Период: Отчет с 15.02 по 01.03\nВид товаров: 3D:\n\nЛабубы✅\n15.02: 7\nНа данный момент: 7\nКоличество продаж: 0\n\nХомяки✅\n15.01: 22\nНа данный момент: 21\nКоличество продаж: 1\n1 Алиса 31.01"}
+                  className="w-full h-64 p-3 border-2 border-gray-200 rounded-xl text-sm font-mono focus:border-purple-500 focus:outline-none resize-none" autoFocus />
+                <div className="flex gap-2">
+                  <button onClick={() => { setRevMode('overview'); setRevText(''); }} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
+                  <button onClick={() => {
+                    if (!revText.trim()) { showNotification('Вставьте текст', 'error'); return; }
+                    const parsed = parseWarehouseRevision(revText);
+                    if (parsed.items.length === 0 && !parsed.birdSection) { showNotification('Не удалось распознать товары', 'error'); return; }
+                    setRevParsed(parsed);
+                    setRevMode('preview');
+                  }} disabled={!revText.trim()} className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
+                    🔍 Распознать
+                  </button>
+                </div>
+              </div>
+            );
+            
+            // PREVIEW MODE
+            if (revMode === 'preview' && revParsed) {
+              const p = revParsed;
+              const matched = p.items.filter(i => i.matchedProduct);
+              const unmatched = p.items.filter(i => !i.matchedProduct);
+              
+              return (
+                <div className="space-y-3">
+                  {/* Header */}
+                  <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-2xl p-4">
+                    <h3 className="font-bold text-lg">📋 Результат распознавания</h3>
+                    {p.period && <p className="text-white/70 text-sm mt-1">{p.period}</p>}
+                    <div className="flex gap-4 mt-2 text-sm">
+                      <span className="bg-white/20 px-2 py-0.5 rounded">✅ {matched.length} распознано</span>
+                      {unmatched.length > 0 && <span className="bg-red-400/30 px-2 py-0.5 rounded">❓ {unmatched.length} не найдено</span>}
+                    </div>
+                  </div>
+                  
+                  {/* Bird section */}
+                  {p.birdSection && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                      <h4 className="font-bold text-amber-700 mb-2">🐦 Птицы (сводка)</h4>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div className="bg-white rounded-lg p-2"><span className="text-gray-500">Начало:</span> <strong>{p.birdSection.startCount}</strong></div>
+                        {p.birdSection.arrivals.map((a, i) => (
+                          <div key={i} className="bg-green-50 rounded-lg p-2"><span className="text-green-600">+ {a.count}</span> <span className="text-xs text-gray-400">({a.date})</span></div>
+                        ))}
+                        <div className="bg-white rounded-lg p-2"><span className="text-gray-500">Продано:</span> <strong className="text-red-500">−{p.birdSection.salesCount}</strong></div>
+                        <div className="bg-blue-50 rounded-lg p-2"><span className="text-gray-500">Сейчас:</span> <strong>{p.birdSection.totalNow}</strong></div>
+                      </div>
+                      {p.birdSection.writeoffs.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {p.birdSection.writeoffs.map((w, i) => (
+                            <div key={i} className="text-xs bg-red-50 rounded px-2 py-1">📌 {w.reason}: <strong>−{w.count}</strong></div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Auto-calculated shortage */}
+                      <div className="mt-3 pt-2 border-t border-amber-200">
+                        <div className="flex justify-between text-sm">
+                          <span>Ожидаемый остаток:</span>
+                          <strong>{p.birdSection.expected}</strong>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span>Фактический:</span>
+                          <strong>{p.birdSection.totalNow}</strong>
+                        </div>
+                        {p.birdSection.calculatedShortage > 0 && (
+                          <div className="flex justify-between text-sm mt-1 text-red-600 font-bold">
+                            <span>⚠️ Недосдача:</span>
+                            <span>{p.birdSection.calculatedShortage} шт</span>
+                          </div>
+                        )}
+                        {p.birdSection.found > 0 && (
+                          <div className="flex justify-between text-sm text-green-600">
+                            <span>Найдено:</span><span>+{p.birdSection.found}</span>
+                          </div>
+                        )}
+                        {p.birdSection.netShortage > 0 && (
+                          <div className="flex justify-between text-sm mt-1 bg-red-100 rounded px-2 py-1 font-bold text-red-700">
+                            <span>Итоговая недосдача:</span><span>{p.birdSection.netShortage} шт</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Matched items */}
+                  {matched.length > 0 && (
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                      <h4 className="font-bold mb-2 text-sm">✅ Распознанные товары ({matched.length})</h4>
+                      <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                        {matched.map((item, i) => {
+                          const inStock = stock[item.matchedProduct.name]?.count ?? '?';
+                          const diff = item.currentCount - inStock;
+                          return (
+                            <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1">
+                                  <span className="font-medium truncate">{item.matchedProduct.emoji} {item.name}</span>
+                                  {item.name !== item.matchedProduct.name && <span className="text-[10px] text-purple-400">→ {item.matchedProduct.name}</span>}
+                                </div>
+                                {item.salesCount > 0 && <span className="text-[10px] text-gray-400">Продаж: {item.salesCount}</span>}
+                              </div>
+                              <div className="text-right shrink-0">
+                                <span className="font-bold">{item.currentCount}</span>
+                                <span className="text-xs text-gray-400 ml-1">({inStock} в сист.)</span>
+                                {diff !== 0 && <span className={`text-xs ml-1 font-bold ${diff > 0 ? 'text-green-600' : 'text-red-500'}`}>{diff > 0 ? '+' : ''}{diff}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Unmatched items */}
+                  {unmatched.length > 0 && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                      <h4 className="font-bold text-red-700 mb-2 text-sm">❓ Не найдено в каталоге ({unmatched.length})</h4>
+                      <div className="space-y-1">
+                        {unmatched.map((item, i) => (
+                          <div key={i} className="flex justify-between bg-white rounded-lg px-3 py-1.5 text-sm">
+                            <span>{item.name}</span>
+                            <span className="font-bold">{item.currentCount} шт</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-red-400 mt-2">Эти товары будут сохранены в отчёте, но не обновят склад</p>
+                    </div>
+                  )}
+                  
+                  {/* Actions */}
+                  <div className="flex gap-2">
+                    <button onClick={() => setRevMode('input')} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">✏️ Назад</button>
+                    <button onClick={() => applyRevision(p)} className="flex-1 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-bold">
+                      ✅ Применить ({matched.length} поз.)
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            
+            // HISTORY MODE
+            if (revMode === 'history') {
+              if (viewingRev) {
+                return (
+                  <div className="space-y-3">
+                    <button onClick={() => setViewingRev(null)} className="text-purple-600 text-sm font-semibold flex items-center gap-1">
+                      <ArrowLeft className="w-4 h-4" /> Назад к списку
+                    </button>
+                    <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                      <h3 className="font-bold mb-1">📋 Ревизия от {new Date(viewingRev.date).toLocaleDateString('ru-RU')}</h3>
+                      {viewingRev.period && <p className="text-sm text-gray-500 mb-2">{viewingRev.period}</p>}
+                      <div className="grid grid-cols-3 gap-2 text-center text-sm mb-3">
+                        <div className="bg-purple-50 rounded-lg p-2"><p className="font-bold text-purple-700">{viewingRev.itemCount}</p><p className="text-[10px] text-gray-500">Позиций</p></div>
+                        <div className="bg-green-50 rounded-lg p-2"><p className="font-bold text-green-700">{viewingRev.updatedCount}</p><p className="text-[10px] text-gray-500">Обновлено</p></div>
+                        <div className="bg-red-50 rounded-lg p-2"><p className="font-bold text-red-700">{viewingRev.createdWriteoffs}</p><p className="text-[10px] text-gray-500">Списаний</p></div>
+                      </div>
+                      <p className="text-xs text-gray-400 mb-2">Применил: {viewingRev.appliedBy}</p>
+                      {viewingRev.items?.map((item, i) => (
+                        <div key={i} className="flex justify-between text-sm py-1 border-b border-gray-100">
+                          <span>{item.matched ? '✅' : '❓'} {item.name}{item.matched && item.matched !== item.name ? ` → ${item.matched}` : ''}</span>
+                          <span className="font-bold">{item.current} шт</span>
+                        </div>
+                      ))}
+                      {viewingRev.birdSection && (
+                        <div className="mt-3 bg-amber-50 rounded-lg p-3">
+                          <p className="font-bold text-sm text-amber-700">🐦 Птицы: {viewingRev.birdSection.totalNow} шт</p>
+                          {viewingRev.birdSection.netShortage > 0 && <p className="text-sm text-red-600">Недосдача: {viewingRev.birdSection.netShortage}</p>}
+                        </div>
+                      )}
+                    </div>
+                    {viewingRev.rawText && (
+                      <details className="group">
+                        <summary className="cursor-pointer text-sm text-gray-500 font-semibold">📄 Исходный текст</summary>
+                        <pre className="mt-2 bg-gray-50 rounded-lg p-3 text-xs whitespace-pre-wrap max-h-60 overflow-y-auto">{viewingRev.rawText}</pre>
+                      </details>
+                    )}
+                  </div>
+                );
+              }
+              
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button onClick={() => setRevMode('overview')} className="text-purple-600 text-sm font-semibold flex items-center gap-1">
+                      <ArrowLeft className="w-4 h-4" /> Назад
+                    </button>
+                    <h3 className="font-bold">📜 История ревизий</h3>
+                  </div>
+                  {revHistory.length === 0 ? (
+                    <div className="text-center py-8 text-gray-400">
+                      <p className="text-4xl mb-2">📋</p>
+                      <p>Ревизий ещё не было</p>
+                    </div>
+                  ) : revHistory.map(rev => (
+                    <button key={rev.id} onClick={() => setViewingRev(rev)} className={`w-full text-left rounded-xl p-3 shadow ${darkMode ? "bg-gray-800" : "bg-white"} hover:shadow-md`}>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="font-bold text-sm">{new Date(rev.date).toLocaleDateString('ru-RU')}</p>
+                          {rev.period && <p className="text-xs text-gray-400">{rev.period}</p>}
+                        </div>
+                        <div className="text-right text-xs">
+                          <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded">{rev.itemCount} поз.</span>
+                          <p className="text-gray-400 mt-0.5">{rev.appliedBy}</p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              );
+            }
+            
+            return null;
+          })()}
 
           {/* ВКЛАДКА: Склад+ (история, списания, автозаказ) */}
           {adminTab === 'stockplus' && (
@@ -8818,20 +9306,24 @@ function LikeBirdAppInner() {
               <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2"><Download className="w-5 h-5 text-purple-600" />Резервное копирование</h3>
                 <div className="space-y-2">
-                  <button onClick={() => {
-                    const data = SyncManager.exportAll();
-                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `likebird-backup-${formatDate(new Date()).replace(/\./g, '-')}.json`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    logAction('Создана резервная копия', '');
-                    showNotification('Резервная копия создана');
-                  }} className="w-full bg-green-500 text-white py-2 rounded hover:bg-green-600 flex items-center justify-center gap-2">
-                    <Download className="w-4 h-4" />Скачать резервную копию
+                  <button onClick={() => { exportData(); logAction('Создана резервная копия', ''); }} className="w-full bg-green-500 text-white py-2.5 rounded-lg hover:bg-green-600 flex items-center justify-center gap-2 font-semibold">
+                    <Download className="w-4 h-4" />Скачать полный бэкап (Firebase + local)
                   </button>
+                  <button onClick={() => {
+                    try {
+                      const data = enrichBackup(SyncManager.exportAll());
+                      downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `likebird-backup-local-${dateForFile()}.json`);
+                      logAction('Бэкап localStorage', '');
+                      showNotification('✅ Локальный бэкап сохранён');
+                    } catch (err) { showNotification('❌ Ошибка: ' + err.message, 'error'); }
+                  }} className="w-full bg-gray-100 text-gray-700 py-2 rounded-lg hover:bg-gray-200 flex items-center justify-center gap-2 text-sm">
+                    <Download className="w-4 h-4" />Только localStorage (быстрый)
+                  </button>
+                  <label className="w-full py-2.5 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 flex items-center justify-center gap-2 cursor-pointer">
+                    <Upload className="w-4 h-4" />Восстановить из бэкапа (JSON)
+                    <input type="file" accept=".json" onChange={(e) => { if (e.target.files[0]) { importData(e.target.files[0]); logAction('Восстановление из бэкапа', ''); } }} className="hidden" />
+                  </label>
+                  <p className="text-xs text-gray-400 text-center">После восстановления страница перезагрузится</p>
                 </div>
               </div>
 
@@ -8855,6 +9347,163 @@ function LikeBirdAppInner() {
               )}
             </div>
           )}
+
+          {/* ВКЛАДКА: Уведомления */}
+          {adminTab === 'notifications' && (() => {
+            const NotifToggle = ({ label, icon, checked, onChange, desc }) => (
+              <label className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100">
+                <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="w-5 h-5 accent-purple-500 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <span className="text-sm font-medium">{icon} {label}</span>
+                  {desc && <p className="text-xs text-gray-400 mt-0.5">{desc}</p>}
+                </div>
+              </label>
+            );
+            
+            const updateNS = (key, val) => {
+              const updated = { ...notifSettings, [key]: val };
+              setNotifSettings(updated);
+              save('likebird-notif-settings', updated);
+            };
+            
+            return (
+              <div className="space-y-4">
+                {/* Push-уведомления */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2"><Bell className="w-5 h-5 text-purple-600" />Push-уведомления</h3>
+                  {typeof Notification !== 'undefined' && (
+                    <div className="flex items-center justify-between p-3 bg-purple-50 rounded-xl mb-3">
+                      <div>
+                        <p className="text-sm font-medium">Статус: {Notification.permission === 'granted' ? '✅ Разрешены' : Notification.permission === 'denied' ? '❌ Запрещены' : '⚠️ Не запрошены'}</p>
+                        <p className="text-xs text-gray-400">Браузерные push-уведомления</p>
+                      </div>
+                      {Notification.permission !== 'granted' && (
+                        <button onClick={() => Notification.requestPermission().then(p => { if (p === 'granted') showNotification('Push-уведомления включены!'); })} className="bg-purple-500 text-white px-3 py-1.5 rounded-lg text-sm font-bold">
+                          Включить
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                
+                {/* Уведомления для сотрудников */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2">👥 Уведомления сотрудникам</h3>
+                  <div className="space-y-2">
+                    <NotifToggle icon="⏰" label="Напоминание об открытии смены" checked={notifSettings.shiftReminder !== false} onChange={v => updateNS('shiftReminder', v)} desc="Если сотрудник не открыл смену после 10:00" />
+                    <NotifToggle icon="📊" label="Итог дня после закрытия смены" checked={notifSettings.shiftSummary !== false} onChange={v => updateNS('shiftSummary', v)} desc="Показать сводку продаж после закрытия" />
+                    <NotifToggle icon="🏆" label="Достижения и челленджи" checked={notifSettings.achievements !== false} onChange={v => updateNS('achievements', v)} desc="Уведомлять о полученных достижениях" />
+                    <NotifToggle icon="📅" label="Напоминание о событиях" checked={notifSettings.eventReminder !== false} onChange={v => updateNS('eventReminder', v)} desc="За день до события из календаря" />
+                    <NotifToggle icon="💰" label="Уведомление о зарплате" checked={notifSettings.salaryNotif !== false} onChange={v => updateNS('salaryNotif', v)} desc="Когда админ принял решение по зарплате" />
+                  </div>
+                </div>
+                
+                {/* Уведомления для админа */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2">🛡️ Уведомления администратору</h3>
+                  <div className="space-y-2">
+                    <NotifToggle icon="⚠️" label="Низкий остаток товара" checked={notifSettings.lowStockAlert !== false} onChange={v => updateNS('lowStockAlert', v)} desc="Когда товар на складе ниже порога" />
+                    {notifSettings.lowStockAlert !== false && (
+                      <div className="flex items-center gap-2 pl-8 pb-1">
+                        <span className="text-xs text-gray-500">Порог:</span>
+                        <input type="number" value={notifSettings.stockThreshold || 3} onChange={e => updateNS('stockThreshold', parseInt(e.target.value) || 3)} className="w-16 p-1 border rounded text-sm text-center" min="1" max="50" />
+                        <span className="text-xs text-gray-500">шт</span>
+                      </div>
+                    )}
+                    <NotifToggle icon="📉" label="Выручка ниже среднего" checked={notifSettings.revenueAlert !== false} onChange={v => updateNS('revenueAlert', v)} desc="Если выручка дня ниже среднего на 30%+" />
+                    <NotifToggle icon="✅" label="Новые отчёты на проверку" checked={notifSettings.newReportsAlert !== false} onChange={v => updateNS('newReportsAlert', v)} desc="Когда сотрудник отправил отчёт" />
+                    <NotifToggle icon="🕐" label="Сотрудник не закрыл смену" checked={notifSettings.unclosedShift !== false} onChange={v => updateNS('unclosedShift', v)} desc="Если смена открыта более 12 часов" />
+                    <NotifToggle icon="💳" label="Крупные продажи" checked={notifSettings.bigSaleAlert || false} onChange={v => updateNS('bigSaleAlert', v)} desc="Продажа дороже указанной суммы" />
+                    {notifSettings.bigSaleAlert && (
+                      <div className="flex items-center gap-2 pl-8 pb-1">
+                        <span className="text-xs text-gray-500">Порог:</span>
+                        <input type="number" value={notifSettings.bigSaleThreshold || 3000} onChange={e => updateNS('bigSaleThreshold', parseInt(e.target.value) || 3000)} className="w-24 p-1 border rounded text-sm text-center" min="500" step="500" />
+                        <span className="text-xs text-gray-500">₽</span>
+                      </div>
+                    )}
+                    <NotifToggle icon="🔔" label="Скидки и цены ниже базы" checked={notifSettings.discountAlert !== false} onChange={v => updateNS('discountAlert', v)} desc="Когда сотрудник продал ниже базовой цены" />
+                    <NotifToggle icon="📋" label="Ревизия не проведена" checked={notifSettings.noInventoryAlert !== false} onChange={v => updateNS('noInventoryAlert', v)} desc="Если сотрудник не сделал ревизию при открытии" />
+                  </div>
+                </div>
+                
+                {/* Расписание уведомлений */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2">🕐 Расписание</h3>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">Время напоминания о смене</span>
+                      <input type="time" value={notifSettings.shiftReminderTime || '10:00'} onChange={e => updateNS('shiftReminderTime', e.target.value)}
+                        className="p-1.5 border rounded-lg text-sm" />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">Тихий режим (не беспокоить)</span>
+                      <div className="flex items-center gap-1">
+                        <input type="time" value={notifSettings.quietFrom || '22:00'} onChange={e => updateNS('quietFrom', e.target.value)} className="p-1 border rounded text-xs w-20" />
+                        <span className="text-xs text-gray-400">—</span>
+                        <input type="time" value={notifSettings.quietTo || '08:00'} onChange={e => updateNS('quietTo', e.target.value)} className="p-1 border rounded text-xs w-20" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Отправить уведомление */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2">📢 Отправить уведомление</h3>
+                  <p className="text-xs text-gray-500 mb-3">Отправить уведомление всем сотрудникам</p>
+                  <input type="text" value={notifSettings._draftTitle || ''} onChange={e => setNotifSettings(prev => ({ ...prev, _draftTitle: e.target.value }))} placeholder="Заголовок" maxLength={100} className="w-full p-2.5 border-2 border-gray-200 rounded-xl mb-2 text-sm focus:border-purple-500 focus:outline-none" />
+                  <textarea value={notifSettings._draftBody || ''} onChange={e => setNotifSettings(prev => ({ ...prev, _draftBody: e.target.value }))} placeholder="Текст уведомления..." maxLength={500} className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm h-20 resize-none focus:border-purple-500 focus:outline-none" />
+                  <button onClick={() => {
+                    const title = notifSettings._draftTitle?.trim();
+                    const body = notifSettings._draftBody?.trim();
+                    if (!title) { showNotification('Введите заголовок', 'error'); return; }
+                    const notif = { id: Date.now() + '_admin', type: 'admin-broadcast', title: '📢 ' + title, body: body || '', icon: '📢', timestamp: Date.now(), read: false, from: employeeName };
+                    const updated = [...userNotifications, notif];
+                    setUserNotifications(updated);
+                    save('likebird-notifications', updated);
+                    setNotifSettings(prev => ({ ...prev, _draftTitle: '', _draftBody: '' }));
+                    showNotification('📢 Уведомление отправлено всем');
+                  }} disabled={!notifSettings._draftTitle?.trim()} className="w-full py-2.5 mt-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
+                    📢 Отправить всем
+                  </button>
+                </div>
+                
+                {/* Статистика уведомлений */}
+                <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2">📊 Статистика</h3>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="bg-purple-50 rounded-lg p-2.5 text-center">
+                      <p className="text-2xl font-bold text-purple-600">{userNotifications.length}</p>
+                      <p className="text-xs text-gray-500">Всего</p>
+                    </div>
+                    <div className="bg-blue-50 rounded-lg p-2.5 text-center">
+                      <p className="text-2xl font-bold text-blue-600">{userNotifications.filter(n => !n.read).length}</p>
+                      <p className="text-xs text-gray-500">Непрочитанных</p>
+                    </div>
+                    <div className="bg-amber-50 rounded-lg p-2.5 text-center">
+                      <p className="text-2xl font-bold text-amber-600">{userNotifications.filter(n => n.type?.startsWith('auto-')).length}</p>
+                      <p className="text-xs text-gray-500">Автоматических</p>
+                    </div>
+                    <div className="bg-green-50 rounded-lg p-2.5 text-center">
+                      <p className="text-2xl font-bold text-green-600">{userNotifications.filter(n => n.type === 'admin-broadcast').length}</p>
+                      <p className="text-xs text-gray-500">Рассылок</p>
+                    </div>
+                  </div>
+                  {userNotifications.length > 50 && (
+                    <button onClick={() => {
+                      showConfirm(`Удалить ${userNotifications.length - 20} старых уведомлений? Останутся последние 20.`, () => {
+                        const kept = userNotifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 20);
+                        setUserNotifications(kept);
+                        save('likebird-notifications', kept);
+                        showNotification('Старые уведомления удалены');
+                      });
+                    }} className="w-full mt-3 py-2 bg-gray-100 rounded-lg text-sm text-gray-600 hover:bg-gray-200">
+                      🗑️ Очистить старые ({userNotifications.length - 20} шт)
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ВКЛАДКА: Безопасность */}
           {adminTab === 'security' && (
