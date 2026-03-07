@@ -8342,8 +8342,8 @@ function LikeBirdAppInner() {
               let period = '';
               let category = '';
               let currentItem = null;
-              const items = []; // { name, startCount, currentCount, sales: [], arrivals: [], writeoffs: [], salesCount }
-              let birdSection = null; // { totalNow, startCount, arrivals: [], sales, writeoffs: [], shortage }
+              const items = [];
+              let birdSection = null;
               
               for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
@@ -8357,20 +8357,24 @@ function LikeBirdAppInner() {
                 if (/^вид товар/i.test(line)) {
                   const catMatch = line.match(/:\s*(.+)/);
                   if (catMatch) category = catMatch[1].trim();
+                  // Detect bird section
+                  if (/птиц/i.test(line)) {
+                    if (!birdSection) birdSection = { totalNow: 0, startCount: 0, arrivals: [], salesCount: 0, writeoffs: [], shortage: 0, found: 0 };
+                    // Flush current item from previous section
+                    if (currentItem) { items.push(currentItem); currentItem = null; }
+                  }
                   continue;
                 }
                 
-                // Bird section
-                if (/^вид товар.*птиц/i.test(line) || (category && /птиц/i.test(category))) {
-                  if (!birdSection) birdSection = { totalNow: 0, startCount: 0, arrivals: [], salesCount: 0, writeoffs: [], shortage: 0, found: 0 };
-                }
+                // Skip formula/calculation lines like "1) 410 - 62..."
+                if (/^\d+\)\s*\d+\s*[-+]/.test(line)) continue;
                 
-                // "На данный момент: N" — current count
+                // "На данный момент: N"
                 const currentMatch = line.match(/на данный момент:\s*(\d+)/i);
                 if (currentMatch) {
                   const count = parseInt(currentMatch[1], 10);
-                  if (birdSection && !currentItem) { birdSection.totalNow = count; }
-                  else if (currentItem) { currentItem.currentCount = count; }
+                  if (currentItem) { currentItem.currentCount = count; }
+                  else if (birdSection) { birdSection.totalNow = count; }
                   continue;
                 }
                 
@@ -8378,35 +8382,45 @@ function LikeBirdAppInner() {
                 const salesCountMatch = line.match(/количество продаж:\s*(\d+)/i);
                 if (salesCountMatch) {
                   const cnt = parseInt(salesCountMatch[1], 10);
-                  if (birdSection && !currentItem) birdSection.salesCount = cnt;
-                  else if (currentItem) currentItem.salesCount = cnt;
+                  if (currentItem) currentItem.salesCount = cnt;
+                  else if (birdSection) birdSection.salesCount = cnt;
                   continue;
                 }
                 
-                // Date with start count: "15.01: 22" or "15.01: 8, 1 свет"
+                // "Найдены из недосдачи : 27" or "Найдено: 27" — MUST check BEFORE writeoffs
+                const foundMatch = lower.match(/найден[а-яё]*.*?(\d+)/i);
+                if (foundMatch && birdSection && !currentItem) {
+                  birdSection.found = parseInt(foundMatch[1], 10);
+                  continue;
+                }
+                
+                // "Итоговая недосдача: 4 птицы" or "31 недосдача" — MUST check BEFORE writeoffs
+                const shortageExactMatch = line.match(/итоговая недосдач.*?(\d+)/i);
+                if (shortageExactMatch && birdSection) { birdSection.shortage = parseInt(shortageExactMatch[1], 10); continue; }
+                const shortageMatch = line.match(/(\d+)\s*недосдач/i);
+                if (shortageMatch && birdSection && !currentItem) { birdSection.shortage = parseInt(shortageMatch[1], 10); continue; }
+                
+                // Date with count: "15.01: 22" or "14.02.2026: +330 птиц"
                 const dateCountMatch = line.match(/^(\d{1,2}\.\d{1,2}(?:\.\d{2,4})?)\s*:\s*(.+)/);
-                if (dateCountMatch && currentItem) {
+                if (dateCountMatch) {
                   const val = dateCountMatch[2].trim();
                   const numMatch = val.match(/^\+?\s*(\d+)/);
                   if (numMatch) {
-                    if (val.startsWith('+')) {
-                      currentItem.arrivals.push({ date: dateCountMatch[1], count: parseInt(numMatch[1], 10), note: val });
-                    } else if (!currentItem.startDate) {
-                      currentItem.startCount = parseInt(numMatch[1], 10);
-                      currentItem.startDate = dateCountMatch[1];
-                      currentItem.extra = val.replace(/^\d+/, '').trim();
+                    const isArrival = /^\+/.test(val.trim());
+                    const count = parseInt(numMatch[1], 10);
+                    
+                    if (currentItem) {
+                      if (isArrival) {
+                        currentItem.arrivals.push({ date: dateCountMatch[1], count, note: val });
+                      } else if (!currentItem.startDate) {
+                        currentItem.startCount = count;
+                        currentItem.startDate = dateCountMatch[1];
+                        currentItem.extra = val.replace(/^\d+/, '').trim();
+                      }
+                    } else if (birdSection) {
+                      if (isArrival) birdSection.arrivals.push({ date: dateCountMatch[1], count, note: val });
+                      else if (!birdSection.startDate) { birdSection.startCount = count; birdSection.startDate = dateCountMatch[1]; }
                     }
-                  }
-                  continue;
-                }
-                
-                // Bird section date lines
-                if (dateCountMatch && birdSection && !currentItem) {
-                  const val = dateCountMatch[2].trim();
-                  const numMatch = val.match(/^\+?\s*(\d+)/);
-                  if (numMatch) {
-                    if (val.startsWith('+')) birdSection.arrivals.push({ date: dateCountMatch[1], count: parseInt(numMatch[1], 10), note: val });
-                    else if (!birdSection.startDate) { birdSection.startCount = parseInt(numMatch[1], 10); birdSection.startDate = dateCountMatch[1]; }
                   }
                   continue;
                 }
@@ -8414,75 +8428,110 @@ function LikeBirdAppInner() {
                 // Sale line: "1 Алиса 14.02"
                 const saleMatch = line.match(/^(\d+)\s+([А-Яа-яЁёA-Za-z]+)\s+(\d{1,2}\.\d{1,2})/);
                 if (saleMatch) {
-                  const sale = { qty: parseInt(saleMatch[1], 10), employee: saleMatch[2], date: saleMatch[3] };
-                  if (currentItem) currentItem.sales.push(sale);
+                  if (currentItem) currentItem.sales.push({ qty: parseInt(saleMatch[1], 10), employee: saleMatch[2], date: saleMatch[3] });
                   continue;
                 }
                 
-                // Write-off lines: "Брак/разбиты: 8" or "Отдали Антону: 65"
-                const writeoffMatch = line.match(/^(.+?):\s*(\d+)\s*(.*?)(?:\[.*\])?$/);
-                if (writeoffMatch && birdSection && !currentItem) {
-                  const reason = writeoffMatch[1].trim();
-                  const cnt = parseInt(writeoffMatch[2], 10);
-                  if (/брак|разб|списан|отдал|подарок|забрал|зп|недосдач|найден/i.test(reason)) {
-                    birdSection.writeoffs.push({ reason, count: cnt, note: writeoffMatch[3]?.trim() || '' });
-                    continue;
+                // Write-off lines (bird section only): "Брак/разбиты: 8" etc.
+                // Only match known writeoff patterns, NOT "найден" or "недосдач"
+                if (birdSection && !currentItem) {
+                  const woMatch = line.match(/^(.+?):\s*(\d+)\s*(.*?)(?:\[.*\])?$/);
+                  if (woMatch) {
+                    const reason = woMatch[1].trim();
+                    // Only specific writeoff keywords, exclude "найден" and "недосдач" and "итогов"
+                    if (/брак|разб|списан|отдал|подарок|забрал|зп|потер|украд|слом/i.test(reason) && !/найден|недосдач|итогов/i.test(reason)) {
+                      birdSection.writeoffs.push({ reason, count: parseInt(woMatch[2], 10), note: woMatch[3]?.trim() || '' });
+                      continue;
+                    }
                   }
                 }
                 
-                // Shortage lines
-                const shortageMatch = line.match(/(\d+)\s*недосдач/i);
-                if (shortageMatch && birdSection) { birdSection.shortage = parseInt(shortageMatch[1], 10); continue; }
-                const foundMatch = line.match(/найден.*?:\s*(\d+)/i);
-                if (foundMatch && birdSection) { birdSection.found = parseInt(foundMatch[1], 10); continue; }
+                // "Новые 8 штук 01.03" or "(Лежали с декабря, 10.12 3 шт)" — count for current item
+                // MUST check BEFORE item header detection
+                const specialMatch = line.match(/(\d+)\s*(?:шт|штук)/i);
+                if (specialMatch && currentItem) {
+                  const cnt = parseInt(specialMatch[1], 10);
+                  if (currentItem.currentCount === 0) currentItem.currentCount = cnt;
+                  if (currentItem.startCount === 0) currentItem.startCount = cnt;
+                  continue;
+                }
+                
+                // Section headers like "Мелкие:" — skip as items
+                if (/^(мелкие|крупные|средние|большие|другие)\s*:?\s*$/i.test(line)) continue;
                 
                 // New item header (product name, possibly with ✅)
-                const itemLine = line.replace(/✅|✔️|☑️/g, '').trim();
-                if (itemLine.length > 1 && !/^[\d(]/.test(itemLine) && !/количество|на данный|период|вид товар|мелкие|итого/i.test(itemLine) && !saleMatch) {
-                  // Check if next lines have "На данный момент" — confirms it's an item
+                const itemLine = line.replace(/[✅✔️☑️]/g, '').trim();
+                if (itemLine.length > 1 && !/^[\d(]/.test(itemLine) && !/количество|на данный|период|вид товар|итого/i.test(itemLine)) {
+                  // Look ahead: does next few lines have "На данный момент" or a date line?
                   let isItem = false;
                   for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
-                    if (/на данный момент|количество продаж|\d{1,2}\.\d{1,2}.*:\s*\d/i.test(lines[j])) { isItem = true; break; }
+                    const nextLine = lines[j].trim();
+                    if (/на данный момент|количество продаж/i.test(nextLine)) { isItem = true; break; }
+                    if (/^\d{1,2}\.\d{1,2}.*:\s*\d/.test(nextLine)) { isItem = true; break; }
                   }
-                  if (isItem || (/новые|лежали|штук/i.test(lines[i + 1] || ''))) {
+                  // Also check for special patterns like "Новые N штук" or "(Лежали..."
+                  const nextLine = (lines[i + 1] || '').trim();
+                  if (/новые|лежали|штук|\d+\s*шт/i.test(nextLine)) isItem = true;
+                  
+                  if (isItem) {
                     if (currentItem) items.push(currentItem);
                     currentItem = { name: itemLine, startCount: 0, currentCount: 0, sales: [], arrivals: [], writeoffs: [], salesCount: 0, startDate: '', extra: '' };
                     continue;
                   }
                 }
                 
-                // Handle "(Лежали с декабря, 10.12 3 шт)" or "Новые 8 штук 01.03"
-                const specialMatch = line.match(/(\d+)\s*(?:шт|штук)/i);
-                if (specialMatch && currentItem && currentItem.currentCount === 0) {
-                  currentItem.currentCount = parseInt(specialMatch[1], 10);
-                  if (!currentItem.startCount) currentItem.startCount = currentItem.currentCount;
-                }
               }
               if (currentItem) items.push(currentItem);
               
-              // Match items to catalog products
+              // Match items to catalog products (with CUSTOM_ALIASES support)
               items.forEach(item => {
                 const nameLow = item.name.toLowerCase();
                 let bestMatch = null;
                 let bestScore = 0;
-                DYNAMIC_ALL_PRODUCTS.forEach(p => {
-                  const pLow = p.name.toLowerCase();
-                  // Exact match
-                  if (pLow === nameLow) { bestMatch = p; bestScore = 100; return; }
-                  // Alias match
-                  for (const alias of (p.aliases || [])) {
-                    if (nameLow.includes(alias) || alias.includes(nameLow)) {
-                      const score = Math.min(alias.length, nameLow.length) / Math.max(alias.length, nameLow.length) * 80;
-                      if (score > bestScore) { bestMatch = p; bestScore = score; }
+                
+                // 1. Check custom aliases first
+                for (const [alias, productName] of Object.entries(CUSTOM_ALIASES)) {
+                  if (nameLow === alias.toLowerCase() || nameLow.includes(alias.toLowerCase())) {
+                    const found = DYNAMIC_ALL_PRODUCTS.find(p => p.name === productName);
+                    if (found) { bestMatch = found; bestScore = 95; break; }
+                  }
+                }
+                
+                // 2. Catalog matching
+                if (!bestMatch) {
+                  DYNAMIC_ALL_PRODUCTS.forEach(p => {
+                    const pLow = p.name.toLowerCase();
+                    // Exact
+                    if (pLow === nameLow) { bestMatch = p; bestScore = 100; return; }
+                    // Alias match (bi-directional)
+                    for (const alias of (p.aliases || [])) {
+                      const aLow = alias.toLowerCase();
+                      if (nameLow === aLow) { if (100 > bestScore) { bestMatch = p; bestScore = 100; } return; }
+                      if (nameLow.includes(aLow) && aLow.length >= 3) {
+                        const score = aLow.length / nameLow.length * 85;
+                        if (score > bestScore) { bestMatch = p; bestScore = score; }
+                      }
+                      if (aLow.includes(nameLow) && nameLow.length >= 3) {
+                        const score = nameLow.length / aLow.length * 85;
+                        if (score > bestScore) { bestMatch = p; bestScore = score; }
+                      }
                     }
-                  }
-                  // Partial match
-                  if (pLow.includes(nameLow) || nameLow.includes(pLow)) {
-                    const score = Math.min(pLow.length, nameLow.length) / Math.max(pLow.length, nameLow.length) * 60;
-                    if (score > bestScore) { bestMatch = p; bestScore = score; }
-                  }
-                });
-                item.matchedProduct = bestMatch;
+                    // Partial name match (only if no alias found and significant overlap)
+                    if (bestScore < 50) {
+                      if (pLow.includes(nameLow) && nameLow.length >= 4) {
+                        const score = nameLow.length / pLow.length * 60;
+                        if (score > bestScore) { bestMatch = p; bestScore = score; }
+                      }
+                      if (nameLow.includes(pLow) && pLow.length >= 4) {
+                        const score = pLow.length / nameLow.length * 60;
+                        if (score > bestScore) { bestMatch = p; bestScore = score; }
+                      }
+                    }
+                  });
+                }
+                
+                // Only accept matches above threshold
+                item.matchedProduct = bestScore >= 30 ? bestMatch : null;
                 item.matchScore = bestScore;
               });
               
