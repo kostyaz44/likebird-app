@@ -976,7 +976,7 @@ function LikeBirdAppInner() {
   // НОВОЕ: Расширенные состояния для админ-панели
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
-  const [adminTab, setAdminTab] = useState('today');
+  const [adminTab, setAdminTab] = useState('analytics');
   const [challengeForm, setChallengeForm] = useState({ title: '', icon: '🏆', type: 'daily', metric: 'sales_count', target: 10, product: '', reward: '' });
   const [teamTab, setTeamTab] = useState('online');
   const [employees, setEmployees] = useState([
@@ -6380,7 +6380,8 @@ function LikeBirdAppInner() {
     const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Птички-свистульки', emoji: '🎁' });
     const [editingManual, setEditingManual] = useState(null);
     const [newManual, setNewManual] = useState({ title: '', category: 'sales', content: '', isPinned: false });
-    const [personnelTab, setPersonnelTab] = useState('penalties');
+    const [personnelTab, setPersonnelTab] = useState('employees');
+    const [analyticsSubTab, setAnalyticsSubTab] = useState('today');
     const [editBonusId, setEditBonusId] = useState(null);
     const [editBonusForm, setEditBonusForm] = useState({ amount: '', reason: '' });
     const [regUsers, setRegUsers] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } });
@@ -6409,7 +6410,7 @@ function LikeBirdAppInner() {
     const [kpiEditMode, setKpiEditMode] = useState(null);
     const [kpiEditValue, setKpiEditValue] = useState('');
     // States moved from IIFEs to fix input focus bug
-    const [stockTab, setStockTab] = useState('history');
+    const [stockTab, setStockTab] = useState('products');
     const [adminPassInput, setAdminPassInput] = useState('');
     const [historyLimit, setHistoryLimit] = useState(50);
     const [newWriteOff, setNewWriteOff] = useState({ product: '', quantity: '', reason: '' });
@@ -6866,24 +6867,15 @@ function LikeBirdAppInner() {
     };
 
     const tabs = [
-      { id: 'today', label: '📊 Сегодня', icon: BarChart3 },
       { id: 'analytics', label: '📈 Аналитика', icon: BarChart3 },
       { id: 'review', label: '✅ Проверка', icon: CheckCircle },
-      { id: 'employees', label: '👥 Сотрудники', icon: Users },
-      { id: 'personnel', label: '🏆 Персонал+', icon: Award },
-      { id: 'finance', label: '💰 Финансы', icon: DollarSign },
-      { id: 'locations', label: '📍 Точки', icon: MapPin },
-      { id: 'products', label: '📦 Товары', icon: Package },
-      { id: 'stock', label: '📋 Ревизия', icon: Package },
+      { id: 'personnel', label: '👥 Персонал+', icon: Users },
       { id: 'stockplus', label: '📦 Склад+', icon: Archive },
-      { id: 'schedule', label: '📅 График', icon: Calendar },
       { id: 'chat', label: '💬 Чат', icon: MessageCircle },
       { id: 'settings', label: '⚙️ Настройки', icon: Settings },
       { id: 'notifications', label: '🔔 Уведомления', icon: Bell },
       { id: 'security', label: '🔐 Доступ', icon: Lock },
       { id: 'manuals', label: '📚 Мануалы', icon: FileText },
-      { id: 'achievements-admin', label: '🏅 Достижения', icon: Award },
-      { id: 'challenges', label: '🏆 Челленджи', icon: Award },
       { id: 'audit', label: '📋 Аудит', icon: FileText },
     ];
 
@@ -6950,8 +6942,23 @@ function LikeBirdAppInner() {
         </div>
 
         <div className="max-w-4xl mx-auto px-4 mt-4">
+          {/* Analytics sub-tabs */}
+          {adminTab === 'analytics' && (
+            <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+              {[
+                { id: 'today', label: '📊 Сегодня' },
+                { id: 'charts', label: '📈 Графики' },
+              ].map(t => (
+                <button key={t.id} onClick={() => setAnalyticsSubTab(t.id)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${analyticsSubTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* ВКЛАДКА: Сегодня (дашборд) */}
-          {adminTab === 'today' && (() => {
+          {adminTab === 'analytics' && analyticsSubTab === 'today' && (() => {
             const todayTopProducts = todayReports.reduce((acc, r) => {
               const n = getProductName(r.product);
               acc[n] = (acc[n] || 0) + 1;
@@ -7036,7 +7043,7 @@ function LikeBirdAppInner() {
           })()}
           {/* ВКЛАДКА: Дашборд */}
           {/* Аналитика (объединённая) */}
-          {adminTab === 'analytics' && (() => {
+          {adminTab === 'analytics' && analyticsSubTab === 'charts' && (() => {
             const analytics = getAnalytics(analyticsPeriod);
             const cities = getCities();
             const maxRevenue = Math.max(...Object.values(analytics.byDay).map(d => d.revenue), 1);
@@ -7296,23 +7303,45 @@ function LikeBirdAppInner() {
                                             <input type="text" value={adminEditForm.product || ''} onChange={e => setAdminEditForm({...adminEditForm, product: e.target.value})}
                                               className="w-full p-2 border-2 border-blue-300 rounded-lg text-sm focus:border-blue-500 focus:outline-none mt-0.5" />
                                           </div>
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                              <label className="text-xs text-gray-500">Чаевые ₽</label>
+                                              <input type="number" value={adminEditForm.tips || ''} onChange={e => setAdminEditForm({...adminEditForm, tips: e.target.value})}
+                                                className="w-full p-2 border-2 border-amber-300 rounded-lg text-sm focus:border-amber-500 focus:outline-none mt-0.5" placeholder="0" />
+                                            </div>
+                                            {adminEditForm.paymentType === 'mixed' && (
+                                              <>
+                                                <div>
+                                                  <label className="text-xs text-gray-500">💵 Наличные ₽</label>
+                                                  <input type="number" value={adminEditForm.cashAmount || ''} onChange={e => setAdminEditForm({...adminEditForm, cashAmount: e.target.value})}
+                                                    className="w-full p-2 border-2 border-green-300 rounded-lg text-sm focus:border-green-500 focus:outline-none mt-0.5" placeholder="0" />
+                                                </div>
+                                                <div>
+                                                  <label className="text-xs text-gray-500">💳 Безнал ₽</label>
+                                                  <input type="number" value={adminEditForm.cashlessAmount || ''} onChange={e => setAdminEditForm({...adminEditForm, cashlessAmount: e.target.value})}
+                                                    className="w-full p-2 border-2 border-blue-300 rounded-lg text-sm focus:border-blue-500 focus:outline-none mt-0.5" placeholder="0" />
+                                                </div>
+                                              </>
+                                            )}
+                                          </div>
                                           <div className="flex gap-2">
                                             <button onClick={() => {
                                               const priceNum = parseInt(adminEditForm.salePrice) || r.salePrice;
+                                              const tipsNum = parseInt(adminEditForm.tips) || 0;
                                               const prod = DYNAMIC_ALL_PRODUCTS.find(p => p.name === adminEditForm.product) || { price: r.basePrice, category: r.category };
                                               const newBase = prod.price || r.basePrice;
                                               const newCat = prod.category || r.category;
-                                              const newSal = calculateSalary(newBase, priceNum, newCat, r.tips || 0, 'normal', salarySettings);
+                                              const newSal = calculateSalary(newBase, priceNum, newCat, tipsNum, 'normal', salarySettings);
                                               let ca = 0, cla = 0;
-                                              if (adminEditForm.paymentType === 'cash') ca = priceNum;
-                                              else if (adminEditForm.paymentType === 'cashless') cla = priceNum;
-                                              else { ca = r.cashAmount; cla = r.cashlessAmount; }
+                                              if (adminEditForm.paymentType === 'cash') { ca = priceNum + tipsNum; }
+                                              else if (adminEditForm.paymentType === 'cashless') { cla = priceNum + tipsNum; }
+                                              else { ca = parseInt(adminEditForm.cashAmount) || 0; cla = parseInt(adminEditForm.cashlessAmount) || 0; }
                                               const updatedR = reports.map(rep => rep.id === r.id
-                                                ? { ...rep, product: adminEditForm.product, basePrice: newBase, category: newCat, salePrice: priceNum, total: priceNum, salary: newSal, paymentType: adminEditForm.paymentType, cashAmount: ca, cashlessAmount: cla, isBelowBase: priceNum < newBase }
+                                                ? { ...rep, product: adminEditForm.product, basePrice: newBase, category: newCat, salePrice: priceNum, total: priceNum, tips: tipsNum, salary: newSal, paymentType: adminEditForm.paymentType, cashAmount: ca, cashlessAmount: cla, isBelowBase: priceNum < newBase }
                                                 : rep
                                               );
                                               updateReports(updatedR);
-                                              logAction('Отчёт исправлен администратором', `${empName}: ${r.product} → ${adminEditForm.product} ${priceNum}₽`);
+                                              logAction('Отчёт исправлен администратором', `${empName}: ${r.product} → ${adminEditForm.product} ${priceNum}₽ tips:${tipsNum}`);
                                               setExpandedEdit(null);
                                               showNotification('Продажа исправлена');
                                             }} className="flex-1 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-bold">✅ Сохранить</button>
@@ -7337,14 +7366,15 @@ function LikeBirdAppInner() {
                                         </div>
                                       ) : (
                                         <div className={`p-2 flex justify-between items-center cursor-pointer hover:bg-gray-50 ${r.isUnrecognized ? 'bg-red-50' : 'bg-white'}`}
-                                          onClick={() => { setExpandedEdit(r.id); setAdminEditForm({ product: r.product, salePrice: String(r.salePrice), paymentType: r.paymentType }); }}>
+                                          onClick={() => { setExpandedEdit(r.id); setAdminEditForm({ product: r.product, salePrice: String(r.salePrice), paymentType: r.paymentType, tips: String(r.tips || 0), cashAmount: String(r.cashAmount || 0), cashlessAmount: String(r.cashlessAmount || 0) }); }}>
                                           <div className="flex items-center gap-2 min-w-0">
                                             <span className="text-base flex-shrink-0">{r.isUnrecognized ? '❓' : (DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦')}</span>
                                             <span className="truncate text-sm">{getProductName(r.product)}</span>
                                           </div>
                                           <div className="flex items-center gap-2 flex-shrink-0">
                                             <span className="font-bold text-sm">{r.total}₽</span>
-                                            <span>{r.paymentType === 'cashless' ? '💳' : '💵'}</span>
+                                            {r.tips > 0 && <span className="text-xs text-amber-500">+{r.tips}</span>}
+                                            <span>{r.paymentType === 'mixed' ? '💵💳' : r.paymentType === 'cashless' ? '💳' : '💵'}</span>
                                             <Edit3 className="w-3 h-3 text-gray-400" />
                                           </div>
                                         </div>
@@ -7419,7 +7449,31 @@ function LikeBirdAppInner() {
           )}
 
           {/* ВКЛАДКА: Сотрудники */}
-          {adminTab === 'employees' && (() => {
+          {/* Personnel sub-tabs */}
+          {adminTab === 'personnel' && (
+            <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
+              {[
+                { id: 'employees', label: '👥 Сотрудники' },
+                { id: 'finance', label: '💰 Финансы' },
+                { id: 'schedule', label: '📅 График' },
+                { id: 'penalties', label: '⚠️ Штрафы' },
+                { id: 'bonuses', label: '🎁 Бонусы' },
+                { id: 'ratings', label: '⭐ Рейтинг' },
+                { id: 'timeoff', label: '🏖️ Отпуска' },
+                { id: 'kpi', label: '🎯 KPI' },
+                { id: 'achievements', label: '🏅 Достижения' },
+                { id: 'challenges', label: '🏆 Челленджи' },
+              ].map(t => (
+                <button key={t.id} onClick={() => setPersonnelTab(t.id)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${personnelTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Employees (was separate tab) */}
+          {adminTab === 'personnel' && personnelTab === 'employees' && (() => {
             // regUsers refreshed via useEffect at AdminView top level
 
             const saveUsers = (updated) => {
@@ -7834,24 +7888,9 @@ function LikeBirdAppInner() {
           })()}
 
           {/* ВКЛАДКА: Персонал+ (штрафы, бонусы, рейтинг, отпуска) */}
-          {adminTab === 'personnel' && (() => {
+          {adminTab === 'personnel' && personnelTab !== 'employees' && personnelTab !== 'finance' && personnelTab !== 'schedule' && personnelTab !== 'achievements' && personnelTab !== 'challenges' && (() => {
             return (
               <div className="space-y-4">
-                {/* Под-вкладки */}
-                <div className="flex gap-2 overflow-x-auto">
-                  {[
-                    { id: 'penalties', label: '⚠️ Штрафы' },
-                    { id: 'bonuses', label: '🎁 Бонусы' },
-                    { id: 'ratings', label: '⭐ Рейтинг' },
-                    { id: 'timeoff', label: '🏖️ Отпуска' },
-                    { id: 'kpi', label: '🎯 KPI' },
-                  ].map(t => (
-                    <button key={t.id} onClick={() => setPersonnelTab(t.id)}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${personnelTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
 
                 {/* Штрафы */}
                 {personnelTab === 'penalties' && (
@@ -8082,7 +8121,7 @@ function LikeBirdAppInner() {
           })()}
 
           {/* ВКЛАДКА: Финансы */}
-          {adminTab === 'finance' && (
+          {adminTab === 'personnel' && personnelTab === 'finance' && (
             <div className="space-y-4">
               {/* Сводка */}
               <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-4 text-white">
@@ -8113,11 +8152,11 @@ function LikeBirdAppInner() {
                 <div className="space-y-2">
                   {salarySettings.ranges.map((range, i) => (
                     <div key={i} className="flex gap-2 items-center p-2 bg-gray-50 rounded-lg text-sm">
-                      <input type="number" value={range.min} onChange={(e) => updateRange(i, 'min', e.target.value)} className="w-16 px-2 py-1 border rounded text-center" />
+                      <input type="number" defaultValue={range.min} onBlur={(e) => updateRange(i, 'min', e.target.value)} className="w-16 px-2 py-1 border rounded text-center" />
                       <span className="text-gray-400">—</span>
-                      <input type="number" value={range.max} onChange={(e) => updateRange(i, 'max', e.target.value)} className="w-16 px-2 py-1 border rounded text-center" />
+                      <input type="number" defaultValue={range.max} onBlur={(e) => updateRange(i, 'max', e.target.value)} className="w-16 px-2 py-1 border rounded text-center" />
                       <span className="text-gray-400">=</span>
-                      <input type="number" value={range.base} onChange={(e) => updateRange(i, 'base', e.target.value)} className="w-16 px-2 py-1 border-2 border-purple-200 rounded text-center font-bold" />
+                      <input type="number" defaultValue={range.base} onBlur={(e) => updateRange(i, 'base', e.target.value)} className="w-16 px-2 py-1 border-2 border-purple-200 rounded text-center font-bold" />
                       <span className="text-gray-600">₽</span>
                     </div>
                   ))}
@@ -8147,8 +8186,28 @@ function LikeBirdAppInner() {
             </div>
           )}
 
+          {/* Stockplus sub-tabs */}
+          {adminTab === 'stockplus' && (
+            <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
+              {[
+                { id: 'products', label: '📦 Товары' },
+                { id: 'revision', label: '📋 Ревизия' },
+                { id: 'locations', label: '📍 Точки' },
+                { id: 'history', label: '📜 История' },
+                { id: 'writeoff', label: '🗑️ Списания' },
+                { id: 'autoorder', label: '📦 Автозаказ' },
+                { id: 'cost', label: '💰 Себестоимость' },
+              ].map(t => (
+                <button key={t.id} onClick={() => setStockTab(t.id)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${stockTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* ВКЛАДКА: Точки продаж */}
-          {adminTab === 'locations' && (() => {
+          {adminTab === 'stockplus' && stockTab === 'locations' && (() => {
             const cities = getCities();
             return (
               <div className="space-y-4">
@@ -8220,7 +8279,7 @@ function LikeBirdAppInner() {
           })()}
 
           {/* ВКЛАДКА: Товары */}
-          {adminTab === 'products' && (
+          {adminTab === 'stockplus' && stockTab === 'products' && (
             <div className="space-y-4">
               {/* Добавление товара */}
               <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
@@ -8340,7 +8399,7 @@ function LikeBirdAppInner() {
           )}
 
           {/* ВКЛАДКА: Ревизия */}
-          {adminTab === 'stock' && (() => {
+          {adminTab === 'stockplus' && stockTab === 'revision' && (() => {
             
             // Parse warehouse revision text
             const parseWarehouseRevision = (text) => {
@@ -8659,7 +8718,7 @@ function LikeBirdAppInner() {
                 <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-2">🐦 Птицы по ревизии</h3>
                   <div className="flex gap-2">
-                    <input type="number" value={totalBirds || ''} onChange={(e) => { const v = parseInt(e.target.value) || 0; setTotalBirds(v); save('likebird-totalbirds', v); }} placeholder="Кол-во" className="flex-1 p-3 border rounded-lg" />
+                    <input type="number" defaultValue={totalBirds || ''} onBlur={(e) => { const v = parseInt(e.target.value) || 0; setTotalBirds(v); save('likebird-totalbirds', v); }} placeholder="Кол-во" className="flex-1 p-3 border rounded-lg" />
                     <button onClick={() => showNotification('✅ Сохранено')} className="bg-amber-500 text-white px-4 rounded-lg hover:bg-amber-600">💾</button>
                   </div>
                 </div>
@@ -8986,22 +9045,8 @@ function LikeBirdAppInner() {
           })()}
 
           {/* ВКЛАДКА: Склад+ (история, списания, автозаказ) */}
-          {adminTab === 'stockplus' && (
+          {adminTab === 'stockplus' && (stockTab === 'history' || stockTab === 'writeoff' || stockTab === 'autoorder' || stockTab === 'cost') && (
               <div className="space-y-4">
-                {/* Под-вкладки */}
-                <div className="flex gap-2">
-                  {[
-                    { id: 'history', label: '📜 История' },
-                    { id: 'writeoff', label: '🗑️ Списания' },
-                    { id: 'autoorder', label: '📦 Автозаказ' },
-                    { id: 'cost', label: '💰 Себестоимость' },
-                  ].map(t => (
-                    <button key={t.id} onClick={() => setStockTab(t.id)}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium ${stockTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
 
                 {/* История движения */}
                 {stockTab === 'history' && (
@@ -9203,7 +9248,7 @@ function LikeBirdAppInner() {
           )}
 
           {/* ВКЛАДКА: График работы */}
-          {adminTab === 'schedule' && (() => {
+          {adminTab === 'personnel' && personnelTab === 'schedule' && (() => {
             const EVENT_TYPES = [
               { id: 'sale', label: '🎁 Акция', emoji: '🎁' },
               { id: 'holiday', label: '🎉 Праздник', emoji: '🎉' },
@@ -9369,7 +9414,7 @@ function LikeBirdAppInner() {
           )}
 
           {/* BLOCK 7: Challenges Management */}
-          {adminTab === 'challenges' && (
+          {adminTab === 'personnel' && personnelTab === 'challenges' && (
             <div className="space-y-4">
               <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold mb-3 flex items-center gap-2">🏆 Челленджи</h3>
@@ -9630,19 +9675,22 @@ function LikeBirdAppInner() {
                 <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                   <h3 className="font-bold mb-3 flex items-center gap-2">📢 Отправить уведомление</h3>
                   <p className="text-xs text-gray-500 mb-3">Отправить уведомление всем сотрудникам</p>
-                  <input type="text" value={notifSettings._draftTitle || ''} onChange={e => setNotifSettings(prev => ({ ...prev, _draftTitle: e.target.value }))} placeholder="Заголовок" maxLength={100} className="w-full p-2.5 border-2 border-gray-200 rounded-xl mb-2 text-sm focus:border-purple-500 focus:outline-none" />
-                  <textarea value={notifSettings._draftBody || ''} onChange={e => setNotifSettings(prev => ({ ...prev, _draftBody: e.target.value }))} placeholder="Текст уведомления..." maxLength={500} className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm h-20 resize-none focus:border-purple-500 focus:outline-none" />
+                  <input type="text" id="admin-notif-title" defaultValue={notifSettings._draftTitle || ''} placeholder="Заголовок" maxLength={100} className="w-full p-2.5 border-2 border-gray-200 rounded-xl mb-2 text-sm focus:border-purple-500 focus:outline-none" />
+                  <textarea id="admin-notif-body" defaultValue={notifSettings._draftBody || ''} placeholder="Текст уведомления..." maxLength={500} className="w-full p-2.5 border-2 border-gray-200 rounded-xl text-sm h-20 resize-none focus:border-purple-500 focus:outline-none" />
                   <button onClick={() => {
-                    const title = notifSettings._draftTitle?.trim();
-                    const body = notifSettings._draftBody?.trim();
+                    const title = document.getElementById('admin-notif-title')?.value?.trim();
+                    const body = document.getElementById('admin-notif-body')?.value?.trim();
                     if (!title) { showNotification('Введите заголовок', 'error'); return; }
                     const notif = { id: Date.now() + '_admin', type: 'admin-broadcast', title: '📢 ' + title, body: body || '', icon: '📢', timestamp: Date.now(), read: false, from: employeeName };
                     const updated = [...userNotifications, notif];
                     setUserNotifications(updated);
                     save('likebird-notifications', updated);
-                    setNotifSettings(prev => ({ ...prev, _draftTitle: '', _draftBody: '' }));
+                    const titleEl = document.getElementById('admin-notif-title');
+                    const bodyEl = document.getElementById('admin-notif-body');
+                    if (titleEl) titleEl.value = '';
+                    if (bodyEl) bodyEl.value = '';
                     showNotification('📢 Уведомление отправлено всем');
-                  }} disabled={!notifSettings._draftTitle?.trim()} className="w-full py-2.5 mt-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
+                  }} className="w-full py-2.5 mt-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold">
                     📢 Отправить всем
                   </button>
                 </div>
@@ -9914,7 +9962,7 @@ function LikeBirdAppInner() {
           })()}
 
           {/* ===== ВКЛАДКА: ДОСТИЖЕНИЯ ===== */}
-          {adminTab === 'achievements-admin' && (() => {
+          {adminTab === 'personnel' && personnelTab === 'achievements' && (() => {
             const COND_TYPES = [
               { id: 'manual', label: '🎖️ Выдать вручную' },
               { id: 'sales_count', label: '🛒 Кол-во продаж' },
