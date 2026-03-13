@@ -8,10 +8,8 @@ import { PRODUCTS, AMBIGUOUS_PRODUCTS, ALL_PRODUCTS, CAT_ICONS } from './data/pr
 import { checkCashless, parseWorkTime, findProductByPrice, parseExpenses, parseInventory, countSoldProducts, compareInventory, parseTextReport } from './utils/parser.js';
 import { hashPassword } from './utils/auth.js';
 import { formatDate, dateForFile, useDebounce, parseRuDate, parseYear } from './utils/dates.js';
-
-// ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
-const APP_VERSION = '3.0';
-const DATA_VERSION = 2; // Increment when data structure changes
+import { APP_VERSION, DATA_VERSION } from './utils/constants.js';
+import { downloadBlob, getInitialStock, logErr } from './utils/helpers.js';
 
 // ===== УТИЛИТЫ: Синхронизация =====
 const SyncManager = {
@@ -102,37 +100,6 @@ try {
   if (saved) CUSTOM_ALIASES = JSON.parse(saved);
 } catch { /* silent */ }
 
-
-
-const getInitialStock = () => {
-  const stock = {};
-  ALL_PRODUCTS.forEach(p => { stock[p.name] = { count: 0, minStock: 3, category: p.category, emoji: p.emoji, price: p.price }; });
-  return stock;
-};
-
-// Mobile-compatible file download helper
-const downloadBlob = (blob, filename) => {
-  try {
-    const url = URL.createObjectURL(blob);
-    // Method 1: Standard download via <a> click
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { try { document.body.removeChild(a); } catch {} URL.revokeObjectURL(url); }, 1000);
-  } catch (err) {
-    // Method 2: Fallback — open in new tab
-    try {
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch { /* final fallback - do nothing */ }
-  }
-};
-// ИСПРАВЛЕНИЕ: Безопасный парсинг года (поддержка и 2-х и 4-х значных форматов)
-const logErr = (ctx, e) => { try { console.warn('[LikeBird]', ctx, e?.message || e); } catch { /* silent */ } };
 
 // ════════════════════════════════════════════════════════════════════════
 // KpiGoalsPanel — стабильный компонент для целей сотрудников
