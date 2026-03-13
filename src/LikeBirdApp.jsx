@@ -10287,6 +10287,19 @@ function LikeBirdAppInner() {
     const [invTextMode, setInvTextMode] = useState(false);
     const [invRawText, setInvRawText] = useState('');
 
+    // FIX: Lifted state from InventoryModal (was inline component — re-mount on parent re-render lost state)
+    const [mTotalBirds, setMTotalBirds] = useState(0);
+    const [mBirdsByPrice, setMBirdsByPrice] = useState({});
+    const [mItems, setMItems] = useState([]);
+    const [mTextMode, setMTextMode] = useState(false);
+
+    // FIX: Lifted state from RevisionTab (same re-mount issue)
+    const [revEditMode, setRevEditMode] = useState(false);
+    const [revTextMode, setRevTextMode] = useState(false);
+    const [revTotalBirds, setRevTotalBirds] = useState(0);
+    const [revBirdsByPrice, setRevBirdsByPrice] = useState({});
+    const [revItems, setRevItems] = useState([]);
+
     const inventory = myShift?.inventory || null;
     const isAdmin = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin;
     
@@ -10343,93 +10356,39 @@ function LikeBirdAppInner() {
     // ═══ Bird Price Editor ═══
     // ═══ Items Editor (3D / Мех / Кастомные — by name) ═══
     // ═══ Text Input Mode ═══
-    // ═══ Inventory Modal (after shift open) ═══
-    const InventoryModal = () => {
-      if (!showInventoryModal) return null;
-      const [mTotalBirds, setMTotalBirds] = useState(0);
-      const [mBirdsByPrice, setMBirdsByPrice] = useState({});
-      const [mItems, setMItems] = useState([]);
-      const [mTextMode, setMTextMode] = useState(false);
-      
-      const birdCount = Object.values(mBirdsByPrice).reduce((s,c)=>s+c, 0);
-      const itemCount = mItems.reduce((s,i)=>s+i.qty, 0);
-      const totalCount = (mTotalBirds || birdCount) + itemCount;
-      
-      if (mTextMode) {
-        return (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInventoryModal(false)}>
-            <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto p-4" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-bold mb-3">📋 Текстовый ввод</h3>
-              <RevisionTextInput onSave={(parsed) => {
-                saveInventoryData(parsed, invPhotoUrl);
-                setShowInventoryModal(false); setInvPhotoUrl(null);
-              }} onCancel={() => setMTextMode(false)} />
-            </div>
-          </div>
-        );
-      }
-      
-      return (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInventoryModal(false)}>
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-4 rounded-t-2xl">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h3 className="text-lg font-bold">📋 Ревизия при открытии</h3>
-                  <p className="text-white/70 text-sm">Укажите количество товара</p>
-                </div>
-                {totalCount > 0 && <span className="bg-white/20 px-3 py-1 rounded-full text-sm font-bold">{totalCount} шт</span>}
-              </div>
-            </div>
-            <div className="p-4 space-y-3">
-              <BirdPriceEditor birdsByPrice={mBirdsByPrice} setBirdsByPrice={setMBirdsByPrice} totalBirds={mTotalBirds} setTotalBirds={setMTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
-              <ItemsEditor items={mItems} setItems={setMItems} otherProducts={otherProducts} darkMode={darkMode} />
-              
-              {/* Photo */}
-              {invPhotoUrl ? (
-                <div className="relative">
-                  <img src={invPhotoUrl} alt="Витрина" className="w-full h-28 object-cover rounded-xl" />
-                  <button onClick={() => setInvPhotoUrl(null)} className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full text-xs flex items-center justify-center">✕</button>
-                </div>
-              ) : (
-                <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
-                  <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
-                  <input type="file" accept="image/*" capture="environment" onChange={handleInvPhoto} className="hidden" />
-                </label>
-              )}
-              
-              <div className="flex gap-2">
-                <button onClick={() => setMTextMode(true)} className="py-3 px-4 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-200">📝 Текстом</button>
-                <button onClick={() => setShowInventoryModal(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Пропустить</button>
-                <button onClick={() => {
-                    saveInventoryData({ totalBirds: mTotalBirds, birdsByPrice: mBirdsByPrice, items: mItems }, invPhotoUrl);
-                    setShowInventoryModal(false); setInvPhotoUrl(null);
-                  }} disabled={totalCount === 0}
-                  className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
-                  ✅ Сохранить
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
+    // FIX: InventoryModal state lifted to ShiftView level (was inline component causing state loss)
+    const openInventoryModal = () => {
+      setMTotalBirds(0); setMBirdsByPrice({}); setMItems([]); setMTextMode(false);
+      setShowInventoryModal(true);
     };
+    const mBirdCount = Object.values(mBirdsByPrice).reduce((s,c)=>s+c, 0);
+    const mItemCount = mItems.reduce((s,i)=>s+i.qty, 0);
+    const mTotalCount = (mTotalBirds || mBirdCount) + mItemCount;
     
     // ═══ Revision Tab ═══
-    const RevisionTab = () => {
-      const [editMode, setEditMode] = useState(false);
-      const [textMode, setTextMode] = useState(false);
-      const [totalBirds, setTotalBirds] = useState(() => inventory?.totalBirds || 0);
-      const [birdsByPrice, setBirdsByPrice] = useState(() => inventory?.birdsByPrice ? {...inventory.birdsByPrice} : {});
-      const [items, setItems] = useState(() => inventory?.items ? [...inventory.items] : []);
-      
-      const birdCount = Object.values(birdsByPrice).reduce((s,c)=>s+c, 0);
-      const itemCount = items.reduce((s,i)=>s+i.qty, 0);
-      
+    // FIX: RevisionTab state lifted to ShiftView level (was inline component causing state loss on re-render)
+    const revBirdCount = Object.values(revBirdsByPrice).reduce((s,c)=>s+c, 0);
+    const revItemCount = revItems.reduce((s,i)=>s+i.qty, 0);
+
+    // Sync revision state when inventory changes (e.g. first load)
+    // Initialize revision state when entering the revision tab
+    const prevShiftTabRef = useRef(null);
+    useEffect(() => {
+      if (shiftTab === 'revision' && prevShiftTabRef.current !== 'revision') {
+        setRevTotalBirds(inventory?.totalBirds || 0);
+        setRevBirdsByPrice(inventory?.birdsByPrice ? {...inventory.birdsByPrice} : {});
+        setRevItems(inventory?.items ? [...inventory.items] : []);
+        setRevEditMode(false);
+        setRevTextMode(false);
+      }
+      prevShiftTabRef.current = shiftTab;
+    }, [shiftTab]);
+
+    const renderRevisionTab = () => {
       // No inventory — creation mode
-      if (!inventory && !editMode) {
-        if (textMode) {
-          return <RevisionTextInput onSave={(parsed) => { saveInventoryData(parsed, null); setTextMode(false); }} onCancel={() => setTextMode(false)} />;
+      if (!inventory && !revEditMode) {
+        if (revTextMode) {
+          return <RevisionTextInput onSave={(parsed) => { saveInventoryData(parsed, null); setRevTextMode(false); }} onCancel={() => setRevTextMode(false)} />;
         }
         return (
           <div className="space-y-3">
@@ -10439,8 +10398,8 @@ function LikeBirdAppInner() {
               <p className="text-sm text-purple-500 mt-1">Укажите количество товара на витрине</p>
             </div>
             
-            <BirdPriceEditor birdsByPrice={birdsByPrice} setBirdsByPrice={setBirdsByPrice} totalBirds={totalBirds} setTotalBirds={setTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
-            <ItemsEditor items={items} setItems={setItems} otherProducts={otherProducts} darkMode={darkMode} />
+            <BirdPriceEditor birdsByPrice={revBirdsByPrice} setBirdsByPrice={setRevBirdsByPrice} totalBirds={revTotalBirds} setTotalBirds={setRevTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
+            <ItemsEditor items={revItems} setItems={setRevItems} otherProducts={otherProducts} darkMode={darkMode} />
             
             <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
               <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
@@ -10448,12 +10407,12 @@ function LikeBirdAppInner() {
             </label>
             
             <div className="flex gap-2">
-              <button onClick={() => setTextMode(true)} className="py-3 px-4 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600">📝 Текстом</button>
+              <button onClick={() => setRevTextMode(true)} className="py-3 px-4 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600">📝 Текстом</button>
               <button onClick={() => {
-                  if ((totalBirds || birdCount) === 0 && itemCount === 0) { showNotification('Введите количество', 'error'); return; }
-                  saveInventoryData({ totalBirds, birdsByPrice, items }, invPhotoUrl);
+                  if ((revTotalBirds || revBirdCount) === 0 && revItemCount === 0) { showNotification('Введите количество', 'error'); return; }
+                  saveInventoryData({ totalBirds: revTotalBirds, birdsByPrice: revBirdsByPrice, items: revItems }, invPhotoUrl);
                   setInvPhotoUrl(null);
-                }} disabled={(totalBirds || birdCount) === 0 && itemCount === 0}
+                }} disabled={(revTotalBirds || revBirdCount) === 0 && revItemCount === 0}
                 className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
                 ✅ Сохранить
               </button>
@@ -10463,22 +10422,22 @@ function LikeBirdAppInner() {
       }
       
       // Edit mode
-      if (editMode) {
-        if (textMode) {
-          return <RevisionTextInput onSave={(parsed) => { saveInventoryData(parsed, null); setEditMode(false); setTextMode(false); }} onCancel={() => setTextMode(false)} />;
+      if (revEditMode) {
+        if (revTextMode) {
+          return <RevisionTextInput onSave={(parsed) => { saveInventoryData(parsed, null); setRevEditMode(false); setRevTextMode(false); }} onCancel={() => setRevTextMode(false)} />;
         }
         return (
           <div className="space-y-3">
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
               <p className="font-bold text-purple-700 text-sm">✏️ Редактирование ревизии</p>
-              {((totalBirds||birdCount) + itemCount) > 0 && <span className="text-xs text-purple-500">{(totalBirds||birdCount) + itemCount} шт</span>}
+              {((revTotalBirds||revBirdCount) + revItemCount) > 0 && <span className="text-xs text-purple-500">{(revTotalBirds||revBirdCount) + revItemCount} шт</span>}
             </div>
-            <BirdPriceEditor birdsByPrice={birdsByPrice} setBirdsByPrice={setBirdsByPrice} totalBirds={totalBirds} setTotalBirds={setTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
-            <ItemsEditor items={items} setItems={setItems} otherProducts={otherProducts} darkMode={darkMode} />
+            <BirdPriceEditor birdsByPrice={revBirdsByPrice} setBirdsByPrice={setRevBirdsByPrice} totalBirds={revTotalBirds} setTotalBirds={setRevTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
+            <ItemsEditor items={revItems} setItems={setRevItems} otherProducts={otherProducts} darkMode={darkMode} />
             <div className="flex gap-2">
-              <button onClick={() => setTextMode(true)} className="py-3 px-3 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600">📝</button>
-              <button onClick={() => setEditMode(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
-              <button onClick={() => { saveInventoryData({ totalBirds, birdsByPrice, items }, null); setEditMode(false); }}
+              <button onClick={() => setRevTextMode(true)} className="py-3 px-3 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600">📝</button>
+              <button onClick={() => setRevEditMode(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Отмена</button>
+              <button onClick={() => { saveInventoryData({ totalBirds: revTotalBirds, birdsByPrice: revBirdsByPrice, items: revItems }, null); setRevEditMode(false); }}
                 className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold">💾 Сохранить</button>
             </div>
           </div>
@@ -10487,6 +10446,7 @@ function LikeBirdAppInner() {
       
       // View mode
       const inv = inventory;
+      if (!inv) return null;
       const invBirdCount = Object.values(inv.birdsByPrice || {}).reduce((s,c)=>s+c, 0);
       const invItemCount = (inv.items || []).reduce((s,i)=>s+i.qty, 0);
       
@@ -10599,10 +10559,10 @@ function LikeBirdAppInner() {
           </label>
           
           <button onClick={() => {
-            setTotalBirds(inv.totalBirds || 0);
-            setBirdsByPrice(inv.birdsByPrice ? {...inv.birdsByPrice} : {});
-            setItems(inv.items ? [...inv.items] : []);
-            setEditMode(true);
+            setRevTotalBirds(inv.totalBirds || 0);
+            setRevBirdsByPrice(inv.birdsByPrice ? {...inv.birdsByPrice} : {});
+            setRevItems(inv.items ? [...inv.items] : []);
+            setRevEditMode(true);
           }} className="w-full py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2">
             <Edit3 className="w-4 h-4" /> Обновить ревизию
           </button>
@@ -10690,7 +10650,7 @@ function LikeBirdAppInner() {
               <input type="file" accept="image/*" capture="environment" onChange={handleShiftPhoto} className="hidden" />
             </label>
           )}
-          <button onClick={() => { const wasOpen = shiftPhotoMode === 'open'; setShiftPhotoMode(null); if (wasOpen && !myShift?.inventory) setShowInventoryModal(true); }} className="w-full bg-gray-200 py-2 rounded-xl font-semibold hover:bg-gray-300">
+          <button onClick={() => { const wasOpen = shiftPhotoMode === 'open'; setShiftPhotoMode(null); if (wasOpen && !myShift?.inventory) openInventoryModal(); }} className="w-full bg-gray-200 py-2 rounded-xl font-semibold hover:bg-gray-300">
             {shiftPhotos[shiftKey + '_' + shiftPhotoMode] ? 'Готово' : 'Пропустить'}
           </button>
         </div>
@@ -10826,7 +10786,7 @@ function LikeBirdAppInner() {
                       </button>
                     )}
                     {!inventory && myShift.status === 'open' && (
-                      <button onClick={() => setShowInventoryModal(true)} className="mt-2 bg-yellow-500/30 border border-yellow-300/50 rounded-lg px-3 py-1.5 text-xs text-white w-full text-center hover:bg-yellow-500/40 animate-pulse">
+                      <button onClick={() => openInventoryModal()} className="mt-2 bg-yellow-500/30 border border-yellow-300/50 rounded-lg px-3 py-1.5 text-xs text-white w-full text-center hover:bg-yellow-500/40 animate-pulse">
                         ⚠️ Ревизия не проведена — нажмите чтобы заполнить
                       </button>
                     )}
@@ -10932,7 +10892,7 @@ function LikeBirdAppInner() {
 
           {/* ── ВКЛАДКА: РЕВИЗИЯ ── */}
           {shiftTab === 'revision' && (
-            <RevisionTab />
+            renderRevisionTab()
           )}
 
           {/* ── ВКЛАДКА: МОЙ ОТЧЁТ (редактирование перед отправкой) ── */}
@@ -11088,7 +11048,60 @@ function LikeBirdAppInner() {
         </div>
 
         <ShiftPhotoPrompt />
-        <InventoryModal />
+        {/* FIX: InventoryModal inlined — state lifted to ShiftView to prevent re-mount */}
+        {showInventoryModal && (mTextMode ? (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInventoryModal(false)}>
+            <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto p-4" onClick={e => e.stopPropagation()}>
+              <h3 className="text-lg font-bold mb-3">📋 Текстовый ввод</h3>
+              <RevisionTextInput onSave={(parsed) => {
+                saveInventoryData(parsed, invPhotoUrl);
+                setShowInventoryModal(false); setInvPhotoUrl(null);
+              }} onCancel={() => setMTextMode(false)} />
+            </div>
+          </div>
+        ) : (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInventoryModal(false)}>
+            <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-4 rounded-t-2xl">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-lg font-bold">📋 Ревизия при открытии</h3>
+                    <p className="text-white/70 text-sm">Укажите количество товара</p>
+                  </div>
+                  {mTotalCount > 0 && <span className="bg-white/20 px-3 py-1 rounded-full text-sm font-bold">{mTotalCount} шт</span>}
+                </div>
+              </div>
+              <div className="p-4 space-y-3">
+                <BirdPriceEditor birdsByPrice={mBirdsByPrice} setBirdsByPrice={setMBirdsByPrice} totalBirds={mTotalBirds} setTotalBirds={setMTotalBirds} birdPriceTiers={birdPriceTiers} darkMode={darkMode} isAdmin={isAdmin} />
+                <ItemsEditor items={mItems} setItems={setMItems} otherProducts={otherProducts} darkMode={darkMode} />
+                
+                {invPhotoUrl ? (
+                  <div className="relative">
+                    <img src={invPhotoUrl} alt="Витрина" className="w-full h-28 object-cover rounded-xl" />
+                    <button onClick={() => setInvPhotoUrl(null)} className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full text-xs flex items-center justify-center">✕</button>
+                  </div>
+                ) : (
+                  <label className="flex items-center justify-center h-12 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-purple-400 hover:bg-purple-50">
+                    <Camera className="w-4 h-4 text-gray-400 mr-2" /><span className="text-sm text-gray-500">📷 Фото витрины</span>
+                    <input type="file" accept="image/*" capture="environment" onChange={handleInvPhoto} className="hidden" />
+                  </label>
+                )}
+                
+                <div className="flex gap-2">
+                  <button onClick={() => setMTextMode(true)} className="py-3 px-4 bg-gray-100 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-200">📝 Текстом</button>
+                  <button onClick={() => setShowInventoryModal(false)} className="flex-1 py-3 bg-gray-200 rounded-xl font-semibold">Пропустить</button>
+                  <button onClick={() => {
+                      saveInventoryData({ totalBirds: mTotalBirds, birdsByPrice: mBirdsByPrice, items: mItems }, invPhotoUrl);
+                      setShowInventoryModal(false); setInvPhotoUrl(null);
+                    }} disabled={mTotalCount === 0}
+                    className="flex-1 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-xl font-bold disabled:opacity-50">
+                    ✅ Сохранить
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
         {/* Модал выбора времени */}
         {showTimeModal && (
           <div className="fixed inset-0 bg-black/50 flex items-end z-50 p-4">
