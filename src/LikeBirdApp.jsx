@@ -7,6 +7,7 @@ import { calculateSalary, isBelowBasePrice } from './utils/salary.js';
 import { PRODUCTS, AMBIGUOUS_PRODUCTS, ALL_PRODUCTS, CAT_ICONS } from './data/products.js';
 import { checkCashless, parseWorkTime, findProductByPrice, parseExpenses, parseInventory, countSoldProducts, compareInventory, parseTextReport } from './utils/parser.js';
 import { hashPassword } from './utils/auth.js';
+import { formatDate, dateForFile, useDebounce, parseRuDate, parseYear } from './utils/dates.js';
 
 // ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
 const APP_VERSION = '3.0';
@@ -109,8 +110,6 @@ const getInitialStock = () => {
   return stock;
 };
 
-const formatDate = (date) => typeof date === 'string' ? date : date.toLocaleDateString('ru-RU');
-
 // Mobile-compatible file download helper
 const downloadBlob = (blob, filename) => {
   try {
@@ -132,38 +131,8 @@ const downloadBlob = (blob, filename) => {
     } catch { /* final fallback - do nothing */ }
   }
 };
-const dateForFile = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
-
 // ИСПРАВЛЕНИЕ: Безопасный парсинг года (поддержка и 2-х и 4-х значных форматов)
 const logErr = (ctx, e) => { try { console.warn('[LikeBird]', ctx, e?.message || e); } catch { /* silent */ } };
-
-const useDebounce = (value, delay = 300) => {
-  const [deb, setDeb] = React.useState(value);
-  React.useEffect(() => { const t = setTimeout(() => setDeb(value), delay); return () => clearTimeout(t); }, [value, delay]);
-  return deb;
-};
-
-const parseRuDate = (dateStr) => {
-  if (!dateStr) return new Date(0);
-  if (typeof dateStr === 'number') return new Date(dateStr);
-  try {
-    const [datePart, timePart] = String(dateStr).split(',');
-    const [d, m, y] = datePart.trim().split('.');
-    if (!d || !m || !y) return new Date(0);
-    const fullYear = y.length === 4 ? parseInt(y, 10) : 2000 + parseInt(y, 10);
-    if (timePart) {
-      const [h, min] = timePart.trim().split(':');
-      return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10), parseInt(h, 10) || 0, parseInt(min, 10) || 0);
-    }
-    return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
-  } catch { return new Date(0); }
-};
-
-const parseYear = (y) => {
-  if (!y) return new Date().getFullYear().toString();
-  if (y.length === 4) return y;
-  return `20${y}`;
-};
 
 // ════════════════════════════════════════════════════════════════════════
 // KpiGoalsPanel — стабильный компонент для целей сотрудников
