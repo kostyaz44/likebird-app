@@ -6,19 +6,11 @@ import { fbSave, fbSubscribe, fbGet, fbSetPresence, fbSubscribePresence, SYNC_KE
 import { calculateSalary, isBelowBasePrice } from './utils/salary.js';
 import { PRODUCTS, AMBIGUOUS_PRODUCTS, ALL_PRODUCTS, CAT_ICONS } from './data/products.js';
 import { checkCashless, parseWorkTime, findProductByPrice, parseExpenses, parseInventory, countSoldProducts, compareInventory, parseTextReport } from './utils/parser.js';
+import { hashPassword } from './utils/auth.js';
 
 // ===== ВЕРСИЯ ПРИЛОЖЕНИЯ =====
 const APP_VERSION = '3.0';
 const DATA_VERSION = 2; // Increment when data structure changes
-
-// ===== УТИЛИТЫ: Хэширование пароля =====
-const hashPassword = async (password) => {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + 'likebird-salt-2024');
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-};
 
 // ===== УТИЛИТЫ: Синхронизация =====
 const SyncManager = {
