@@ -23,11 +23,7 @@ export default function TextImportView() {
   const handleTeachSearch = (value) => { setTeachProduct(value); if (value.length >= 2) setTeachSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setTeachSuggestions([]); };
   const saveTeachAlias = (alias, productName) => {
     if (!alias.trim() || !productName) { showNotification('Заполните алиас и товар', 'error'); return; }
-    const updated = { ...customAliases, [alias.toLowerCase().trim()]: productName };
-    setCustomAliases(updated);
-    localStorage.setItem('likebird-custom-aliases', JSON.stringify(updated));
-    CUSTOM_ALIASES = updated; // Обновляем глобальную переменную для parseTextReport
-    showNotification(`Алиас «${alias}» → ${productName} сохранён`);
+    saveAlias(alias, productName);
     setTeachingIdx(null); setTeachAlias(''); setTeachProduct(''); setTeachSuggestions([]);
   };
   const fixUnrecognizedInImport = (idx, newName) => {
