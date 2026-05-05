@@ -422,4 +422,5 @@ export default function DayReportView() {
       </div>
       <AdminReportModal />
     </div>
+  );
 }

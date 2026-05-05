@@ -952,4 +952,5 @@ export default function GameView() {
       </div>
       <div ref={containerRef} className="flex-1 relative" />
     </div>
+  );
 }

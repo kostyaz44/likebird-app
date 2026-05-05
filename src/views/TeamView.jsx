@@ -686,4 +686,5 @@ export default function TeamView() {
         })()}
       </div>
     </div>
+  );
 }

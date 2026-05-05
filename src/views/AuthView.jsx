@@ -241,4 +241,5 @@ export default function AuthView() {
         </div>
       </div>
     </div>
+  );
 }

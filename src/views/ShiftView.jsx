@@ -890,4 +890,5 @@ export default function ShiftView() {
         </div>
       )}
     </div>
+  );
 }

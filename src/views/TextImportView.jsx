@@ -182,4 +182,5 @@ export default function TextImportView() {
         </>)}
       </div>
     </div>
+  );
 }

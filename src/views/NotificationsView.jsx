@@ -92,4 +92,5 @@ export default function NotificationsView() {
         )}
       </div>
     </div>
+  );
 }

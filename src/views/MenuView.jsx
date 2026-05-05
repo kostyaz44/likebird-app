@@ -73,4 +73,5 @@ export default function MenuView() {
         </div>
       </div>
     </div>
+  );
 }

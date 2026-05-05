@@ -626,4 +626,5 @@ export default function StockView() {
         <div className="bg-cyan-50 rounded-xl p-4"><p className="font-bold text-cyan-700">Итого в категории:</p><p className="text-2xl font-bold">{categoryItems.reduce((s, [_, d]) => s + d.count, 0)} шт</p></div>
       </div>
     </div>
+  );
 }

@@ -379,4 +379,5 @@ export default function AnalyticsView() {
         )}
       </div>
     </div>
+  );
 }

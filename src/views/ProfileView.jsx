@@ -649,4 +649,5 @@ export default function ProfileView() {
 
       </div>
     </div>
+  );
 }

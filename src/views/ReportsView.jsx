@@ -148,4 +148,5 @@ export default function ReportsView() {
         ) : (<div className="text-center py-10"><Calendar className="w-12 h-12 mx-auto text-gray-300 mb-2" /><p className="text-gray-400">{searchQuery || filterEmployee || filterLocation ? 'Ничего не найдено' : 'Нет записей за этот день'}</p></div>)}
       </div>
     </div>
+  );
 }
