@@ -1,9 +1,29 @@
 import React, { useState, useMemo } from 'react';
-import { Search, ArrowLeft, Trash2, X, ChevronLeft, ChevronRight, Settings, Calendar } from 'lucide-react';
+import { Search, ArrowLeft, Trash2, X, ChevronLeft, ChevronRight, Settings, Calendar, Edit3 } from 'lucide-react';
 import { parseYear } from '../utils/dates.js';
 import { isBelowBasePrice } from '../utils/salary.js';
-import FixUnrecognizedButton from '../components/reports/FixUnrecognizedButton.jsx';
 import { useApp } from '../context/AppContext';
+
+// Inline-компонент: исправление нераспознанного товара (раньше жил в LikeBirdApp.jsx)
+function FixUnrecognizedButton({ report }) {
+  const { DYNAMIC_ALL_PRODUCTS, fixUnrecognizedReport } = useApp();
+  const [editing, setEditing] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  if (!report.isUnrecognized) return null;
+  const handleSearch = (value) => { setNewName(value); if (value.length >= 2) setSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
+  if (editing) return (
+    <div className="mt-2 space-y-2">
+      <div className="flex gap-2">
+        <input type="text" value={newName} onChange={(e) => handleSearch(e.target.value)} placeholder="Название товара" className="flex-1 px-2 py-1 border-2 border-blue-300 rounded text-sm" autoFocus />
+        <button onClick={() => { if (fixUnrecognizedReport(report.id, newName)) { setEditing(false); setNewName(''); setSuggestions([]); } }} className="px-3 py-1 bg-green-500 text-white rounded text-sm font-bold">✓</button>
+        <button onClick={() => { setEditing(false); setNewName(''); setSuggestions([]); }} className="px-3 py-1 bg-gray-400 text-white rounded text-sm">✕</button>
+      </div>
+      {suggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{suggestions.map((p, i) => (<button key={i} onClick={() => { if (fixUnrecognizedReport(report.id, p.name)) { setEditing(false); setNewName(''); setSuggestions([]); } }} className="w-full text-left px-3 py-2 hover:bg-amber-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-amber-600 font-semibold">{p.price}₽</span></button>))}</div>}
+    </div>
+  );
+  return <button onClick={() => setEditing(true)} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить название</button>;
+}
 
 export default function ReportsView() {
   const { darkMode, deleteReport, getAllDates, getEffectiveSalary, getProductName, getReportsByDate, navigateDate, reports, selectedDate, setCurrentView, setSelectedDate } = useApp();
