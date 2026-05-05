@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { BarChart3, Plus, ArrowLeft, Trash2, X, AlertTriangle, AlertCircle, ChevronLeft, ChevronRight, Copy, Lock } from 'lucide-react';
 import { CAT_ICONS } from '../data/products.js';
 import { calculateSalary, isBelowBasePrice } from '../utils/salary.js';
+import FixUnrecognizedButton from '../components/reports/FixUnrecognizedButton.jsx';
+import SalaryDecisionButtons from '../components/reports/SalaryDecisionButtons.jsx';
 import { useApp } from '../context/AppContext';
 
 export default function DayReportView() {

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Search, ArrowLeft, Trash2, X, ChevronLeft, ChevronRight, Settings, Calendar } from 'lucide-react';
 import { parseYear } from '../utils/dates.js';
 import { isBelowBasePrice } from '../utils/salary.js';
+import FixUnrecognizedButton from '../components/reports/FixUnrecognizedButton.jsx';
 import { useApp } from '../context/AppContext';
 
 export default function ReportsView() {
