@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, ArrowLeft, Trash2, FileInput, ChevronRight, Edit3, Package, Camera } from 'lucide-react';
-import { BirdPriceEditor } from '../components/inventory/BirdPriceEditor.jsx';
-import { ItemsEditor } from '../components/inventory/ItemsEditor.jsx';
-import { RevisionTextInput } from '../components/inventory/RevisionTextInput.jsx';
+import BirdPriceEditor from '../components/inventory/BirdPriceEditor.jsx';
+import ItemsEditor from '../components/inventory/ItemsEditor.jsx';
+import RevisionTextInput from '../components/inventory/RevisionTextInput.jsx';
 import { formatDate } from '../utils/dates.js';
 import { calculateSalary } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
