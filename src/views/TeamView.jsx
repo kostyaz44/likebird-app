@@ -4,7 +4,7 @@ import { formatDate, parseRuDate, parseYear } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
 
 export default function TeamView() {
-  const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manualFilter, manuals, presenceData, profilesData, reactionMsgId, reports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setManualFilter, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
+  const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, reports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
 
   const activeEmployees = employees.filter(e => e.active).map(e => e.name);
   const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
