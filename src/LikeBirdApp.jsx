@@ -6090,7 +6090,16 @@ function LikeBirdAppInner() {
 
   // ===== АВТОРИЗАЦИЯ =====
   if (!isAuthenticated) {
-    return <AuthView />;
+    const authContext = {
+      employees, inviteCodes, save,
+      setAuthName, setCurrentUser, setEmployeeName,
+      setEmployees, setInviteCodes, setIsAuthenticated,
+    };
+    return (
+      <AppProvider value={authContext}>
+        <AuthView />
+      </AppProvider>
+    );
   }
 
   // ===== APP CONTEXT: собираем все данные и функции для будущих выносимых компонентов =====
