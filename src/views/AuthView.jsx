@@ -28,8 +28,13 @@ export default function AuthView() {
 
     // Читаем коды НАПРЯМУЮ из Firebase — без кэша localStorage
     const normalizedCode = inviteCode.trim().toUpperCase();
-    let codes = (await fbGet('likebird-invite-codes')) || [];
-    if (!Array.isArray(codes)) codes = [];
+    let codes = [];
+    try {
+      const fbResult = await fbGet('likebird-invite-codes');
+      if (Array.isArray(fbResult)) codes = fbResult;
+    } catch (e) {
+      console.warn('[AuthView] fbGet codes failed:', e);
+    }
 
     // Дополняем из localStorage на случай если Firebase недоступен
     if (codes.length === 0) {
@@ -40,8 +45,13 @@ export default function AuthView() {
     if (!validCode) { setError('Неверный или использованный код приглашения'); return; }
 
     // Проверяем что логин не занят — тоже читаем из Firebase напрямую
-    let users = (await fbGet('likebird-users')) || [];
-    if (!Array.isArray(users)) users = [];
+    let users = [];
+    try {
+      const fbResult = await fbGet('likebird-users');
+      if (Array.isArray(fbResult)) users = fbResult;
+    } catch (e) {
+      console.warn('[AuthView] fbGet users failed:', e);
+    }
     if (users.length === 0) {
       try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { /* silent */ }
     }
@@ -89,8 +99,14 @@ export default function AuthView() {
 
     setError('Входим...');
     // Читаем пользователей напрямую из Firebase для актуальности
-    let users = (await fbGet('likebird-users')) || [];
-    if (!Array.isArray(users) || users.length === 0) {
+    let users = [];
+    try {
+      const fbResult = await fbGet('likebird-users');
+      if (Array.isArray(fbResult)) users = fbResult;
+    } catch (e) {
+      console.warn('[AuthView] fbGet failed, fallback to localStorage:', e);
+    }
+    if (users.length === 0) {
       try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { /* silent */ }
     }
     // Кэшируем локально
