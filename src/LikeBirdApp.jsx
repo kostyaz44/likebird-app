@@ -316,6 +316,8 @@ function LikeBirdAppInner() {
   // НОВОЕ: Расширенные состояния для админ-панели
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  // Админ-импорт: позволяет админу импортировать отчёт за любого сотрудника не меняя свою сессию
+  const [adminImportMode, setAdminImportMode] = useState(false);
   const [adminTab, setAdminTab] = useState('analytics');
   const [challengeForm, setChallengeForm] = useState({ title: '', icon: '🏆', type: 'daily', metric: 'sales_count', target: 10, product: '', reward: '' });
   const [teamTab, setTeamTab] = useState('online');
@@ -1907,11 +1909,18 @@ function LikeBirdAppInner() {
     parsedSales.forEach(s => { if (newStock[s.product.name]) newStock[s.product.name] = {...newStock[s.product.name], count: Math.max(0, newStock[s.product.name].count - 1)}; });
     updateStock(newStock);
     updateReports([...newReports, ...reports]);
-    localStorage.setItem('likebird-employee', empName);
-    setEmployeeName(empName); // Сохраняем в глобальное состояние
-    showNotification(`Сохранено ${parsedSales.length + unrecognizedSales.length} продаж`);
+    // Если админ импортит за другого сотрудника — НЕ меняем свою сессию
+    if (!adminImportMode) {
+      localStorage.setItem('likebird-employee', empName);
+      setEmployeeName(empName); // Сохраняем в глобальное состояние
+    } else {
+      logAction('admin-import', JSON.stringify({ admin: employeeName, importedFor: empName, salesCount: parsedSales.length + unrecognizedSales.length }));
+    }
+    showNotification(adminImportMode ? `[Админ] Сохранено ${parsedSales.length + unrecognizedSales.length} продаж за ${empName}` : `Сохранено ${parsedSales.length + unrecognizedSales.length} продаж`);
     setTextReport(''); setParsedSales([]); setUnrecognizedSales([]); setParsedWorkTime(null); setCalculatedTotals(null); setParsedExpenses([]); setParsedInventory({ start: {}, end: {} }); setInventoryDiscrepancies([]);
-    setCurrentView('menu');
+    // Сбрасываем флаг админ-импорта после сохранения
+    if (adminImportMode) setAdminImportMode(false);
+    setCurrentView(adminImportMode ? 'admin' : 'menu');
   };
 
   const deleteReport = (id) => {
@@ -6126,7 +6135,7 @@ function LikeBirdAppInner() {
     isAuthenticated, authName, authLoading,
     analyticsPeriod, manualFilter, chatLimit,
     lbPeriod, chatText, showMentions, reactionMsgId, chatEndRef,
-    currentView,
+    currentView, adminImportMode,
     // --- Мутабельные глобальные (для Views, которые их используют) ---
     DYNAMIC_ALL_PRODUCTS, CUSTOM_ALIASES,
 
@@ -6184,6 +6193,7 @@ function LikeBirdAppInner() {
     setSalaryDecisions, setOwnCardTransfers, setStockHistory,
     setWriteOffs, setTimeOff, setEmployeeRatings, setChatMessages,
     setIsOnline,
+    setAdminImportMode,
   };
 
   return (
