@@ -15,6 +15,9 @@ export default function TextImportView() {
   const [editName, setEditName] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [localName, setLocalName] = useState(() => adminImportMode ? '' : (employeeName || '')); // В админ-режиме имя стартует пустым
+  // Дата отчёта (только для админ-импорта; формат YYYY-MM-DD для input[type=date])
+  const todayISO = new Date().toISOString().split('T')[0];
+  const [customDate, setCustomDate] = useState(todayISO);
   const [teachingIdx, setTeachingIdx] = useState(null); // Индекс нераспознанной позиции для обучения
   const [teachAlias, setTeachAlias] = useState('');
   const [teachProduct, setTeachProduct] = useState('');
@@ -123,6 +126,23 @@ export default function TextImportView() {
             <input type="text" value={localName} onChange={(e) => setLocalName(e.target.value)} placeholder="Введите имя" className="w-full p-3 border-2 rounded-lg focus:border-amber-500 focus:outline-none" />
           )}
         </div>
+        {adminImportMode && (
+          <div className={`rounded-xl p-4 shadow border-2 border-purple-200 ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+            <label className="block text-sm font-semibold mb-2">📅 Дата отчёта</label>
+            <input 
+              type="date" 
+              value={customDate} 
+              onChange={(e) => setCustomDate(e.target.value)} 
+              max={todayISO}
+              className={`w-full p-3 border-2 rounded-lg focus:border-purple-500 focus:outline-none ${darkMode ? 'bg-gray-700 text-white' : ''}`}
+            />
+            <p className="text-xs text-gray-500 mt-2">
+              {customDate === todayISO 
+                ? '✓ Сегодня — стандартное сохранение' 
+                : `⚠ Задним числом: ${customDate.split('-').reverse().join('.')}`}
+            </p>
+          </div>
+        )}
         <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <label className="block text-sm font-semibold mb-2">Текст отчёта</label>
           <textarea 
@@ -188,7 +208,8 @@ export default function TextImportView() {
               showNotification('Введите имя сотрудника', 'error');
               return;
             }
-            saveParsedReports(localName.trim());
+            // В админ-режиме передаём кастомную дату; в обычном — undefined (используется new Date())
+            saveParsedReports(localName.trim(), adminImportMode ? customDate : undefined);
           }} className="w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white py-4 rounded-xl font-bold shadow-lg hover:shadow-xl">✅ Сохранить ({parsedSales.length + unrecognizedSales.length} продаж)</button>
         </>)}
       </div>
