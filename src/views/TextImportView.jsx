@@ -6,14 +6,15 @@ import { calculateSalary } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
 
 export default function TextImportView() {
-  const { CUSTOM_ALIASES, DYNAMIC_ALL_PRODUCTS, calculatedTotals, customAliases, darkMode, employeeName, handleParseText, inventoryDiscrepancies, parsedExpenses, parsedInventory, parsedSales, parsedWorkTime, salarySettings, saveAlias, saveParsedReports, setCalculatedTotals, setCurrentView, setInventoryDiscrepancies, setParsedExpenses, setParsedInventory, setParsedSales, setParsedWorkTime, setTextReport, setUnrecognizedSales, showNotification, textReport, unrecognizedSales } = useApp();
+  const { CUSTOM_ALIASES, DYNAMIC_ALL_PRODUCTS, adminImportMode, calculatedTotals, customAliases, darkMode, employeeName, employees, handleParseText, inventoryDiscrepancies, parsedExpenses, parsedInventory, parsedSales, parsedWorkTime, salarySettings, saveAlias, saveParsedReports, setAdminImportMode, setCalculatedTotals, setCurrentView, setInventoryDiscrepancies, setParsedExpenses, setParsedInventory, setParsedSales, setParsedWorkTime, setTextReport, setUnrecognizedSales, showNotification, textReport, unrecognizedSales } = useApp();
 
+  // В админ-режиме имя стартует пустым (админ выбирает сотрудника), иначе — своё
   const [localText, setLocalText] = useState(textReport || '');
   const [ownCardImport, setOwnCardImport] = useState(false);
   const [editingIdx, setEditingIdx] = useState(null);
   const [editName, setEditName] = useState('');
   const [suggestions, setSuggestions] = useState([]);
-  const [localName, setLocalName] = useState(() => employeeName || ''); // Локальное состояние для имени
+  const [localName, setLocalName] = useState(() => adminImportMode ? '' : (employeeName || '')); // В админ-режиме имя стартует пустым
   const [teachingIdx, setTeachingIdx] = useState(null); // Индекс нераспознанной позиции для обучения
   const [teachAlias, setTeachAlias] = useState('');
   const [teachProduct, setTeachProduct] = useState('');
@@ -99,14 +100,28 @@ export default function TextImportView() {
   
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
-      <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 sticky top-0 z-10 safe-area-top">
-        <button onClick={() => { clearImport(); setCurrentView('menu'); }} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
-        <h2 className="text-xl font-bold">📝 Импорт отчёта</h2>
+      <div className={`p-4 sticky top-0 z-10 safe-area-top text-white ${adminImportMode ? 'bg-gradient-to-r from-purple-500 to-indigo-600' : 'bg-gradient-to-r from-amber-400 to-orange-500'}`}>
+        <button onClick={() => { clearImport(); if (adminImportMode) setAdminImportMode(false); setCurrentView(adminImportMode ? 'admin' : 'menu'); }} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
+        <h2 className="text-xl font-bold">{adminImportMode ? '🔧 [Админ] Импорт отчёта' : '📝 Импорт отчёта'}</h2>
+        {adminImportMode && <p className="text-xs text-white/80 mt-1">Импорт за выбранного сотрудника без смены вашей сессии</p>}
       </div>
       <div className="max-w-2xl mx-auto px-4 mt-4 space-y-4">
         <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-          <label className="block text-sm font-semibold mb-2">Имя сотрудника</label>
-          <input type="text" value={localName} onChange={(e) => setLocalName(e.target.value)} placeholder="Введите имя" className="w-full p-3 border-2 rounded-lg focus:border-amber-500 focus:outline-none" />
+          <label className="block text-sm font-semibold mb-2">{adminImportMode ? '👤 Сотрудник' : 'Имя сотрудника'}</label>
+          {adminImportMode ? (
+            <select 
+              value={localName} 
+              onChange={(e) => setLocalName(e.target.value)} 
+              className={`w-full p-3 border-2 rounded-lg focus:border-purple-500 focus:outline-none ${darkMode ? 'bg-gray-700 text-white' : ''}`}
+            >
+              <option value="">— выберите сотрудника —</option>
+              {(employees || []).filter(e => e.active !== false).map(e => (
+                <option key={e.id || e.name} value={e.name}>{e.name}{e.role === 'admin' ? ' (админ)' : ''}</option>
+              ))}
+            </select>
+          ) : (
+            <input type="text" value={localName} onChange={(e) => setLocalName(e.target.value)} placeholder="Введите имя" className="w-full p-3 border-2 rounded-lg focus:border-amber-500 focus:outline-none" />
+          )}
         </div>
         <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
           <label className="block text-sm font-semibold mb-2">Текст отчёта</label>
