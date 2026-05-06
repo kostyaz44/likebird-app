@@ -1887,12 +1887,20 @@ function LikeBirdAppInner() {
     if (!params.noRedirect) setCurrentView('shift');
   };
 
-  const saveParsedReports = (empNameParam) => {
+  const saveParsedReports = (empNameParam, customDateParam) => {
     // Используем переданное имя или глобальное состояние
     const empName = empNameParam || employeeName;
     if (!empName) { showNotification('Введите имя сотрудника', 'error'); return; }
     if (parsedSales.length === 0 && unrecognizedSales.length === 0) { showNotification('Нет продаж для сохранения', 'error'); return; }
-    const dateStr = new Date().toLocaleString('ru-RU');
+    // Дата отчёта: либо кастомная (для админ-импорта задним числом), либо сейчас
+    let dateStr;
+    if (customDateParam && /^\d{4}-\d{2}-\d{2}$/.test(customDateParam)) {
+      // YYYY-MM-DD → DD.MM.YYYY, 12:00:00 (полдень — маркер «дата выставлена вручную»)
+      const [y, m, d] = customDateParam.split('-');
+      dateStr = `${d}.${m}.${y}, 12:00:00`;
+    } else {
+      dateStr = new Date().toLocaleString('ru-RU');
+    }
     const now = Date.now();
     const newReports = [
       // FIX: добавлен tipsModel:'v2' чтобы миграция не обнулила реальные чаевые
@@ -1914,7 +1922,7 @@ function LikeBirdAppInner() {
       localStorage.setItem('likebird-employee', empName);
       setEmployeeName(empName); // Сохраняем в глобальное состояние
     } else {
-      logAction('admin-import', JSON.stringify({ admin: employeeName, importedFor: empName, salesCount: parsedSales.length + unrecognizedSales.length }));
+      logAction('admin-import', JSON.stringify({ admin: employeeName, importedFor: empName, salesCount: parsedSales.length + unrecognizedSales.length, dateUsed: dateStr }));
     }
     showNotification(adminImportMode ? `[Админ] Сохранено ${parsedSales.length + unrecognizedSales.length} продаж за ${empName}` : `Сохранено ${parsedSales.length + unrecognizedSales.length} продаж`);
     setTextReport(''); setParsedSales([]); setUnrecognizedSales([]); setParsedWorkTime(null); setCalculatedTotals(null); setParsedExpenses([]); setParsedInventory({ start: {}, end: {} }); setInventoryDiscrepancies([]);
