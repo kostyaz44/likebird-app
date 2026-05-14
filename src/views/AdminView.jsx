@@ -14,13 +14,13 @@ import {
   FileText, Plus, ArrowLeft, Trash2, X, AlertTriangle, Edit3, Package, Bell,
   Download, Upload, Settings, Calendar, CheckCircle, Shield, DollarSign, Users,
   Lock, TrendingUp, Award, MapPin, MessageCircle, Star, Key, Eye,
-  ChevronRight, Camera, BarChart3, Archive
+  ChevronRight, Camera
 } from 'lucide-react';
 import { fbSave } from '../firebase.js';
 import { calculateSalary } from '../utils/salary.js';
 import { PRODUCTS, ALL_PRODUCTS, CAT_ICONS } from '../data/products.js';
 import { hashPassword } from '../utils/auth.js';
-import { formatDate, dateForFile, parseYear } from '../utils/dates.js';
+import { formatDate, parseYear } from '../utils/dates.js';
 import { downloadBlob } from '../utils/helpers.js';
 import { SyncManager } from '../services/sync.js';
 import KpiGoalsPanel from '../components/ui/KpiGoalsPanel.jsx';
@@ -40,21 +40,17 @@ export default function AdminView() {
     shiftsData, stock, stockHistory, stockTab, totalBirds, userNotifications,
     writeOffs,
     customAliases,
-    archivedProducts, chatText,
     // --- функции бизнес-логики ---
     addBonus, addCustomProduct, addEmployee, addLocation, addPenalty,
     addStockHistoryEntry, addTimeOff, addWriteOff, checkAdminPassword,
-    clearAllData, compressImage, deleteMediaPhoto, enrichBackup, exportData,
-    generateAutoOrder,
+    clearAllData, compressImage, enrichBackup, exportData, generateAutoOrder,
     getActiveTimeOff, getAllDates, getAnalytics, getAutoOrderText,
     getCities, getCostPrice, getEffectiveSalary, getEmployeeAverageRating,
     getEmployeeBonuses, getEmployeePenalties, getEmployeeProgress,
     getLocationsByCity, getLowStockItems, getProductName,
-    importData, logAction, rateEmployee, removeAlias, removeCustomProduct,
-    removeLocation, save, saveAlias,
+    importData, logAction, rateEmployee, removeLocation, save, saveAlias,
     sendMessage, setAdminPass, setEmployeeGoal, showConfirm, showNotification,
-    toggleArchiveProduct, toggleLocationActive, updateAchievementsGranted,
-    updateAutoOrderList,
+    toggleLocationActive, updateAchievementsGranted, updateAutoOrderList,
     updateBonuses, updateChallenges, updateCustomAchievements,
     updateEmployees, updateManuals, updateProductPhotos, updateReports,
     updateSalesPlan, updateStock,
@@ -64,7 +60,6 @@ export default function AdminView() {
     setExpenses, setInviteCodes, setIsAdminUnlocked, setNotifSettings,
     setPersonnelTab, setSalaryDecisions, setSalarySettings, setScheduleData,
     setStockTab, setTotalBirds, setUserNotifications,
-    setChatText, setCustomProducts,
   } = useApp();
 
   const [passwordInput, setPasswordInput] = useState('');
