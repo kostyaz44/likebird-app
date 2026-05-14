@@ -14,7 +14,7 @@ import {
   FileText, Plus, ArrowLeft, Trash2, X, AlertTriangle, Edit3, Package, Bell,
   Download, Upload, Settings, Calendar, CheckCircle, Shield, DollarSign, Users,
   Lock, TrendingUp, Award, MapPin, MessageCircle, Star, Key, Eye,
-  ChevronRight, Camera
+  ChevronRight, Camera, BarChart3, Archive
 } from 'lucide-react';
 import { fbSave } from '../firebase.js';
 import { calculateSalary } from '../utils/salary.js';
