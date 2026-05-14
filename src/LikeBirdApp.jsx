@@ -319,6 +319,18 @@ function LikeBirdAppInner() {
   // Админ-импорт: позволяет админу импортировать отчёт за любого сотрудника не меняя свою сессию
   const [adminImportMode, setAdminImportMode] = useState(false);
   const [adminTab, setAdminTab] = useState('analytics');
+  // FIX (tabs): подвкладки админки подняты на уровень LikeBirdApp.
+  // Раньше personnelTab / stockTab / analyticsSubTab были useState внутри inline-компонента
+  // AdminView (объявлен как const AdminView = () => {...} внутри LikeBirdApp). При любом
+  // ре-рендере родителя (Firebase-подписки, presence, setReports, setStock, таймеры и т.д.)
+  // создавалась новая ссылка на функцию AdminView, React видел "другой тип компонента",
+  // полностью размонтировал старый и монтировал новый — все локальные useState сбрасывались
+  // к начальным значениям, и пользователя выбрасывало на первую вкладку раздела
+  // ("👥 Сотрудники", "📦 Товары", "📊 Сегодня"). Подняв их в state родителя, мы делаем
+  // их устойчивыми к ре-маунту AdminView. Тот же приём уже применён к adminTab и teamTab.
+  const [personnelTab, setPersonnelTab] = useState('employees');
+  const [stockTab, setStockTab] = useState('products');
+  const [analyticsSubTab, setAnalyticsSubTab] = useState('today');
   const [challengeForm, setChallengeForm] = useState({ title: '', icon: '🏆', type: 'daily', metric: 'sales_count', target: 10, product: '', reward: '' });
   const [teamTab, setTeamTab] = useState('online');
   const [employees, setEmployees] = useState([
@@ -2231,8 +2243,8 @@ function LikeBirdAppInner() {
     const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Птички-свистульки', emoji: '🎁' });
     const [editingManual, setEditingManual] = useState(null);
     const [newManual, setNewManual] = useState({ title: '', category: 'sales', content: '', isPinned: false });
-    const [personnelTab, setPersonnelTab] = useState('employees');
-    const [analyticsSubTab, setAnalyticsSubTab] = useState('today');
+    // FIX (tabs): personnelTab и analyticsSubTab подняты на уровень LikeBirdApp (см. там же
+    // рядом с adminTab) — иначе при ре-маунте AdminView сбрасывались к первой вкладке.
     const [editBonusId, setEditBonusId] = useState(null);
     const [editBonusForm, setEditBonusForm] = useState({ amount: '', reason: '' });
     const [regUsers, setRegUsers] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } });
@@ -2261,7 +2273,8 @@ function LikeBirdAppInner() {
     const [kpiEditMode, setKpiEditMode] = useState(null);
     const [kpiEditValue, setKpiEditValue] = useState('');
     // States moved from IIFEs to fix input focus bug
-    const [stockTab, setStockTab] = useState('products');
+    // FIX (tabs): stockTab поднят на уровень LikeBirdApp (см. там же рядом с adminTab) —
+    // иначе при ре-маунте AdminView сбрасывался на первую вкладку "📦 Товары".
     const [adminPassInput, setAdminPassInput] = useState('');
     const [historyLimit, setHistoryLimit] = useState(50);
     const [newWriteOff, setNewWriteOff] = useState({ product: '', quantity: '', reason: '' });
