@@ -2,9 +2,16 @@ import React, { useState } from 'react';
 import { FileText, BarChart3, ArrowLeft, Check, ChevronRight, Calendar, CheckCircle, Users, Camera } from 'lucide-react';
 import { formatDate, parseRuDate, parseYear } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
+import EmployeeManager from '../components/team/EmployeeManager';
+import ScheduleManager from '../components/team/ScheduleManager';
+import SalaryPanel from '../components/team/SalaryPanel';
+import EmployeesAdminTab from '../components/team/EmployeesAdminTab';
 
 export default function TeamView() {
   const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, reports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
+
+  // Флаг админа — для отображения админ-вкладок и блоков управления
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin';
 
   const activeEmployees = employees.filter(e => e.active).map(e => e.name);
   const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
@@ -74,12 +81,22 @@ export default function TeamView() {
   const tabs = [
     { id: 'online', label: '🟢 Онлайн', color: 'green' },
     { id: 'schedule', label: '📅 График', color: 'blue' },
+    ...(isAdmin ? [
+      { id: 'salary', label: '💰 Зарплата', color: 'emerald', adminOnly: true },
+      { id: 'employees', label: '👥 Сотрудники', color: 'rose', adminOnly: true },
+    ] : []),
     { id: 'results', label: '📊 Результаты', color: 'yellow' },
     { id: 'events', label: '🎉 События', color: 'red' },
     { id: 'manuals', label: '📚 Мануалы', color: 'purple' },
     { id: 'leaderboard', label: '🏅 Рейтинг', color: 'amber' },
     { id: 'chat', label: '💬 Чат', color: 'cyan' },
   ];
+
+  // Защита: если не-админ оказался на admin-only вкладке (например, после смены роли),
+  // переключаем его на 'online'
+  if (!isAdmin && (teamTab === 'salary' || teamTab === 'employees')) {
+    setTimeout(() => setTeamTab('online'), 0);
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6">
@@ -182,12 +199,18 @@ export default function TeamView() {
                 </div>
               )}
             </div>
+
+            {/* Управление сотрудниками (только админ) */}
+            {isAdmin && <EmployeeManager />}
           </div>
         )}
 
-        {/* ВКЛАДКА: График работы (только просмотр) */}
+        {/* ВКЛАДКА: График работы (для всех — просмотр, для админа сверху редактор) */}
         {teamTab === 'schedule' && (
           <div className="space-y-4">
+            {/* Редактор графика (только админ) */}
+            {isAdmin && <ScheduleManager />}
+
             <div className="bg-gradient-to-r from-blue-100 to-indigo-100 border-2 border-blue-300 rounded-xl p-4">
               <h3 className="font-bold text-lg mb-1">📅 {scheduleData.week || 'График не установлен'}</h3>
               <p className="text-sm text-gray-600">{shiftsCount} смен запланировано</p>
@@ -233,6 +256,12 @@ export default function TeamView() {
             )}
           </div>
         )}
+
+        {/* ВКЛАДКА: Зарплата (только админ) */}
+        {teamTab === 'salary' && isAdmin && <SalaryPanel />}
+
+        {/* ВКЛАДКА: Сотрудники — штрафы/бонусы/отпуска (только админ) */}
+        {teamTab === 'employees' && isAdmin && <EmployeesAdminTab />}
 
         {/* ВКЛАДКА: Результаты недели */}
         {teamTab === 'results' && (
