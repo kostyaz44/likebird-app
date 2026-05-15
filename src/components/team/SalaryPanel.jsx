@@ -73,6 +73,13 @@ export default function SalaryPanel() {
     logAction('Изменён бонус за птичек', updated.bonusForBirds ? 'Включен' : 'Выключен');
   };
 
+  const updateAdminMode = (mode) => {
+    const updated = { ...salarySettings, adminSalaryMode: mode };
+    setSalarySettings(updated);
+    save('likebird-salary-settings', updated);
+    logAction('Изменён режим ЗП админа', mode === 'perSale' ? 'Фикс ₽ за продажу' : 'Процент от выручки');
+  };
+
   const updateAdminPct = (value) => {
     const pct = Math.max(0, Math.min(100, parseInt(value) || 0));
     const updated = { ...salarySettings, adminSalaryPercentage: pct };
@@ -80,6 +87,17 @@ export default function SalaryPanel() {
     save('likebird-salary-settings', updated);
     logAction('Изменён процент админа', `${pct}%`);
   };
+
+  const updateAdminPerSale = (value) => {
+    const amt = Math.max(0, parseInt(value) || 0);
+    const updated = { ...salarySettings, adminSalaryPerSale: amt };
+    setSalarySettings(updated);
+    save('likebird-salary-settings', updated);
+    logAction('Изменён фикс ЗП админа', `${amt}₽ за продажу`);
+  };
+
+  // Режим ЗП админа (по умолчанию — процент, обратная совместимость)
+  const adminMode = salarySettings?.adminSalaryMode || 'percentage';
 
   // Если не админ — не рендерим
   if (!isAdmin) {
@@ -194,27 +212,89 @@ export default function SalaryPanel() {
           </div>
         </label>
 
-        {/* Процент админа */}
-        <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-          <label className="flex items-center justify-between gap-3">
-            <div className="flex-1">
-              <span className="font-medium">Процент админа от выручки</span>
-              <p className="text-xs text-gray-600">
-                Какой % от выручки добавляется к ЗП администратора
-              </p>
-            </div>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                min="0"
-                max="100"
-                defaultValue={salarySettings?.adminSalaryPercentage ?? 10}
-                onBlur={(e) => updateAdminPct(e.target.value)}
-                className="w-16 px-2 py-1 border-2 border-blue-200 rounded text-center font-bold focus:border-blue-500 focus:outline-none"
-              />
-              <span className="text-gray-600">%</span>
-            </div>
-          </label>
+        {/* ЗП администратора — выбор режима */}
+        <div className="mt-3 p-3 bg-blue-50 rounded-lg space-y-3">
+          <div>
+            <p className="font-medium text-sm">ЗП администратора</p>
+            <p className="text-[11px] text-gray-600">Дополнительное вознаграждение админу за смену</p>
+          </div>
+
+          {/* Переключатель режима */}
+          <div className="flex bg-white rounded-lg p-0.5 border border-blue-200">
+            <button
+              onClick={() => updateAdminMode('percentage')}
+              className={`flex-1 py-2 px-3 rounded-md text-xs font-semibold transition-all ${
+                adminMode === 'percentage'
+                  ? 'bg-blue-500 text-white shadow'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              📊 % от выручки
+            </button>
+            <button
+              onClick={() => updateAdminMode('perSale')}
+              className={`flex-1 py-2 px-3 rounded-md text-xs font-semibold transition-all ${
+                adminMode === 'perSale'
+                  ? 'bg-blue-500 text-white shadow'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              💵 ₽ за продажу
+            </button>
+          </div>
+
+          {/* Поле для соответствующего режима */}
+          {adminMode === 'percentage' ? (
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-sm text-gray-700">Процент от выручки за смену</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  defaultValue={salarySettings?.adminSalaryPercentage ?? 10}
+                  onBlur={(e) => updateAdminPct(e.target.value)}
+                  className="w-16 px-2 py-1 border-2 border-blue-200 rounded text-center font-bold focus:border-blue-500 focus:outline-none"
+                />
+                <span className="text-gray-600">%</span>
+              </div>
+            </label>
+          ) : (
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-sm text-gray-700">Фиксированная сумма за каждую продажу</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min="0"
+                  defaultValue={salarySettings?.adminSalaryPerSale ?? 50}
+                  onBlur={(e) => updateAdminPerSale(e.target.value)}
+                  className="w-20 px-2 py-1 border-2 border-blue-200 rounded text-center font-bold focus:border-blue-500 focus:outline-none"
+                />
+                <span className="text-gray-600">₽</span>
+              </div>
+            </label>
+          )}
+
+          {/* Пример расчёта */}
+          <div className="text-[11px] text-gray-500 bg-white rounded p-2 border border-blue-100">
+            {adminMode === 'percentage' ? (
+              <>
+                💡 Пример: смена с выручкой <b>10 000₽</b> →{' '}
+                <b className="text-blue-700">
+                  {Math.round(10000 * ((salarySettings?.adminSalaryPercentage ?? 10) / 100)).toLocaleString()}₽
+                </b>{' '}
+                админу
+              </>
+            ) : (
+              <>
+                💡 Пример: смена с <b>20 продажами</b> →{' '}
+                <b className="text-blue-700">
+                  {(20 * (salarySettings?.adminSalaryPerSale ?? 50)).toLocaleString()}₽
+                </b>{' '}
+                админу
+              </>
+            )}
+          </div>
         </div>
       </div>
 
