@@ -311,7 +311,10 @@ function LikeBirdAppInner() {
       { min: 0, max: 99, base: 50 },
     ],
     bonusForBirds: true,
-    adminSalaryPercentage: 10,
+    // ЗП администратора — новый режим выбора
+    adminSalaryMode: 'percentage', // 'percentage' | 'perSale'
+    adminSalaryPercentage: 10,     // используется когда mode === 'percentage'
+    adminSalaryPerSale: 50,        // используется когда mode === 'perSale' (фикс ₽ за каждую продажу)
   });
 
   // НОВОЕ: Расширенные состояния для админ-панели
@@ -329,17 +332,12 @@ function LikeBirdAppInner() {
   // к начальным значениям, и пользователя выбрасывало на первую вкладку раздела
   // ("👥 Сотрудники", "📦 Товары", "📊 Сегодня"). Подняв их в state родителя, мы делаем
   // их устойчивыми к ре-маунту AdminView. Тот же приём уже применён к adminTab и teamTab.
-  const [personnelTab, setPersonnelTab] = useState('employees');
+  const [personnelTab, setPersonnelTab] = useState('ratings');
   const [stockTab, setStockTab] = useState('locations');
   const [analyticsSubTab, setAnalyticsSubTab] = useState('today');
   const [challengeForm, setChallengeForm] = useState({ title: '', icon: '🏆', type: 'daily', metric: 'sales_count', target: 10, product: '', reward: '' });
   const [teamTab, setTeamTab] = useState('online');
-  const [employees, setEmployees] = useState([
-    { id: 1, name: 'Лена', role: 'seller', salaryMultiplier: 1.0, active: true },
-    { id: 2, name: 'Лиза', role: 'seller', salaryMultiplier: 1.0, active: true },
-    { id: 3, name: 'Даша', role: 'seller', salaryMultiplier: 1.0, active: true },
-    { id: 4, name: 'Сергей', role: 'senior', salaryMultiplier: 1.1, active: true },
-  ]);
+  const [employees, setEmployees] = useState([]);
   const [expenseCategories] = useState([
     { id: 'supplies', name: 'Закупка товара', emoji: '📦' },
     { id: 'rent', name: 'Аренда', emoji: '🏠' },
@@ -618,16 +616,13 @@ function LikeBirdAppInner() {
         { min: 0, max: 99, base: 50 },
       ],
       bonusForBirds: true,
+      adminSalaryMode: 'percentage',
       adminSalaryPercentage: 10,
+      adminSalaryPerSale: 50,
     });
     // НОВОЕ: Загружаем данные админ-панели
     loadJson('likebird-admin-password', setAdminPassword, '');
-    loadJson('likebird-employees', setEmployees, [
-      { id: 1, name: 'Лена', role: 'seller', salaryMultiplier: 1.0, active: true },
-      { id: 2, name: 'Лиза', role: 'seller', salaryMultiplier: 1.0, active: true },
-      { id: 3, name: 'Даша', role: 'seller', salaryMultiplier: 1.0, active: true },
-      { id: 4, name: 'Сергей', role: 'senior', salaryMultiplier: 1.1, active: true },
-    ]);
+    loadJson('likebird-employees', setEmployees, []);
     loadJson('likebird-sales-plan', setSalesPlan, { daily: 10000, weekly: 70000, monthly: 300000 });
     loadJson('likebird-audit-log', setAuditLog, []);
     loadJson('likebird-custom-products', setCustomProducts, []);
@@ -1088,7 +1083,21 @@ function LikeBirdAppInner() {
     } catch { /* silent */ }
   };
   const updateSalaryDecision = (id, dec) => { const u = {...salaryDecisions, [id]: dec}; setSalaryDecisions(u); save('likebird-salary-decisions', u); };
-  const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings);
+  // Получаем роль продавца по имени — нужно для расчёта ЗП админа в режиме perSale
+  const getEmployeeRole = (employeeName) => {
+    if (!employeeName) return null;
+    // 1. Ищем в employees по имени
+    const emp = employees.find(e => e.name === employeeName);
+    if (emp?.role) return emp.role;
+    // 2. Ищем в users (на случай если имя — это login)
+    try {
+      const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+      const u = users.find(u => u.login === employeeName || u.name === employeeName);
+      if (u) return u.isAdmin ? 'admin' : (u.role || 'seller');
+    } catch { /* silent */ }
+    return null;
+  };
+  const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings, getEmployeeRole(r.employee));
   // FIX #56: showNotification через DOM — НЕ вызывает parent re-render, 
   // inner-компоненты сохраняют свой локальный state.
   const showNotification = (message, type = 'success') => {
