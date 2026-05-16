@@ -1062,6 +1062,34 @@ function LikeBirdAppInner() {
       data = data.slice(-5000);
       showNotification('Автоочистка: удалены старые записи');
     }
+
+    // === Замдиректор: применяем/удаляем бонусы при изменении reports ===
+    try {
+      const oldIds = new Set(reports.map(x => x.id));
+      const newIds = new Set(data.map(x => x.id));
+      // Новые отчёты — добавились в data
+      const addedReports = data.filter(x => !oldIds.has(x.id));
+      // Удалённые отчёты — были в reports, но нет в data
+      const removedReportIds = reports.filter(x => !newIds.has(x.id)).map(x => x.id);
+
+      if (addedReports.length > 0 || removedReportIds.length > 0) {
+        let newBonuses = bonuses;
+        for (const rep of addedReports) {
+          newBonuses = applyDeputyBonusForReport(rep, newBonuses);
+        }
+        for (const rid of removedReportIds) {
+          newBonuses = removeDeputyBonusesForReport(rid, newBonuses);
+        }
+        if (newBonuses !== bonuses) {
+          setBonuses(newBonuses);
+          save('likebird-bonuses', newBonuses);
+        }
+      }
+    } catch (e) {
+      // silent — не блокируем основную операцию из-за ошибки в бонусах
+      console.warn('Deputy bonus calc error:', e);
+    }
+
     setReports(data); save('likebird-reports', data); };
   const updateStock = (s) => { 
     setStock(s); 
@@ -1083,21 +1111,86 @@ function LikeBirdAppInner() {
     } catch { /* silent */ }
   };
   const updateSalaryDecision = (id, dec) => { const u = {...salaryDecisions, [id]: dec}; setSalaryDecisions(u); save('likebird-salary-decisions', u); };
-  // Получаем роль продавца по имени — нужно для расчёта ЗП админа в режиме perSale
-  const getEmployeeRole = (employeeName) => {
+
+  // Получает user по имени/логину сотрудника (для получения роли, флага noSalary, deputy-полей и т.д.)
+  const getUserByEmployeeName = (employeeName) => {
     if (!employeeName) return null;
-    // 1. Ищем в employees по имени
-    const emp = employees.find(e => e.name === employeeName);
-    if (emp?.role) return emp.role;
-    // 2. Ищем в users (на случай если имя — это login)
     try {
       const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
-      const u = users.find(u => u.login === employeeName || u.name === employeeName);
-      if (u) return u.isAdmin ? 'admin' : (u.role || 'seller');
-    } catch { /* silent */ }
+      return users.find(u => u.login === employeeName || u.name === employeeName) || null;
+    } catch { return null; }
+  };
+
+  // Получает роль сотрудника
+  const getEmployeeRole = (employeeName) => {
+    if (!employeeName) return null;
+    const emp = employees.find(e => e.name === employeeName);
+    if (emp?.role) return emp.role;
+    const u = getUserByEmployeeName(employeeName);
+    if (u) return u.isAdmin && !u.role ? 'admin' : (u.role || 'seller');
     return null;
   };
-  const getEffectiveSalary = (r) => calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings, getEmployeeRole(r.employee));
+
+  // getEffectiveSalary с учётом noSalary (например для создателя/владельца)
+  const getEffectiveSalary = (r) => {
+    if (!r) return 0;
+    const u = getUserByEmployeeName(r.employee);
+    if (u?.noSalary) return 0; // Не начисляем ЗП этому пользователю
+    return calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings, getEmployeeRole(r.employee));
+  };
+
+  // === Замдиректор: автоматическое начисление бонусов за продажи в его городе ===
+  // Извлекает город из location-строки отчёта ("Город - Точка" или просто "Город")
+  const extractCityFromReport = (r) => {
+    if (!r) return null;
+    const loc = r.location || r.saleLocation || '';
+    if (!loc) return null;
+    return String(loc).split(' - ')[0].trim();
+  };
+
+  // Находит текущего deputy по городу
+  const findDeputyForCity = (city) => {
+    if (!city) return null;
+    try {
+      const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+      return users.find(u => u.role === 'deputy' && u.deputyCity === city) || null;
+    } catch { return null; }
+  };
+
+  // Применяет бонус замдиректору при добавлении отчёта. Возвращает обновлённый массив bonuses.
+  // Идемпотентность: если для этого reportId уже есть deputy-бонус — не дублируем.
+  const applyDeputyBonusForReport = (report, currentBonuses) => {
+    if (!report || !report.id) return currentBonuses;
+    const city = extractCityFromReport(report);
+    const deputy = findDeputyForCity(city);
+    if (!deputy) return currentBonuses;
+    const perSale = Number(deputy.deputyPerSale) || 0;
+    if (perSale <= 0) return currentBonuses;
+    // Проверка идемпотентности
+    const alreadyExists = (currentBonuses || []).some(b => b.linkedReportId === report.id && b.deputyBonus === true);
+    if (alreadyExists) return currentBonuses;
+    // Найти employee deputy по имени
+    const deputyEmp = employees.find(e => e.name === deputy.name);
+    const newBonus = {
+      id: Date.now() + Math.random().toString(36).slice(2, 8),
+      employeeId: deputyEmp?.id || null,
+      employeeName: deputy.name,
+      employeeLogin: deputy.login,
+      amount: perSale,
+      reason: `ЗП замдиректора · продажа в ${city} (${report.product || 'товар'})`,
+      date: report.date || new Date().toLocaleDateString('ru-RU'),
+      createdAt: Date.now(),
+      deputyBonus: true,
+      linkedReportId: report.id,
+    };
+    return [newBonus, ...(currentBonuses || [])];
+  };
+
+  // Удаляет deputy-бонусы, связанные с отчётом (при удалении отчёта)
+  const removeDeputyBonusesForReport = (reportId, currentBonuses) => {
+    if (!reportId) return currentBonuses;
+    return (currentBonuses || []).filter(b => !(b.deputyBonus === true && b.linkedReportId === reportId));
+  };
   // FIX #56: showNotification через DOM — НЕ вызывает parent re-render, 
   // inner-компоненты сохраняют свой локальный state.
   const showNotification = (message, type = 'success') => {
@@ -1558,7 +1651,7 @@ function LikeBirdAppInner() {
   const checkAutoNotifications = useCallback(() => {
     try {
       const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
-      const isAdminUser = currentUser?.isAdmin || currentUser?.role === 'admin';
+      const isAdminUser = currentUser?.isAdmin || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
       if (!isAdminUser) return;
       const todayStr = formatDate(new Date());
       const newNotifs = [];
@@ -1624,7 +1717,7 @@ function LikeBirdAppInner() {
 
   // Run auto notifications on mount and after report save
   useEffect(() => {
-    if (isAuthenticated && (currentUser?.isAdmin || currentUser?.role === 'admin')) {
+    if (isAuthenticated && (currentUser?.isAdmin || currentUser?.role === 'admin' || currentUser?.role === 'deputy')) {
       const timer = setTimeout(checkAutoNotifications, 3000);
       return () => clearTimeout(timer);
     }
