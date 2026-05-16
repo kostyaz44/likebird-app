@@ -54,7 +54,7 @@ function SalaryDecisionButtons({ report, compact }) {
 }
 
 export default function DayReportView() {
-  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
 
   const dates = getAllDates();
   const dateReports = getReportsByDate(selectedDate);
@@ -368,6 +368,102 @@ export default function DayReportView() {
         {dateReports.length > 0 && (<div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl p-4 mb-4 shadow-lg"><h3 className="font-bold mb-2">📈 Общий итог</h3><div className="grid grid-cols-2 gap-2 text-sm"><div><span className="opacity-75">Выручка:</span> <span className="font-bold">{dayTotal.toLocaleString()}₽</span></div><div><span className="opacity-75">Наличные:</span> <span className="font-bold">{dayCash.toLocaleString()}₽</span></div><div><span className="opacity-75">Безнал:</span> <span className="font-bold">{dayCashless.toLocaleString()}₽</span></div><div><span className="opacity-75">Чаевые:</span> <span className="font-bold">{dayTips.toLocaleString()}₽</span></div><div><span className="opacity-75">ЗП:</span> <span className="font-bold">{daySalary.toLocaleString()}₽</span></div><div><span className="opacity-75">Расходы:</span> <span className="font-bold">{dayExpenses.toLocaleString()}₽</span></div></div></div>)}
       </div>
       <div className="max-w-md mx-auto px-4 pb-6 space-y-4">
+        {/* === МОЯ СМЕНА (АДМИН) — заработок админа с продаж сотрудников === */}
+        {isAdminUser && (() => {
+          const myName = employeeName;
+          if (!myName) return null;
+          // Все продажи дня (не отфильтрованные visibleReports — админ видит всё)
+          const allDayReports = dateReports;
+          const myShiftEarnings = getAdminShiftEarnings ? getAdminShiftEarnings(allDayReports, myName) : 0;
+          // Мои личные продажи (как обычного сотрудника)
+          const myOwnReports = allDayReports.filter(r => r.employee === myName);
+          const myOwnSalary = myOwnReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+          const myOwnTotal = myOwnReports.reduce((s, r) => s + (r.total || 0), 0);
+          // Чужие продажи (от которых идёт надбавка)
+          const othersReports = allDayReports.filter(r => {
+            if (r.isUnrecognized || r.employee === myName) return false;
+            const otherEmp = employees.find(e => e.name === r.employee);
+            return !(otherEmp?.role === 'admin' || otherEmp?.role === 'deputy');
+          });
+          // Не показываем блок если совсем нечего показать
+          if (myShiftEarnings === 0 && myOwnReports.length === 0 && othersReports.length === 0) return null;
+
+          const mode = salarySettings?.adminSalaryMode || 'percentage';
+          const pct = Number(salarySettings?.adminSalaryPercentage) || 0;
+          const perSale = Number(salarySettings?.adminSalaryPerSale) || 0;
+          const othersRevenue = othersReports.reduce((s, r) => s + (r.total || 0), 0);
+
+          return (
+            <div className="bg-gradient-to-r from-purple-500 via-indigo-500 to-blue-500 text-white rounded-xl shadow-lg overflow-hidden">
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold flex items-center gap-2">
+                    🛡️ Моя смена <span className="text-xs opacity-75 font-normal">({currentUser?.role === 'deputy' ? 'замдиректор' : 'админ'})</span>
+                  </h3>
+                  <button
+                    onClick={() => setAdminReport({ employee: myName })}
+                    className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-xs font-semibold flex items-center gap-1"
+                    title="Добавить свою продажу"
+                  >
+                    <Plus className="w-3 h-3" /> Моя продажа
+                  </button>
+                </div>
+
+                {/* Сводка заработка */}
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div className="bg-white/15 rounded-lg p-2 backdrop-blur-sm">
+                    <p className="text-[10px] opacity-80 uppercase">Надбавка со смены</p>
+                    <p className="text-xl font-black">{myShiftEarnings.toLocaleString()}₽</p>
+                    <p className="text-[10px] opacity-70">
+                      {mode === 'perSale'
+                        ? `${perSale}₽ × ${othersReports.length} прод.`
+                        : `${pct}% от ${othersRevenue.toLocaleString()}₽`}
+                    </p>
+                  </div>
+                  <div className="bg-white/15 rounded-lg p-2 backdrop-blur-sm">
+                    <p className="text-[10px] opacity-80 uppercase">Свои продажи</p>
+                    <p className="text-xl font-black">{myOwnSalary.toLocaleString()}₽</p>
+                    <p className="text-[10px] opacity-70">
+                      {myOwnReports.length} прод. на {myOwnTotal.toLocaleString()}₽
+                    </p>
+                  </div>
+                </div>
+
+                {/* Итого */}
+                <div className="bg-white/25 rounded-lg p-3 backdrop-blur-sm flex items-center justify-between">
+                  <span className="text-sm font-semibold">Итого мой заработок:</span>
+                  <span className="text-2xl font-black">
+                    {(myShiftEarnings + myOwnSalary).toLocaleString()}₽
+                  </span>
+                </div>
+
+                {/* Свои продажи списком (если есть) */}
+                {myOwnReports.length > 0 && (
+                  <details className="group mt-3">
+                    <summary className="cursor-pointer text-xs font-semibold opacity-90 flex items-center gap-1">
+                      <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+                      Мои продажи ({myOwnReports.length})
+                    </summary>
+                    <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                      {myOwnReports.map(r => (
+                        <div key={r.id} className="bg-white/15 rounded px-2 py-1 text-xs flex justify-between items-center">
+                          <span className="truncate flex-1">
+                            {getProductName(r.product)}
+                          </span>
+                          <span className="ml-2 whitespace-nowrap">
+                            {r.total}₽ {r.paymentType === 'cashless' ? '💳' : '💵'}
+                            <span className="opacity-75 ml-1">ЗП:{getEffectiveSalary(r)}</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {Object.entries(byEmployee).map(([emp, empReports]) => {
           const unrec = empReports.filter(r => r.isUnrecognized);
           const belowPrice = empReports.filter(r => !r.isUnrecognized && isBelowBasePrice(r.basePrice, r.salePrice));
