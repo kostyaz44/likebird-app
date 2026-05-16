@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Calendar, CheckCircle, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -29,7 +29,24 @@ export default function ScheduleManager() {
 
   const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin';
 
-  const activeEmployees = employees.filter(e => e.active).map(e => e.name);
+  // Подписка на regUsers — нужна для отсева "призраков" (employees без user-аккаунта)
+  const [regUsers, setRegUsers] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; }
+  });
+  useEffect(() => {
+    const refresh = () => {
+      try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch { /* silent */ }
+    };
+    window.addEventListener('storage', refresh);
+    const interval = setInterval(refresh, 3000);
+    return () => { window.removeEventListener('storage', refresh); clearInterval(interval); };
+  }, []);
+
+  // Активные сотрудники, у которых есть аккаунт (призраков отсеиваем)
+  const activeEmployees = employees
+    .filter(e => e.active)
+    .filter(emp => regUsers.find(u => u.name === emp.name || u.login === emp.name))
+    .map(e => e.name);
 
   // Расчёт часов из времени (учитывает перерыв)
   const calculateHours = (startTime, endTime, breakStart, breakEnd) => {

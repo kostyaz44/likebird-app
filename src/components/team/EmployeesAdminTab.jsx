@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Gift, Palmtree, Edit3, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { parseYear } from '../../utils/dates.js';
@@ -179,7 +179,23 @@ export default function EmployeesAdminTab() {
     showNotification('Добавлено');
   };
 
-  const activeEmployees = employees.filter(e => e.active);
+  // Подписка на regUsers — нужна для отсева призраков из выпадающих списков
+  const [regUsers, setRegUsers] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; }
+  });
+  useEffect(() => {
+    const refresh = () => {
+      try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch { /* silent */ }
+    };
+    window.addEventListener('storage', refresh);
+    const interval = setInterval(refresh, 3000);
+    return () => { window.removeEventListener('storage', refresh); clearInterval(interval); };
+  }, []);
+
+  // Активные сотрудники с аккаунтом (без призраков)
+  const activeEmployees = employees
+    .filter(e => e.active)
+    .filter(emp => regUsers.find(u => u.name === emp.name || u.login === emp.name));
 
   const subTabs = [
     { id: 'penalties', label: '⚠️ Штрафы', count: penalties.length, color: 'red' },

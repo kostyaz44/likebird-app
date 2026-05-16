@@ -303,10 +303,102 @@ export default function EmployeeManager() {
             )}
           </div>
 
+          {/* === БЛОК: ПРИЗРАКИ (employees без user) === */}
+          {(() => {
+            // Сотрудник-«призрак» — есть в employees, но ни одно имя/логин не совпадает с user
+            const ghosts = (employees || []).filter(emp => {
+              const matchByName = regUsers.find(u => u.name === emp.name || u.login === emp.name);
+              return !matchByName;
+            });
+
+            if (ghosts.length === 0) return null;
+
+            const removeGhost = (id, name) => {
+              showConfirm(`Удалить «${name}»? Этот сотрудник появлялся в списках (график, штрафы), но не имеет аккаунта для входа.`, () => {
+                updateEmployees(employees.filter(e => e.id !== id));
+                showNotification(`Удалён: ${name}`);
+              });
+            };
+
+            const deactivateGhost = (id, name) => {
+              updateEmployees(employees.map(e => e.id === id ? { ...e, active: false } : e));
+              showNotification(`Скрыт: ${name}`);
+            };
+
+            const removeAllGhosts = () => {
+              showConfirm(`Удалить ВСЕХ ${ghosts.length} сотрудников без аккаунта?\n\nЭто действие необратимо. Их записи в графике, штрафах и бонусах останутся, но самих сотрудников не будет в списках выбора.`, () => {
+                const ghostIds = new Set(ghosts.map(g => g.id));
+                updateEmployees(employees.filter(e => !ghostIds.has(e.id)));
+                showNotification(`Удалено: ${ghosts.length}`);
+              });
+            };
+
+            return (
+              <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-3 mt-3">
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                  <h4 className="font-bold text-amber-800 flex items-center gap-2">
+                    👻 Без аккаунта
+                    <span className="text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full">
+                      {ghosts.length}
+                    </span>
+                  </h4>
+                  <button
+                    onClick={removeAllGhosts}
+                    className="px-3 py-1 bg-red-500 text-white rounded text-xs font-semibold hover:bg-red-600 flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" /> Удалить всех
+                  </button>
+                </div>
+                <p className="text-[11px] text-amber-700 mb-3 leading-tight">
+                  Эти сотрудники появляются в графике, штрафах и других списках, но у них нет аккаунта для входа.
+                  Скорее всего это тестовые/демо-данные или удалённые сотрудники. Можете удалить или скрыть.
+                </p>
+                <div className="space-y-2">
+                  {ghosts.map(emp => (
+                    <div
+                      key={emp.id}
+                      className="flex items-center gap-2 p-2 bg-white rounded-lg border border-amber-200"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-sm">{emp.name}</span>
+                          {!emp.active && (
+                            <span className="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded">
+                              скрыт
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-gray-500">
+                          {emp.role === 'admin' ? '🛡️ Админ' : emp.role === 'senior' ? '⭐ Старший' : '🐦 Продавец'}
+                          {' · id ' + emp.id}
+                        </p>
+                      </div>
+                      {emp.active && (
+                        <button
+                          onClick={() => deactivateGhost(emp.id, emp.name)}
+                          className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200"
+                          title="Скрыть (не удалять)"
+                        >
+                          Скрыть
+                        </button>
+                      )}
+                      <button
+                        onClick={() => removeGhost(emp.id, emp.name)}
+                        className="p-1.5 bg-red-100 text-red-600 rounded hover:bg-red-200"
+                        title="Удалить полностью"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Подсказка */}
           <p className="text-[11px] text-gray-400 leading-tight pt-2 border-t">
-            💡 Сотрудники без аккаунта (в employees, но не в users) создаются автоматически
-            при регистрации по инвайт-коду или вручную здесь.
+            💡 «Пользователи» — это аккаунты для входа. «Сотрудники» — записи о людях, используемые в отчётах, графике, штрафах. При регистрации по инвайт-коду они синхронизируются автоматически.
           </p>
         </div>
       )}
