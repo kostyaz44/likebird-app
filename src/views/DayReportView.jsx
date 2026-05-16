@@ -64,7 +64,7 @@ export default function DayReportView() {
   // === ФИЛЬТРАЦИЯ по правам видимости ===
   // Админ/замдиректор видит всё. Обычный сотрудник — только своё.
   // Дополнительно: админ может в EmployeeManager выставить user.canViewReports = ['emp1', 'emp2'] или 'all'
-  const isAdminViewer = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin || currentUser?.role === 'deputy';
+  const isAdminViewer = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.isAdmin;
   const myLoginViewer = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login || ''; } catch { return ''; } })();
   const myUserObj = (() => {
     try {
@@ -298,7 +298,7 @@ export default function DayReportView() {
     // Защита: не-админ может править ТОЛЬКО свою смену
     const { key, login: shiftLogin } = getEmployeeShift(empName);
     const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login || ''; } catch { return ''; } })();
-    const meIsAdmin = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin || currentUser?.role === 'deputy';
+    const meIsAdmin = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.isAdmin;
     if (!meIsAdmin && shiftLogin !== myLogin) {
       showNotification('Можно редактировать только свою смену', 'error');
       return;
@@ -329,7 +329,7 @@ export default function DayReportView() {
   // Проверка можно ли редактировать (20 минут = 1200000 мс)
   // Администраторы могут редактировать без ограничений
   const EDIT_TIME_LIMIT = 20 * 60 * 1000;
-  const isAdminUser = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin;
+  const isAdminUser = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.isAdmin;
   const canEdit = (report) => {
     if (isAdminUser) return true; // Админ может редактировать всегда
     if (!report.createdAt) return true;
@@ -383,7 +383,7 @@ export default function DayReportView() {
           const othersReports = allDayReports.filter(r => {
             if (r.isUnrecognized || r.employee === myName) return false;
             const otherEmp = employees.find(e => e.name === r.employee);
-            return !(otherEmp?.role === 'admin' || otherEmp?.role === 'deputy');
+            return !(otherEmp?.role === 'admin' || otherEmp?.role === 'deputy' || otherEmp?.role === 'director');
           });
           // Не показываем блок если совсем нечего показать
           if (myShiftEarnings === 0 && myOwnReports.length === 0 && othersReports.length === 0) return null;

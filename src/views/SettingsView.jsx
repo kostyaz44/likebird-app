@@ -9,7 +9,7 @@ import { useApp } from '../context/AppContext';
 export default function SettingsView() {
   const { auditLog, authName, currentUser, darkMode, deferredPrompt, employeeName, enrichBackup, expenses, exportData, getAllDates, getEffectiveSalary, getProductName, importData, isOnline, notifSettings, reports, save, setCurrentView, setDarkMode, setDeferredPrompt, setIsAuthenticated, setNotifSettings, setShowInstallBanner, showInstallBanner, showNotification, stock } = useApp();
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
 
   return (
   <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
