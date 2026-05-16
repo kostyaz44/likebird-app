@@ -80,4 +80,29 @@ export const calculateAdminShiftBonus = (shiftRevenue, salarySettings = null) =>
   return Math.round((Number(shiftRevenue) || 0) * pct / 100);
 };
 
+/**
+ * Заработок администратора за ПЕРИОД (по списку отчётов).
+ * Удобная функция для UI SalaryPanel — суммарный заработок админа за неделю/месяц.
+ *
+ * - В режиме 'percentage': % от суммарной выручки всех отчётов в периоде
+ * - В режиме 'perSale':    фикс ₽ × количество отчётов в периоде
+ *
+ * @param {Array} periodReports - массив отчётов за период (с полем total для percentage режима)
+ * @param {object} salarySettings - настройки зарплаты
+ * @returns {number} заработок админа за период в ₽
+ */
+export const calculateAdminEarnings = (periodReports = [], salarySettings = null) => {
+  if (!salarySettings || !Array.isArray(periodReports) || periodReports.length === 0) return 0;
+  const mode = salarySettings.adminSalaryMode || 'percentage';
+  if (mode === 'perSale') {
+    const perSale = Number(salarySettings.adminSalaryPerSale) || 0;
+    return perSale * periodReports.length;
+  }
+  // percentage по умолчанию
+  const pct = Number(salarySettings.adminSalaryPercentage) || 0;
+  if (pct <= 0) return 0;
+  const totalRevenue = periodReports.reduce((s, r) => s + (Number(r.total) || 0), 0);
+  return Math.round(totalRevenue * pct / 100);
+};
+
 export const isBelowBasePrice = (basePrice, salePrice) => salePrice < basePrice;
