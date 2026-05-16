@@ -13,7 +13,24 @@ export default function TeamView() {
   // Флаг админа — для отображения админ-вкладок и блоков управления
   const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin';
 
-  const activeEmployees = employees.filter(e => e.active).map(e => e.name);
+  // Подписка на regUsers — нужна для отсева "призраков" (employees без user-аккаунта)
+  const [regUsers, setRegUsers] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; }
+  });
+  React.useEffect(() => {
+    const refresh = () => {
+      try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch { /* silent */ }
+    };
+    window.addEventListener('storage', refresh);
+    const interval = setInterval(refresh, 3000);
+    return () => { window.removeEventListener('storage', refresh); clearInterval(interval); };
+  }, []);
+
+  // Активные сотрудники с аккаунтом (исключаем призраков)
+  const activeEmployees = employees
+    .filter(e => e.active)
+    .filter(emp => regUsers.find(u => u.name === emp.name || u.login === emp.name))
+    .map(e => e.name);
   const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
   const [manualFilter, setManualFilter] = useState('all');
   const [manualSearch, setManualSearch] = useState('');
@@ -605,7 +622,7 @@ export default function TeamView() {
               {/* Mention autocomplete */}
               {showMentions && (
                 <div className="bg-white rounded-xl shadow border p-2 space-y-1">
-                  {employees.filter(e => e.active).map(e => (
+                  {employees.filter(e => e.active && activeEmployees.includes(e.name)).map(e => (
                     <button key={e.id} onClick={() => { setChatText(chatText + e.name + ' '); setShowMentions(false); }}
                       className="w-full text-left px-3 py-2 rounded-lg hover:bg-blue-50 text-sm">{e.name}</button>
                   ))}
