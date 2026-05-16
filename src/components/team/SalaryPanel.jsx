@@ -26,7 +26,7 @@ export default function SalaryPanel() {
     expenseCategories,
   } = useApp();
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
 
   // Период: неделя/месяц
   const [period, setPeriod] = useState('week'); // 'week' | 'month'

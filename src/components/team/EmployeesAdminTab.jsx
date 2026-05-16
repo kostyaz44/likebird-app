@@ -30,7 +30,7 @@ export default function EmployeesAdminTab() {
     darkMode,
   } = useApp();
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
 
   const [activeSubTab, setActiveSubTab] = useState('penalties');
 

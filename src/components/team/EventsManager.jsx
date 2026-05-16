@@ -19,7 +19,7 @@ export default function EventsManager() {
     darkMode,
   } = useApp();
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
 
   const [showEventForm, setShowEventForm] = useState(false);
   const [newDate, setNewDate] = useState('');

@@ -68,10 +68,13 @@ export default function EmployeeManager() {
     senior: { label: 'Старший продавец', color: 'bg-amber-100 text-amber-700', icon: '⭐' },
     admin: { label: 'Администратор', color: 'bg-red-100 text-red-700', icon: '🛡️' },
     deputy: { label: 'Замдиректор', color: 'bg-indigo-100 text-indigo-700', icon: '🎖️' },
+    director: { label: 'Директор', color: 'bg-yellow-100 text-yellow-800', icon: '👑' },
   };
 
   // Текущий назначенный замдиректор (если есть) — для проверки уникальности
   const currentDeputy = regUsers.find(u => u.role === 'deputy');
+  // Текущий назначенный директор (если есть) — для проверки уникальности
+  const currentDirector = regUsers.find(u => u.role === 'director');
 
   const saveUsers = (updated) => {
     setRegUsers(updated);
@@ -93,35 +96,39 @@ export default function EmployeeManager() {
   };
 
   // Проверка уникальности замдиректора. Возвращает true если разрешено сохранять.
+  // Использует синхронный window.confirm чтобы избежать висящих промисов.
   const checkDeputyUniqueness = (login, newRole) => {
-    if (newRole !== 'deputy') return Promise.resolve(true);
-    if (!currentDeputy || currentDeputy.login === login) return Promise.resolve(true);
-    return new Promise((resolve) => {
-      showConfirm(
-        `Замдиректор уже назначен: ${currentDeputy.name} (${currentDeputy.deputyCity || 'без города'}).\n\nПереназначить на нового сотрудника? Прежний станет администратором.`,
-        () => resolve(true),
-      );
-      // Если showConfirm не вызовет коллбек при отмене — таймаут защита
-      setTimeout(() => resolve(false), 30000);
-    });
+    if (newRole !== 'deputy') return true;
+    if (!currentDeputy || currentDeputy.login === login) return true;
+    return window.confirm(
+      `Замдиректор уже назначен: ${currentDeputy.name} (${currentDeputy.deputyCity || 'без города'}).\n\nПереназначить на нового сотрудника? Прежний станет администратором.`
+    );
   };
 
-  const handleSaveEdit = async () => {
+  // Проверка уникальности директора. Возвращает true если разрешено сохранять.
+  const checkDirectorUniqueness = (login, newRole) => {
+    if (newRole !== 'director') return true;
+    if (!currentDirector || currentDirector.login === login) return true;
+    return window.confirm(
+      `Директор уже назначен: ${currentDirector.name}.\n\nПереназначить? Прежний станет администратором.`
+    );
+  };
+
+  const handleSaveEdit = () => {
     if (!editForm.name?.trim()) { showNotification('Имя не может быть пустым', 'error'); return; }
     if (editForm.role === 'deputy' && !editForm.deputyCity) {
       showNotification('Выберите город для замдиректора', 'error'); return;
     }
 
-    // Уникальность deputy
-    const ok = await checkDeputyUniqueness(editingUser, editForm.role);
-    if (!ok) return;
+    // Уникальность deputy и director (синхронные проверки)
+    if (!checkDeputyUniqueness(editingUser, editForm.role)) return;
+    if (!checkDirectorUniqueness(editingUser, editForm.role)) return;
 
     let updated = regUsers.map(u => {
       if (u.login === editingUser) {
-        // Очищаем deputy-поля если роль больше не deputy
         const isNewDeputy = editForm.role === 'deputy';
-        // canViewReports: 'self' (по умолчанию) — не пишем в объект чтобы не засорять;
-        // 'all' или массив имён — пишем как есть
+        const isAdminRole = editForm.role === 'admin' || editForm.role === 'deputy' || editForm.role === 'director';
+        // canViewReports: 'self' (по умолчанию) — не пишем в объект чтобы не засорять
         const cvr = editForm.canViewReports;
         const cvrField = (cvr === 'all' || (Array.isArray(cvr) && cvr.length > 0))
           ? { canViewReports: cvr }
@@ -130,7 +137,7 @@ export default function EmployeeManager() {
           ...u,
           name: editForm.name.trim(),
           role: editForm.role,
-          isAdmin: editForm.isAdmin || editForm.role === 'admin' || editForm.role === 'deputy',
+          isAdmin: editForm.isAdmin || isAdminRole,
           noSalary: !!editForm.noSalary,
           ...cvrField,
           ...(isNewDeputy
@@ -146,6 +153,13 @@ export default function EmployeeManager() {
     if (editForm.role === 'deputy' && currentDeputy && currentDeputy.login !== editingUser) {
       updated = updated.map(u => u.login === currentDeputy.login
         ? { ...u, role: 'admin', isAdmin: true, deputyCity: undefined, deputyPerSale: undefined }
+        : u
+      );
+    }
+    // Если назначаем нового директора — старого переводим в обычные админы
+    if (editForm.role === 'director' && currentDirector && currentDirector.login !== editingUser) {
+      updated = updated.map(u => u.login === currentDirector.login
+        ? { ...u, role: 'admin', isAdmin: true }
         : u
       );
     }
@@ -191,19 +205,20 @@ export default function EmployeeManager() {
       setAddError('Выберите город для замдиректора'); return;
     }
 
-    // Уникальность deputy
-    const okDeputy = await checkDeputyUniqueness(null, addForm.role);
-    if (!okDeputy) return;
+    // Уникальность deputy и director (синхронные проверки)
+    if (!checkDeputyUniqueness(null, addForm.role)) return;
+    if (!checkDirectorUniqueness(null, addForm.role)) return;
 
     const hashed = await hashPassword(addForm.password);
     const isDeputy = addForm.role === 'deputy';
+    const isDirector = addForm.role === 'director';
     const newU = {
       login: addForm.login.trim(),
       name: (addForm.name.trim() || addForm.login.trim()),
       passwordHash: hashed,
       createdAt: Date.now(),
       role: addForm.role,
-      isAdmin: addForm.role === 'admin' || isDeputy,
+      isAdmin: addForm.role === 'admin' || isDeputy || isDirector,
       noSalary: !!addForm.noSalary,
       ...(isDeputy
         ? { deputyCity: addForm.deputyCity, deputyPerSale: Math.max(0, Number(addForm.deputyPerSale) || 0) }
@@ -217,6 +232,13 @@ export default function EmployeeManager() {
     if (isDeputy && currentDeputy) {
       updated = updated.map(u => u.login === currentDeputy.login
         ? { ...u, role: 'admin', isAdmin: true, deputyCity: undefined, deputyPerSale: undefined }
+        : u
+      );
+    }
+    // Если создаём директора — старого переводим в обычные админы
+    if (isDirector && currentDirector) {
+      updated = updated.map(u => u.login === currentDirector.login
+        ? { ...u, role: 'admin', isAdmin: true }
         : u
       );
     }
@@ -293,6 +315,7 @@ export default function EmployeeManager() {
                 <option value="senior">⭐ Старший продавец</option>
                 <option value="admin">🛡️ Администратор</option>
                 <option value="deputy">🎖️ Замдиректор</option>
+                <option value="director">👑 Директор</option>
               </select>
 
               {/* Поля для замдиректора */}
@@ -381,6 +404,7 @@ export default function EmployeeManager() {
                         <option value="senior">⭐ Старший продавец</option>
                         <option value="admin">🛡️ Администратор</option>
                         <option value="deputy">🎖️ Замдиректор</option>
+                <option value="director">👑 Директор</option>
                       </select>
 
                       {/* Поля для замдиректора */}
@@ -414,7 +438,7 @@ export default function EmployeeManager() {
                       )}
 
                       {/* Видимость чужих отчётов в "Итог дня" */}
-                      {editForm.role !== 'admin' && editForm.role !== 'deputy' && !editForm.isAdmin && (
+                      {editForm.role !== 'admin' && editForm.role !== 'deputy' && editForm.role !== 'director' && !editForm.isAdmin && (
                         <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 space-y-2">
                           <p className="text-[11px] text-cyan-700 font-semibold">👁️ Какие отчёты видит в «Итог дня»:</p>
                           <select

@@ -27,7 +27,7 @@ export default function ScheduleManager() {
   const [scheduleViewMode, setScheduleViewMode] = useState('list');
   const [expanded, setExpanded] = useState(false);
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
 
   // Подписка на regUsers — нужна для отсева "призраков" (employees без user-аккаунта)
   const [regUsers, setRegUsers] = useState(() => {
