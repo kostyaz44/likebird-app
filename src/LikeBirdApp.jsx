@@ -1309,6 +1309,42 @@ function LikeBirdAppInner() {
 
   // НОВОЕ: Функции для управления сотрудниками
   const updateEmployees = (newEmployees) => { setEmployees(newEmployees); save('likebird-employees', newEmployees); };
+
+  // Миграция имени сотрудника: обновляет имя во всех связанных записях
+  // (reports, expenses, bonuses, penalties, timeOff, employees, scheduleData).
+  // shiftsData использует login как ключ, поэтому миграция не нужна.
+  const migrateEmployeeName = (oldName, newName) => {
+    if (!oldName || !newName || oldName === newName) return;
+
+    // 1. reports
+    const updReports = reports.map(r => r.employee === oldName ? { ...r, employee: newName } : r);
+    setReports(updReports); save('likebird-reports', updReports);
+
+    // 2. expenses
+    const updExpenses = expenses.map(e => e.employee === oldName ? { ...e, employee: newName } : e);
+    setExpenses(updExpenses); save('likebird-expenses', updExpenses);
+
+    // 3. bonuses
+    const updBonuses = bonuses.map(b => b.employeeName === oldName ? { ...b, employeeName: newName } : b);
+    setBonuses(updBonuses); save('likebird-bonuses', updBonuses);
+
+    // 4. employees record
+    const updEmployees = employees.map(e => e.name === oldName ? { ...e, name: newName } : e);
+    setEmployees(updEmployees); save('likebird-employees', updEmployees);
+
+    // 5. scheduleData.shifts — ключ это имя сотрудника
+    if (scheduleData?.shifts && scheduleData.shifts[oldName]) {
+      const newShifts = { ...scheduleData.shifts };
+      newShifts[newName] = newShifts[oldName];
+      delete newShifts[oldName];
+      const newScheduleData = { ...scheduleData, shifts: newShifts };
+      setScheduleData(newScheduleData);
+      save('likebird-schedule', newScheduleData);
+    }
+
+    logAction('Переименование сотрудника', `${oldName} → ${newName}`);
+  };
+
   const addEmployee = (name, role = 'seller') => {
     const newEmp = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), name, role, salaryMultiplier: 1.0, active: true };
     updateEmployees([...employees, newEmp]);
@@ -2462,7 +2498,7 @@ function LikeBirdAppInner() {
     updateEmployees, addEmployee, removeEmployee, toggleEmployeeActive,
     saveReport, saveParsedReports, deleteReport, addExpense,
     deleteExpense, updateGivenToAdmin, getGivenToAdmin,
-    getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName,
+    getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName, migrateEmployeeName,
     hasAccess, exportData, importData, clearAllData,
     addPenalty, addBonus, addTimeOff, addWriteOff,
     generateAutoOrder, getAutoOrderText, updateSalesPlan,
