@@ -24,6 +24,7 @@ export default function EmployeeManager() {
     darkMode,
     locations,
     salarySettings,
+    migrateEmployeeName,
   } = useApp();
 
   const getCities = () => [...new Set((locations || []).map(l => l.city))];
@@ -115,73 +116,103 @@ export default function EmployeeManager() {
   };
 
   const handleSaveEdit = () => {
-    if (!editForm.name?.trim()) { showNotification('Имя не может быть пустым', 'error'); return; }
-    if (editForm.role === 'deputy' && !editForm.deputyCity) {
-      showNotification('Выберите город для замдиректора', 'error'); return;
-    }
-
-    // Уникальность deputy и director (синхронные проверки)
-    if (!checkDeputyUniqueness(editingUser, editForm.role)) return;
-    if (!checkDirectorUniqueness(editingUser, editForm.role)) return;
-
-    let updated = regUsers.map(u => {
-      if (u.login === editingUser) {
-        const isNewDeputy = editForm.role === 'deputy';
-        const isAdminRole = editForm.role === 'admin' || editForm.role === 'deputy' || editForm.role === 'director';
-        // canViewReports: 'self' (по умолчанию) — не пишем в объект чтобы не засорять
-        const cvr = editForm.canViewReports;
-        const cvrField = (cvr === 'all' || (Array.isArray(cvr) && cvr.length > 0))
-          ? { canViewReports: cvr }
-          : { canViewReports: undefined };
-        return {
-          ...u,
-          name: editForm.name.trim(),
-          role: editForm.role,
-          isAdmin: editForm.isAdmin || isAdminRole,
-          noSalary: !!editForm.noSalary,
-          ...cvrField,
-          ...(isNewDeputy
-            ? { deputyCity: editForm.deputyCity, deputyPerSale: Math.max(0, Number(editForm.deputyPerSale) || 0) }
-            : { deputyCity: undefined, deputyPerSale: undefined }
-          ),
-        };
+    try {
+      if (!editForm.name?.trim()) {
+        showNotification('Имя не может быть пустым', 'error');
+        return;
       }
-      return u;
-    });
-
-    // Если назначаем нового deputy — старого переводим в обычные админы
-    if (editForm.role === 'deputy' && currentDeputy && currentDeputy.login !== editingUser) {
-      updated = updated.map(u => u.login === currentDeputy.login
-        ? { ...u, role: 'admin', isAdmin: true, deputyCity: undefined, deputyPerSale: undefined }
-        : u
-      );
-    }
-    // Если назначаем нового директора — старого переводим в обычные админы
-    if (editForm.role === 'director' && currentDirector && currentDirector.login !== editingUser) {
-      updated = updated.map(u => u.login === currentDirector.login
-        ? { ...u, role: 'admin', isAdmin: true }
-        : u
-      );
-    }
-
-    saveUsers(updated);
-
-    // Синхронизация name/role в employees
-    const edited = updated.find(u => u.login === editingUser);
-    if (edited) {
-      const empMatch = employees.find(e => e.name === edited.name || e.name === editingUser);
-      if (empMatch) {
-        updateEmployees(employees.map(e => e.id === empMatch.id ? { ...e, name: edited.name, role: edited.role } : e));
+      if (editForm.role === 'deputy' && !editForm.deputyCity) {
+        showNotification('Выберите город для замдиректора', 'error');
+        return;
       }
-    }
 
-    // Если редактируем самого себя — обновить currentUser
-    if (editingUser === currentUser?.login) {
-      const me = updated.find(u => u.login === editingUser);
-      if (me) setCurrentUser(me);
+      // Уникальность deputy и director (синхронные проверки через window.confirm)
+      if (!checkDeputyUniqueness(editingUser, editForm.role)) return;
+      if (!checkDirectorUniqueness(editingUser, editForm.role)) return;
+
+      // Старое имя для миграции
+      const oldUser = regUsers.find(u => u.login === editingUser);
+      const oldName = oldUser?.name;
+      const newName = editForm.name.trim();
+      const nameChanged = oldName && oldName !== newName;
+
+      // Если имя меняется — спросим подтверждение и сделаем миграцию во всех связанных данных
+      if (nameChanged) {
+        const ok = window.confirm(
+          `Имя меняется: «${oldName}» → «${newName}».\n\n` +
+          `Будут обновлены все связанные данные: отчёты, расходы, бонусы, график.\n\n` +
+          `Продолжить?`
+        );
+        if (!ok) return;
+      }
+
+      let updated = regUsers.map(u => {
+        if (u.login === editingUser) {
+          const isNewDeputy = editForm.role === 'deputy';
+          const isAdminRole = editForm.role === 'admin' || editForm.role === 'deputy' || editForm.role === 'director';
+          const cvr = editForm.canViewReports;
+          const cvrField = (cvr === 'all' || (Array.isArray(cvr) && cvr.length > 0))
+            ? { canViewReports: cvr }
+            : { canViewReports: undefined };
+          return {
+            ...u,
+            name: newName,
+            role: editForm.role,
+            isAdmin: editForm.isAdmin || isAdminRole,
+            noSalary: !!editForm.noSalary,
+            ...cvrField,
+            ...(isNewDeputy
+              ? { deputyCity: editForm.deputyCity, deputyPerSale: Math.max(0, Number(editForm.deputyPerSale) || 0) }
+              : { deputyCity: undefined, deputyPerSale: undefined }
+            ),
+          };
+        }
+        return u;
+      });
+
+      // Если назначаем нового deputy — старого переводим в обычные админы
+      if (editForm.role === 'deputy' && currentDeputy && currentDeputy.login !== editingUser) {
+        updated = updated.map(u => u.login === currentDeputy.login
+          ? { ...u, role: 'admin', isAdmin: true, deputyCity: undefined, deputyPerSale: undefined }
+          : u
+        );
+      }
+      // Если назначаем нового директора — старого переводим в обычные админы
+      if (editForm.role === 'director' && currentDirector && currentDirector.login !== editingUser) {
+        updated = updated.map(u => u.login === currentDirector.login
+          ? { ...u, role: 'admin', isAdmin: true }
+          : u
+        );
+      }
+
+      // Сохраняем users
+      saveUsers(updated);
+
+      // Миграция имени во всех связанных данных
+      if (nameChanged && typeof migrateEmployeeName === 'function') {
+        migrateEmployeeName(oldName, newName);
+      } else {
+        // Если имя НЕ менялось — всё равно синхронизируем роль в employees
+        const empMatch = employees.find(e => e.name === newName || e.name === editingUser);
+        if (empMatch) {
+          updateEmployees(employees.map(e =>
+            e.id === empMatch.id ? { ...e, name: newName, role: editForm.role } : e
+          ));
+        }
+      }
+
+      // Если редактируем самого себя — обновить currentUser
+      if (editingUser === currentUser?.login) {
+        const me = updated.find(u => u.login === editingUser);
+        if (me) setCurrentUser(me);
+      }
+
+      setEditingUser(null);
+      showNotification(nameChanged ? `Сохранено · переименовано в «${newName}»` : 'Сохранено');
+    } catch (err) {
+      console.error('handleSaveEdit error:', err);
+      showNotification('Ошибка сохранения: ' + (err?.message || 'неизвестная'), 'error');
     }
-    setEditingUser(null);
-    showNotification('Сохранено');
   };
 
   const handleDeleteUser = (login) => {
