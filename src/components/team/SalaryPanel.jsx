@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { DollarSign } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { parseYear } from '../../utils/dates.js';
+import { calculateAdminEarnings } from '../../utils/salary.js';
 
 /**
  * SalaryPanel — финансовая сводка, настройки зарплаты, расходы по категориям.
@@ -25,7 +26,7 @@ export default function SalaryPanel() {
     expenseCategories,
   } = useApp();
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
 
   // Период: неделя/месяц
   const [period, setPeriod] = useState('week'); // 'week' | 'month'
@@ -51,10 +52,11 @@ export default function SalaryPanel() {
     const revenue = periodReports.reduce((s, r) => s + (r.total || 0), 0);
     const salary = periodReports.reduce((s, r) => s + (getEffectiveSalary?.(r) || 0), 0);
     const expensesTotal = periodExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-    const profit = revenue - salary - expensesTotal;
+    const adminEarnings = calculateAdminEarnings(periodReports, salarySettings);
+    const profit = revenue - salary - expensesTotal - adminEarnings;
 
-    return { revenue, salary, expensesTotal, profit, periodReports, periodExpenses };
-  }, [reports, expenses, period, getEffectiveSalary]);
+    return { revenue, salary, expensesTotal, adminEarnings, profit, periodReports, periodExpenses };
+  }, [reports, expenses, period, getEffectiveSalary, salarySettings]);
 
   // === Функции редактирования ranges зарплаты ===
   const updateRange = (index, field, value) => {
@@ -146,14 +148,26 @@ export default function SalaryPanel() {
             <p className="text-xl font-bold">-{stats.salary.toLocaleString()}₽</p>
           </div>
           <div className="bg-white/20 rounded-lg p-3 backdrop-blur-sm">
+            <p className="text-xs opacity-80">ЗП админа</p>
+            <p className="text-xl font-bold">-{stats.adminEarnings.toLocaleString()}₽</p>
+            <p className="text-[10px] opacity-70 mt-0.5">
+              {(salarySettings?.adminSalaryMode || 'percentage') === 'perSale'
+                ? `${salarySettings?.adminSalaryPerSale ?? 50}₽ × ${stats.periodReports.length}`
+                : `${salarySettings?.adminSalaryPercentage ?? 10}% от выручки`}
+            </p>
+          </div>
+          <div className="bg-white/20 rounded-lg p-3 backdrop-blur-sm">
             <p className="text-xs opacity-80">Расходы</p>
             <p className="text-xl font-bold">-{stats.expensesTotal.toLocaleString()}₽</p>
             <p className="text-[10px] opacity-70 mt-0.5">{stats.periodExpenses.length} записей</p>
           </div>
-          <div className="bg-white/20 rounded-lg p-3 backdrop-blur-sm">
+          <div className="bg-white/20 rounded-lg p-3 backdrop-blur-sm col-span-2">
             <p className="text-xs opacity-80">Чистая прибыль</p>
-            <p className={`text-xl font-bold ${stats.profit < 0 ? 'text-red-200' : ''}`}>
+            <p className={`text-2xl font-black ${stats.profit < 0 ? 'text-red-200' : ''}`}>
               {stats.profit.toLocaleString()}₽
+            </p>
+            <p className="text-[10px] opacity-70 mt-0.5">
+              Выручка − ЗП сотр. − ЗП админа − Расходы
             </p>
           </div>
         </div>
