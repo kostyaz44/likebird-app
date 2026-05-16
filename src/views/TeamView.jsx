@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FileText, BarChart3, ArrowLeft, Check, ChevronRight, Calendar, CheckCircle, Users, Camera } from 'lucide-react';
 import { formatDate, parseRuDate, parseYear } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
@@ -11,13 +11,13 @@ export default function TeamView() {
   const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, reports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
 
   // Флаг админа — для отображения админ-вкладок и блоков управления
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
 
   // Подписка на regUsers — нужна для отсева "призраков" (employees без user-аккаунта)
   const [regUsers, setRegUsers] = useState(() => {
     try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; }
   });
-  React.useEffect(() => {
+  useEffect(() => {
     const refresh = () => {
       try { setRegUsers(JSON.parse(localStorage.getItem('likebird-users') || '[]')); } catch { /* silent */ }
     };
