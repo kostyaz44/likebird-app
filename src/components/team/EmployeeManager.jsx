@@ -88,6 +88,7 @@ export default function EmployeeManager() {
       deputyCity: user.deputyCity || '',
       deputyPerSale: typeof user.deputyPerSale === 'number' ? user.deputyPerSale : 75,
       noSalary: !!user.noSalary,
+      canViewReports: user.canViewReports || 'self', // 'self' | 'all' | ['emp1', 'emp2']
     });
   };
 
@@ -119,12 +120,19 @@ export default function EmployeeManager() {
       if (u.login === editingUser) {
         // Очищаем deputy-поля если роль больше не deputy
         const isNewDeputy = editForm.role === 'deputy';
+        // canViewReports: 'self' (по умолчанию) — не пишем в объект чтобы не засорять;
+        // 'all' или массив имён — пишем как есть
+        const cvr = editForm.canViewReports;
+        const cvrField = (cvr === 'all' || (Array.isArray(cvr) && cvr.length > 0))
+          ? { canViewReports: cvr }
+          : { canViewReports: undefined };
         return {
           ...u,
           name: editForm.name.trim(),
           role: editForm.role,
           isAdmin: editForm.isAdmin || editForm.role === 'admin' || editForm.role === 'deputy',
           noSalary: !!editForm.noSalary,
+          ...cvrField,
           ...(isNewDeputy
             ? { deputyCity: editForm.deputyCity, deputyPerSale: Math.max(0, Number(editForm.deputyPerSale) || 0) }
             : { deputyCity: undefined, deputyPerSale: undefined }
@@ -405,6 +413,54 @@ export default function EmployeeManager() {
                         </div>
                       )}
 
+                      {/* Видимость чужих отчётов в "Итог дня" */}
+                      {editForm.role !== 'admin' && editForm.role !== 'deputy' && !editForm.isAdmin && (
+                        <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 space-y-2">
+                          <p className="text-[11px] text-cyan-700 font-semibold">👁️ Какие отчёты видит в «Итог дня»:</p>
+                          <select
+                            value={
+                              editForm.canViewReports === 'all' ? 'all'
+                              : Array.isArray(editForm.canViewReports) ? 'selected'
+                              : 'self'
+                            }
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'self') setEditForm({ ...editForm, canViewReports: 'self' });
+                              else if (val === 'all') setEditForm({ ...editForm, canViewReports: 'all' });
+                              else setEditForm({ ...editForm, canViewReports: Array.isArray(editForm.canViewReports) ? editForm.canViewReports : [] });
+                            }}
+                            className="w-full p-2 border-2 rounded text-sm focus:border-cyan-500 focus:outline-none"
+                          >
+                            <option value="self">Только свои</option>
+                            <option value="selected">Свои + выбранные сотрудники</option>
+                            <option value="all">Все (как админ)</option>
+                          </select>
+                          {Array.isArray(editForm.canViewReports) && (
+                            <div className="space-y-1 max-h-32 overflow-y-auto bg-white p-2 rounded border border-cyan-100">
+                              {employees.filter(e => e.active && e.name !== editForm.name).length === 0 ? (
+                                <p className="text-[10px] text-gray-400 text-center py-1">Нет других сотрудников</p>
+                              ) : employees.filter(e => e.active && e.name !== editForm.name).map(emp => (
+                                <label key={emp.id} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                                  <input
+                                    type="checkbox"
+                                    checked={editForm.canViewReports.includes(emp.name)}
+                                    onChange={(e) => {
+                                      const list = editForm.canViewReports || [];
+                                      const next = e.target.checked
+                                        ? [...list, emp.name]
+                                        : list.filter(n => n !== emp.name);
+                                      setEditForm({ ...editForm, canViewReports: next });
+                                    }}
+                                    className="w-3.5 h-3.5"
+                                  />
+                                  <span>{emp.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Чекбокс "Не начислять ЗП" */}
                       <label className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg cursor-pointer">
                         <input
@@ -466,6 +522,16 @@ export default function EmployeeManager() {
                         {user.role === 'deputy' && user.deputyCity && (
                           <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200">
                             📍 {user.deputyCity} · {user.deputyPerSale || 0}₽/товар
+                          </span>
+                        )}
+                        {user.canViewReports === 'all' && (
+                          <span className="text-[10px] bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded border border-cyan-200" title="Видит все отчёты в Итог дня">
+                            👁️ все отчёты
+                          </span>
+                        )}
+                        {Array.isArray(user.canViewReports) && user.canViewReports.length > 0 && (
+                          <span className="text-[10px] bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded border border-cyan-200" title={`Видит: ${user.canViewReports.join(', ')}`}>
+                            👁️ +{user.canViewReports.length}
                           </span>
                         )}
                       </div>
