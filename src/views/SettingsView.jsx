@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Bell, Download, Upload, Info, LogOut, Wifi, WifiOff, Smartphone } from 'lucide-react';
+import { ArrowLeft, Bell, Download, Upload, Info, LogOut, Wifi, WifiOff, Smartphone, FileText } from 'lucide-react';
 import { SyncManager } from '../services/sync.js';
 import { APP_VERSION } from '../utils/constants.js';
 import { dateForFile } from '../utils/dates.js';
@@ -7,7 +7,9 @@ import { downloadBlob } from '../utils/helpers.js';
 import { useApp } from '../context/AppContext';
 
 export default function SettingsView() {
-  const { authName, darkMode, deferredPrompt, employeeName, enrichBackup, expenses, exportData, getAllDates, getEffectiveSalary, getProductName, importData, isOnline, notifSettings, reports, save, setCurrentView, setDarkMode, setDeferredPrompt, setIsAuthenticated, setNotifSettings, setShowInstallBanner, showInstallBanner, showNotification, stock } = useApp();
+  const { auditLog, authName, currentUser, darkMode, deferredPrompt, employeeName, enrichBackup, expenses, exportData, getAllDates, getEffectiveSalary, getProductName, importData, isOnline, notifSettings, reports, save, setCurrentView, setDarkMode, setDeferredPrompt, setIsAuthenticated, setNotifSettings, setShowInstallBanner, showInstallBanner, showNotification, stock } = useApp();
+
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy';
 
   return (
   <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
@@ -140,6 +142,40 @@ export default function SettingsView() {
           )}
         </div>
       </div>
+
+      {/* Лог действий админа (только для админа) */}
+      {isAdmin && (
+        <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+          <h3 className="font-bold mb-3 flex items-center gap-2">
+            <FileText className="w-5 h-5 text-indigo-500" />
+            📋 Лог действий ({auditLog?.length || 0})
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">Журнал действий администраторов: что и когда менялось</p>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {!auditLog || auditLog.length === 0 ? (
+              <p className="text-gray-400 text-center py-4 text-sm">Нет записей</p>
+            ) : auditLog.slice(0, 50).map(entry => (
+              <div key={entry.id} className="p-2 bg-gray-50 rounded-lg border text-sm">
+                <div className="flex justify-between items-start gap-2">
+                  <span className="font-semibold text-xs">{entry.action}</span>
+                  <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                    {new Date(entry.timestamp).toLocaleString('ru')}
+                  </span>
+                </div>
+                {entry.details && (
+                  <p className="text-gray-600 text-xs mt-1 break-words">{entry.details}</p>
+                )}
+                <p className="text-[10px] text-gray-400 mt-0.5">👤 {entry.user}</p>
+              </div>
+            ))}
+          </div>
+          {auditLog && auditLog.length > 50 && (
+            <p className="text-[11px] text-gray-400 text-center mt-2">
+              Показаны последние 50 из {auditLog.length}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Аккаунт */}
       <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>

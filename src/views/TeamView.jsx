@@ -6,6 +6,7 @@ import EmployeeManager from '../components/team/EmployeeManager';
 import ScheduleManager from '../components/team/ScheduleManager';
 import SalaryPanel from '../components/team/SalaryPanel';
 import EmployeesAdminTab from '../components/team/EmployeesAdminTab';
+import EventsManager from '../components/team/EventsManager';
 
 export default function TeamView() {
   const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, reports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
@@ -372,6 +373,9 @@ export default function TeamView() {
         {/* ВКЛАДКА: События */}
         {teamTab === 'events' && (
           <div className="space-y-4">
+            {/* Управление событиями (только админ) */}
+            {isAdmin && <EventsManager />}
+
             {upcomingEvents.length > 0 && (
               <div>
                 <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">📅 Предстоящие события</h3>

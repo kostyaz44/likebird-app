@@ -221,7 +221,6 @@ export default function AdminView() {
     { id: 'notifications', label: '🔔 Уведомления', icon: Bell },
     { id: 'security', label: '🔐 Доступ', icon: Lock },
     { id: 'manuals', label: '📚 Мануалы', icon: FileText },
-    { id: 'audit', label: '📋 Аудит', icon: FileText },
   ];
 
   return (
@@ -802,7 +801,6 @@ export default function AdminView() {
               { id: 'kpi', label: '🎯 KPI' },
               { id: 'achievements', label: '🏅 Достижения' },
               { id: 'challenges', label: '🏆 Челленджи' },
-              { id: 'events', label: '📅 События/Лог' },
             ].map(t => (
               <button key={t.id} onClick={() => setPersonnelTab(t.id)}
                 className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${personnelTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
@@ -866,171 +864,177 @@ export default function AdminView() {
             </div>
           );
         })()}
-        {/* ВКЛАДКА: События + Аудит-лог (бывшая «График», ScheduleEditor переехал в TeamView) */}
-        {adminTab === 'personnel' && personnelTab === 'events' && (() => {
-          const EVENT_TYPES = [
-            { id: 'sale', label: '🎁 Акция', emoji: '🎁' },
-            { id: 'holiday', label: '🎉 Праздник', emoji: '🎉' },
-            { id: 'training', label: '📚 Обучение', emoji: '📚' },
-            { id: 'shift', label: '🔄 Смена', emoji: '🔄' },
-            { id: 'info', label: '📌 Инфо', emoji: '📌' },
-          ];
 
-          const saveEvent = () => {
-            if (!newDate || !newEvent.title) { showNotification('Заполните дату и название', 'error'); return; }
-            const [y, m, d] = newDate.split('-');
-            const dateKey = `${d}.${m}.${y}`;
-            const updated = { ...eventsCalendar };
-            if (!updated[dateKey]) updated[dateKey] = [];
-            if (editingEventRef) {
-              // Удаляем старое событие (дата могла измениться)
-              const oldKey = editingEventRef.dateKey;
-              const oldIdx = editingEventRef.index;
-              if (updated[oldKey]) {
-                updated[oldKey] = updated[oldKey].filter((_, i) => i !== oldIdx);
-                if (updated[oldKey].length === 0) delete updated[oldKey];
-              }
-              if (!updated[dateKey]) updated[dateKey] = [];
-            }
-            updated[dateKey] = [...(updated[dateKey] || []), { ...newEvent, createdAt: Date.now() }];
-            setEventsCalendar(updated);
-            save('likebird-events', updated);
-            setNewDate(''); setNewEvent({ title: '', description: '', type: 'info', emoji: '📅' });
-            setEditingEventRef(null);
-            setShowEventForm(false);
-            showNotification(editingEventRef ? 'Событие обновлено' : 'Событие добавлено');
-          };
-          const deleteEvent = (date, index) => {
-            showConfirm('Удалить событие?', () => {
-              const updated = { ...eventsCalendar };
-              if (updated[date]) {
-                updated[date] = updated[date].filter((_, i) => i !== index);
-                if (updated[date].length === 0) delete updated[date];
-              }
-              setEventsCalendar(updated);
-              save('likebird-events', updated);
-            });
-          };
-          const startEditEvent = (date, index, ev) => {
-            const [d, m, y] = date.split('.');
-            setNewDate(`${y}-${m}-${d}`);
-            setNewEvent({ title: ev.title, description: ev.description || '', type: ev.type || 'info', emoji: ev.emoji || '📅' });
-            setEditingEventRef({ dateKey: date, index });
-            setShowEventForm(true);
-          };
+        {/* Stockplus sub-tabs */}
+        {/* FIX (merge admin → catalog): Подвкладки «Товары», «Ревизия», «История»,
+            «Списания», «Автозаказ» перенесены в CatalogView (видны только админу).
+            Здесь остались только «Точки» и «Себестоимость». */}
+        {adminTab === 'stockplus' && (
+          <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
+            {[
+              { id: 'locations', label: '📍 Точки' },
+              { id: 'cost', label: '💰 Себестоимость' },
+            ].map(t => (
+              <button key={t.id} onClick={() => setStockTab(t.id)}
+                className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${stockTab === t.id ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
 
-          // Flatten: [{date, ev, index}, ...] sorted by date
-          const sortedEvents = Object.entries(eventsCalendar)
-            .flatMap(([date, evArr]) => (Array.isArray(evArr) ? evArr : [evArr]).map((ev, i) => ({ date, ev, index: i })))
-            .sort((a, b) => {
-              const parse = (d) => { const [dd, mm, yy] = d.split('.'); return new Date(parseInt(parseYear(yy)), mm - 1, dd); };
-              return parse(a.date) - parse(b.date);
-            });
-
+        {/* ВКЛАДКА: Точки продаж */}
+        {adminTab === 'stockplus' && stockTab === 'locations' && (() => {
+          const cities = getCities();
           return (
             <div className="space-y-4">
-              {/* (Редактор графика переехал в TeamView → График) */}
-
-              {/* Календарь событий */}
-              <div className="bg-white rounded-2xl p-4 shadow">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-bold flex items-center gap-2">
-                    <Calendar className="w-5 h-5 text-red-500" />
-                    События и даты ({sortedEvents.length})
-                  </h3>
-                  <button onClick={() => setShowEventForm(!showEventForm)}
-                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-semibold ${showEventForm ? 'bg-gray-100 text-gray-600' : 'bg-red-500 text-white hover:bg-red-600'}`}>
-                    {showEventForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-                    {showEventForm ? 'Отмена' : 'Добавить'}
-                  </button>
-                </div>
-
-                {showEventForm && (
-                  <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 mb-4 space-y-3">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-xs text-gray-500 font-semibold block mb-1">Дата *</label>
-                        <input type="date" value={newDate} onChange={e => {
-                          setNewDate(e.target.value);
-                        }} className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-red-400 focus:outline-none" />
-                      </div>
-                      <div>
-                        <label className="text-xs text-gray-500 font-semibold block mb-1">Тип</label>
-                        <select value={newEvent.type} onChange={e => {
-                          const t = EVENT_TYPES.find(et => et.id === e.target.value);
-                          setNewEvent({...newEvent, type: e.target.value, emoji: t?.emoji || '📅'});
-                        }} className="w-full p-2 border-2 border-gray-200 rounded-lg text-sm focus:border-red-400 focus:outline-none">
-                          {EVENT_TYPES.map(et => <option key={et.id} value={et.id}>{et.label}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})}
-                      placeholder="Название события *"
-                      className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm focus:border-red-400 focus:outline-none" />
-                    <textarea value={newEvent.description} onChange={e => setNewEvent({...newEvent, description: e.target.value})}
-                      placeholder="Описание (необязательно)"
-                      rows={2} className="w-full p-2 border-2 border-gray-200 rounded-xl text-sm focus:border-red-400 focus:outline-none resize-none" />
-                    <button onClick={saveEvent}
-                      className="w-full py-2.5 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-all">
-                      {editingEventRef ? '✏️ Обновить событие' : '✅ Сохранить событие'}
-                    </button>
-                    {editingEventRef && (
-                      <button onClick={() => { setEditingEventRef(null); setShowEventForm(false); setNewDate(''); setNewEvent({ title: '', description: '', type: 'info', emoji: '📅' }); }}
-                        className="w-full py-2 bg-gray-200 text-gray-600 rounded-xl font-bold hover:bg-gray-300 mt-2">
-                        Отмена редактирования
-                      </button>
-                    )}
+              {/* Добавление точки */}
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <h3 className="font-bold mb-3 flex items-center gap-2"><MapPin className="w-5 h-5 text-purple-600" />Добавить точку</h3>
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <input type="text" placeholder="Город" value={newCity} onChange={(e) => setNewCity(e.target.value)} className="flex-1 p-2 border rounded" list="cities-list" />
+                    <datalist id="cities-list">{cities.map(c => <option key={c} value={c} />)}</datalist>
                   </div>
-                )}
-
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                  {sortedEvents.length === 0 ? (
-                    <p className="text-gray-400 text-center py-6">Нет событий</p>
-                  ) : sortedEvents.map(({ date, ev, index }) => (
-                    <div key={`${date}_${index}`} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border">
-                      <span className="text-2xl flex-shrink-0">{ev.emoji || '📅'}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-sm truncate">{ev.title}</p>
-                        <p className="text-xs text-gray-400">{date}{ev.description && ` • ${ev.description}`}</p>
-                      </div>
-                      <button onClick={() => startEditEvent(date, index, ev)} className="p-1.5 text-blue-400 hover:bg-blue-50 rounded-lg flex-shrink-0">
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => deleteEvent(date, index)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg flex-shrink-0">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                  <input type="text" placeholder="Название точки (например: Пушкинская ул.)" value={newLocName} onChange={(e) => setNewLocName(e.target.value)} className="w-full p-2 border rounded" />
+                  <button onClick={() => {
+                    if (newCity.trim() && newLocName.trim()) {
+                      addLocation(newCity.trim(), newLocName.trim());
+                      setNewCity(''); setNewLocName('');
+                      showNotification('Точка добавлена');
+                    }
+                  }} className="w-full bg-purple-500 text-white py-2 rounded font-medium">Добавить точку</button>
                 </div>
               </div>
+
+              {/* Фильтр по городу */}
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                <button onClick={() => setSelectedCity('')} className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${!selectedCity ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
+                  Все города
+                </button>
+                {cities.map(city => (
+                  <button key={city} onClick={() => setSelectedCity(city)} className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${selectedCity === city ? 'bg-purple-500 text-white' : 'bg-white border text-gray-600'}`}>
+                    {city}
+                  </button>
+                ))}
+              </div>
+
+              {/* Список точек */}
+              {(selectedCity ? [selectedCity] : cities).map(city => (
+                <div key={city} className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                  <h3 className="font-bold mb-3 flex items-center gap-2">📍 {city}</h3>
+                  <div className="space-y-2">
+                    {getLocationsByCity(city).map(loc => (
+                      <div key={loc.id} className={`flex items-center justify-between p-3 rounded-lg border ${loc.active ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}>
+                        <div>
+                          <span className="font-medium">{loc.name}</span>
+                          {!loc.active && <span className="ml-2 text-xs text-red-500">неактивна</span>}
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => toggleLocationActive(loc.id)} className={`px-3 py-1 rounded text-sm ${loc.active ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
+                            {loc.active ? 'Отключить' : 'Включить'}
+                          </button>
+                          <button onClick={() => showConfirm('Удалить точку?', () => removeLocation(loc.id))} className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm">
+                            Удалить
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {getLocationsByCity(city).length === 0 && <p className="text-gray-400 text-center py-4">Нет точек</p>}
+                  </div>
+                </div>
+              ))}
+
+              {cities.length === 0 && (
+                <div className="text-center py-10 bg-white rounded-xl shadow">
+                  <MapPin className="w-16 h-16 mx-auto text-gray-300 mb-3" />
+                  <p className="text-gray-500">Добавьте первую точку продаж</p>
+                </div>
+              )}
             </div>
           );
         })()}
 
-        {/* ВКЛАДКА: Настройки */}
 
-        {/* BLOCK 8: Audit Log */}
-        {adminTab === 'audit' && (
-          <div className="space-y-4">
-            <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-              <h3 className="font-bold mb-3 flex items-center gap-2">📋 Журнал действий ({auditLog.length})</h3>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {auditLog.length === 0 ? (
-                  <p className="text-gray-400 text-center py-4">Нет записей</p>
-                ) : auditLog.slice(0, 50).map(entry => (
-                  <div key={entry.id} className="p-3 bg-gray-50 rounded-lg border text-sm">
-                    <div className="flex justify-between items-start">
-                      <span className="font-semibold">{entry.action}</span>
-                      <span className="text-xs text-gray-400">{new Date(entry.timestamp).toLocaleString('ru')}</span>
-                    </div>
-                    <p className="text-gray-600 text-xs mt-1">{entry.details}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">👤 {entry.user}</p>
+        {/* ВКЛАДКА: Себестоимость */}
+        {/* FIX (merge admin → catalog): История, Списания, Автозаказ перенесены
+            в CatalogView. Здесь осталась только Себестоимость. */}
+        {adminTab === 'stockplus' && stockTab === 'cost' && (
+          <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+            <h3 className="font-bold mb-3">💰 Себестоимость товаров</h3>
+            <p className="text-xs text-gray-500 mb-3">⚠️ Эта информация видна только администратору</p>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {DYNAMIC_ALL_PRODUCTS.map(prod => (
+                <div key={prod.name} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                  <div>
+                    <span className="font-medium">{prod.emoji} {prod.name}</span>
+                    <span className="text-gray-400 text-sm ml-2">Цена: {prod.price}₽</span>
                   </div>
-                ))}
-              </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">Себест:</span>
+                    <input type="number" value={getCostPrice(prod.name) || ''} onChange={(e) => setCostPrice(prod.name, parseInt(e.target.value) || 0)}
+                      placeholder="0" className="w-20 p-1 border rounded text-center text-sm" />
+                    <span className="text-xs">₽</span>
+                    {getCostPrice(prod.name) > 0 && (
+                      <span className="text-xs text-green-600 font-medium ml-2">
+                        Прибыль: {prod.price - getCostPrice(prod.name)}₽
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
+
+        {/* ВКЛАДКА: Чат */}
+        {adminTab === 'chat' && (
+            <div className="space-y-4">
+              {/* Отправка сообщения */}
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <h3 className="font-bold mb-3 flex items-center gap-2"><MessageCircle className="w-5 h-5 text-purple-600" />Новое сообщение</h3>
+                <div className="space-y-2">
+                  <select value={chatTo} onChange={(e) => setChatTo(e.target.value)} className="w-full p-2 border rounded">
+                    <option value="">📢 Всем сотрудникам</option>
+                    {employees.filter(e => e.active).map(e => <option key={e.id} value={e.id}>👤 {e.name}</option>)}
+                  </select>
+                  <textarea value={chatText} onChange={(e) => setChatText(e.target.value)} placeholder="Текст сообщения..." className="w-full p-3 border rounded-lg" rows={3} />
+                  <button onClick={() => {
+                    if (chatText.trim()) {
+                      sendMessage(chatText.trim(), chatTo ? parseInt(chatTo) : null);
+                      setChatText('');
+                      showNotification('Сообщение отправлено');
+                    }
+                  }} className="w-full bg-purple-500 text-white py-2 rounded font-medium">Отправить</button>
+                </div>
+              </div>
+
+              {/* Список сообщений */}
+              <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
+                <h3 className="font-bold mb-3">💬 История сообщений</h3>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {chatMessages.slice().reverse().slice(0, 30).map(msg => {
+                    const toEmp = msg.to ? employees.find(e => e.id === msg.to) : null;
+                    return (
+                      <div key={msg.id} className={`p-3 rounded-lg ${msg.read ? 'bg-gray-50' : 'bg-purple-50 border border-purple-200'}`}>
+                        <div className="flex justify-between items-start mb-1">
+                          <span className="font-medium text-sm">{msg.from}</span>
+                          <span className="text-xs text-gray-400">{new Date(msg.date).toLocaleString('ru-RU')}</span>
+                        </div>
+                        <p className="text-sm">{msg.text}</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {toEmp ? `→ ${toEmp.name}` : '→ Всем'}
+                          {!msg.read && <span className="ml-2 text-purple-600">● Новое</span>}
+                        </p>
+                      </div>
+                    );
+                  })}
+                  {chatMessages.length === 0 && <p className="text-gray-400 text-center py-8">Нет сообщений</p>}
+                </div>
+              </div>
+            </div>
+        )}
+
 
         {/* BLOCK 7: Challenges Management */}
         {adminTab === 'personnel' && personnelTab === 'challenges' && (
@@ -1414,23 +1418,7 @@ export default function AdminView() {
               </button>
             </div>
 
-            {/* Журнал действий */}
-            <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
-              <h3 className="font-bold mb-3 flex items-center gap-2"><FileText className="w-5 h-5 text-purple-600" />Журнал действий</h3>
-              <div className="max-h-64 overflow-y-auto space-y-2">
-                {auditLog.length > 0 ? auditLog.slice(0, 20).map(entry => (
-                  <div key={entry.id} className="p-2 bg-gray-50 rounded text-sm">
-                    <div className="flex justify-between">
-                      <span className="font-medium">{entry.action}</span>
-                      <span className="text-gray-400 text-xs">{new Date(entry.timestamp).toLocaleString('ru-RU')}</span>
-                    </div>
-                    {entry.details && <p className="text-gray-500 text-xs">{entry.details}</p>}
-                    <p className="text-gray-400 text-xs">👤 {entry.user}</p>
-                  </div>
-                )) : <p className="text-gray-400 text-sm">Журнал пуст</p>}
-              </div>
-              {auditLog.length > 20 && <p className="text-center text-xs text-gray-400 mt-2">Показаны последние 20 из {auditLog.length}</p>}
-            </div>
+            {/* (Журнал действий переехал в ⚙️ Настройки) */}
           </div>
         )}
 
