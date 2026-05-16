@@ -44,8 +44,7 @@ export default function TeamView() {
     if (!p) return 'offline';
     return (now - p.lastSeen) < ONLINE_THRESHOLD ? 'online' : 'offline';
   };
-  // Список всех пользователей с их онлайн-статусом
-  const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+  // (regUsers объявлен выше через useState с подпиской на изменения)
 
   // Данные для результатов недели
   const weekAgo = new Date();
