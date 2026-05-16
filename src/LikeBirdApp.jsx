@@ -1150,14 +1150,15 @@ function LikeBirdAppInner() {
     if (adminUser?.noSalary) return 0;
     const role = getEmployeeRole(adminName);
     // Только админ или замдиректор получают надбавку
-    if (role !== 'admin' && role !== 'deputy' && !adminUser?.isAdmin) return 0;
-    // Продажи ДРУГИХ сотрудников (не свои) и не от других админов
+    // Только админ, замдиректор или директор получают надбавку
+    if (role !== 'admin' && role !== 'deputy' && role !== 'director' && !adminUser?.isAdmin) return 0;
+    // Продажи ДРУГИХ сотрудников (не свои) и не от других "admin-уровней"
     const othersReports = dayReports.filter(r => {
       if (r.isUnrecognized) return false;
       if (r.employee === adminName) return false;
       const otherRole = getEmployeeRole(r.employee);
-      // Не считаем продажи других админов (чтобы не было двойной надбавки)
-      if (otherRole === 'admin' || otherRole === 'deputy') return false;
+      // Не считаем продажи других админов/замдиректоров/директоров (чтобы не было двойной надбавки)
+      if (otherRole === 'admin' || otherRole === 'deputy' || otherRole === 'director') return false;
       return true;
     });
     if (othersReports.length === 0) return 0;
@@ -1617,11 +1618,12 @@ function LikeBirdAppInner() {
     manager: ['catalog','shift','profile','game','chat','analytics-own','reports','day-report','stock','team','analytics','notifications'],
     admin: ['*'],
     deputy: ['*'], // Замдиректор имеет все права как админ
+    director: ['*'], // Директор — высшая роль (Константин/владелец)
   };
   const hasAccess = (action) => {
     const role = currentUser?.role || 'seller';
-    // Админ или замдиректор — полный доступ
-    if (role === 'admin' || role === 'deputy' || currentUser?.isAdmin) return true;
+    // Админ, замдиректор или директор — полный доступ
+    if (role === 'admin' || role === 'deputy' || role === 'director' || currentUser?.isAdmin) return true;
     const allowed = ROLE_ACCESS[role];
     if (!allowed) return false;
     if (allowed.includes('*')) return true;
