@@ -1578,14 +1578,20 @@ function LikeBirdAppInner() {
 
   // === BLOCK 8: Role-based access ===
   const ROLE_ACCESS = {
-    seller: ['catalog','shift','profile','game','chat','analytics-own','notifications'],
+    seller: ['catalog','shift','profile','game','chat','analytics-own','notifications','reports','day-report','team'],
+    senior: ['catalog','shift','profile','game','chat','analytics-own','reports','day-report','stock','team','analytics','notifications'],
     manager: ['catalog','shift','profile','game','chat','analytics-own','reports','day-report','stock','team','analytics','notifications'],
     admin: ['*'],
+    deputy: ['*'], // Замдиректор имеет все права как админ
   };
   const hasAccess = (action) => {
     const role = currentUser?.role || 'seller';
-    if (role === 'admin' || currentUser?.isAdmin) return true;
-    return ROLE_ACCESS[role]?.includes(action);
+    // Админ или замдиректор — полный доступ
+    if (role === 'admin' || role === 'deputy' || currentUser?.isAdmin) return true;
+    const allowed = ROLE_ACCESS[role];
+    if (!allowed) return false;
+    if (allowed.includes('*')) return true;
+    return allowed.includes(action);
   };
 
   // === BLOCK 4: Image compression utility ===
