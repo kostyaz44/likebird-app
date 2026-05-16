@@ -1139,6 +1139,40 @@ function LikeBirdAppInner() {
     return calculateSalary(r.basePrice, r.salePrice, r.category, r.tips || 0, salaryDecisions[r.id] || 'normal', salarySettings, getEmployeeRole(r.employee));
   };
 
+  // Заработок админа за смену (надбавка с продаж ДРУГИХ сотрудников за день).
+  // Используется в "Итог дня" для отображения админу его заработка.
+  // - В режиме 'percentage': % от выручки чужих продаж за день
+  // - В режиме 'perSale':    фикс ₽ × количество чужих продаж за день
+  // Возвращает 0 если у админа noSalary или режим не установлен.
+  const getAdminShiftEarnings = (dayReports, adminName) => {
+    if (!adminName || !Array.isArray(dayReports)) return 0;
+    const adminUser = getUserByEmployeeName(adminName);
+    if (adminUser?.noSalary) return 0;
+    const role = getEmployeeRole(adminName);
+    // Только админ или замдиректор получают надбавку
+    if (role !== 'admin' && role !== 'deputy' && !adminUser?.isAdmin) return 0;
+    // Продажи ДРУГИХ сотрудников (не свои) и не от других админов
+    const othersReports = dayReports.filter(r => {
+      if (r.isUnrecognized) return false;
+      if (r.employee === adminName) return false;
+      const otherRole = getEmployeeRole(r.employee);
+      // Не считаем продажи других админов (чтобы не было двойной надбавки)
+      if (otherRole === 'admin' || otherRole === 'deputy') return false;
+      return true;
+    });
+    if (othersReports.length === 0) return 0;
+    const mode = salarySettings?.adminSalaryMode || 'percentage';
+    if (mode === 'perSale') {
+      const perSale = Number(salarySettings?.adminSalaryPerSale) || 0;
+      return perSale * othersReports.length;
+    }
+    // percentage
+    const pct = Number(salarySettings?.adminSalaryPercentage) || 0;
+    if (pct <= 0) return 0;
+    const totalRevenue = othersReports.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    return Math.round(totalRevenue * pct / 100);
+  };
+
   // === Замдиректор: автоматическое начисление бонусов за продажи в его городе ===
   // Извлекает город из location-строки отчёта ("Город - Точка" или просто "Город")
   const extractCityFromReport = (r) => {
@@ -2426,7 +2460,7 @@ function LikeBirdAppInner() {
     updateEmployees, addEmployee, removeEmployee, toggleEmployeeActive,
     saveReport, saveParsedReports, deleteReport, addExpense,
     deleteExpense, updateGivenToAdmin, getGivenToAdmin,
-    getOwnCard, updateOwnCard, getEffectiveSalary, getProductName,
+    getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName,
     hasAccess, exportData, importData, clearAllData,
     addPenalty, addBonus, addTimeOff, addWriteOff,
     generateAutoOrder, getAutoOrderText, updateSalesPlan,
