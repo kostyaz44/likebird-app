@@ -60,14 +60,39 @@ export default function DayReportView() {
   const dateReports = getReportsByDate(selectedDate);
   const dateExpenses = getExpensesByDate(selectedDate);
   const idx = dates.indexOf(selectedDate);
-  const byEmployee = dateReports.reduce((acc, r) => { if (!acc[r.employee]) acc[r.employee] = []; acc[r.employee].push(r); return acc; }, {});
-  const expByEmp = dateExpenses.reduce((acc, e) => { if (!acc[e.employee]) acc[e.employee] = []; acc[e.employee].push(e); return acc; }, {});
-  const dayTotal = dateReports.reduce((s, r) => s + r.total, 0);
-  const dayCash = dateReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
-  const dayCashless = dateReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
-  const dayTips = dateReports.reduce((s, r) => s + (r.tips || 0), 0);
-  const daySalary = dateReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
-  const dayExpenses = dateExpenses.reduce((s, e) => s + e.amount, 0);
+
+  // === ФИЛЬТРАЦИЯ по правам видимости ===
+  // Админ/замдиректор видит всё. Обычный сотрудник — только своё.
+  // Дополнительно: админ может в EmployeeManager выставить user.canViewReports = ['emp1', 'emp2'] или 'all'
+  const isAdminViewer = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin || currentUser?.role === 'deputy';
+  const myLoginViewer = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login || ''; } catch { return ''; } })();
+  const myUserObj = (() => {
+    try {
+      const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+      return users.find(u => u.login === myLoginViewer) || null;
+    } catch { return null; }
+  })();
+  const canViewList = myUserObj?.canViewReports; // undefined | 'all' | ['name1', 'name2', ...]
+
+  const canSeeReportOf = (employeeNameInReport) => {
+    if (isAdminViewer) return true;
+    if (employeeNameInReport === employeeName) return true; // своё
+    if (canViewList === 'all') return true;
+    if (Array.isArray(canViewList) && canViewList.includes(employeeNameInReport)) return true;
+    return false;
+  };
+
+  const visibleReports = dateReports.filter(r => canSeeReportOf(r.employee));
+  const visibleExpenses = dateExpenses.filter(e => canSeeReportOf(e.employee));
+
+  const byEmployee = visibleReports.reduce((acc, r) => { if (!acc[r.employee]) acc[r.employee] = []; acc[r.employee].push(r); return acc; }, {});
+  const expByEmp = visibleExpenses.reduce((acc, e) => { if (!acc[e.employee]) acc[e.employee] = []; acc[e.employee].push(e); return acc; }, {});
+  const dayTotal = visibleReports.reduce((s, r) => s + r.total, 0);
+  const dayCash = visibleReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
+  const dayCashless = visibleReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
+  const dayTips = visibleReports.reduce((s, r) => s + (r.tips || 0), 0);
+  const daySalary = visibleReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+  const dayExpenses = visibleExpenses.reduce((s, e) => s + e.amount, 0);
   
   // Редактирование смены
   const [editingShift, setEditingShift] = useState(null); // login сотрудника
@@ -270,12 +295,19 @@ export default function DayReportView() {
     const openVal = editOpen.trim();
     const closeVal = editClose.trim();
     if (!openVal) { showNotification('Укажите время начала смены', 'error'); return; }
+    // Защита: не-админ может править ТОЛЬКО свою смену
+    const { key, login: shiftLogin } = getEmployeeShift(empName);
+    const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login || ''; } catch { return ''; } })();
+    const meIsAdmin = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.isAdmin || currentUser?.role === 'deputy';
+    if (!meIsAdmin && shiftLogin !== myLogin) {
+      showNotification('Можно редактировать только свою смену', 'error');
+      return;
+    }
     if (closeVal) {
       // Проверка формата HH:MM
       const timeRe = /^\d{1,2}:\d{2}$/;
       if (!timeRe.test(openVal) || !timeRe.test(closeVal)) { showNotification('Неверный формат времени', 'error'); return; }
     }
-    const { key } = getEmployeeShift(empName);
     const existing = shiftsData[key] || {};
     const updated = { 
       ...shiftsData, 
@@ -379,12 +411,15 @@ export default function DayReportView() {
                   const salesCount = empReports.length;
                   const speed = roundedHours > 0 ? parseFloat((salesCount / roundedHours).toFixed(2)) : 0;
                   const isEditing = editingShift === login;
+                  // Право редактировать смену: админ ИЛИ владелец смены (свой login)
+                  const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login || ''; } catch { return ''; } })();
+                  const canEditShift = isAdminUser || login === myLogin;
                   
                   return (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                       <div className="flex justify-between items-center mb-1">
                         <span className="text-sm font-semibold text-blue-700">⏱️ Время работы</span>
-                        {!isEditing && (
+                        {!isEditing && canEditShift && (
                           <button onClick={() => {
                             setEditingShift(login);
                             setEditOpen(shift?.openTime || '');
