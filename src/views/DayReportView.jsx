@@ -54,7 +54,10 @@ function SalaryDecisionButtons({ report, compact }) {
 }
 
 export default function DayReportView() {
-  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData: shiftsDataRaw, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
+
+  // Защита от null/undefined из Firebase подписки
+  const shiftsData = shiftsDataRaw && typeof shiftsDataRaw === 'object' ? shiftsDataRaw : {};
 
   const dates = getAllDates();
   const dateReports = getReportsByDate(selectedDate);

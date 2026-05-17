@@ -8,7 +8,10 @@ import { calculateSalary } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
 
 export default function ShiftView() {
-  const { DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, archivedProducts, compressImage, currentUser, customProducts, darkMode, employeeName, getEffectiveSalary, getProductName, isAdminUnlocked, reports, salaryDecisions, salarySettings, save, saveShiftPhoto, setCurrentView, setSalaryDecisions, setTotalBirds, shiftPhotos, shiftsData, showConfirm, showNotification, stock, totalBirds, updateReports, updateShiftsData, updateStock } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, archivedProducts, compressImage, currentUser, customProducts, darkMode, employeeName, getEffectiveSalary, getProductName, isAdminUnlocked, reports, salaryDecisions, salarySettings, save, saveShiftPhoto, setCurrentView, setSalaryDecisions, setTotalBirds, shiftPhotos, shiftsData: shiftsDataRaw, showConfirm, showNotification, stock, totalBirds, updateReports, updateShiftsData, updateStock } = useApp();
+
+  // Защита от null/undefined из Firebase подписки
+  const shiftsData = shiftsDataRaw && typeof shiftsDataRaw === 'object' ? shiftsDataRaw : {};
 
   // BLOCK 6: Geolocation helper
   const getGeoLocation = () => new Promise((resolve) => {
