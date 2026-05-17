@@ -166,13 +166,20 @@ export const fbGet = async (key) => {
 };
 
 // === Подписаться на изменения ключа в Firebase ===
-// ВАЖНО: коллбек теперь вызывается ВСЕГДА (включая случай когда ключ удалён → null).
-// Старая логика if (exists()) пропускала удаления и подписчик мог хранить устаревшие данные.
-export const fbSubscribe = (key, callback) => {
+// По умолчанию коллбек вызывается ТОЛЬКО когда есть данные (snapshot.exists()).
+// Это поведение соответствует предыдущим версиям и совместимо со всем существующим кодом.
+// Если нужно ловить удаления — передай { includeNull: true } в options.
+export const fbSubscribe = (key, callback, options = {}) => {
   if (!isAllowedKey(key)) return () => {};
+  const { includeNull = false } = options;
   const unsubscribe = onValue(ref(db, toFbPath(key)), (snapshot) => {
-    const val = snapshot.exists() ? snapshot.val() : null;
-    try { callback(val); } catch (e) { console.warn('[Firebase] Ошибка в callback', key, e); }
+    if (!snapshot.exists()) {
+      if (includeNull) {
+        try { callback(null); } catch (e) { console.warn('[Firebase] Ошибка в callback', key, e); }
+      }
+      return;
+    }
+    try { callback(snapshot.val()); } catch (e) { console.warn('[Firebase] Ошибка в callback', key, e); }
   }, (error) => {
     console.warn('[Firebase] Ошибка подписки', key, error.message);
   });
