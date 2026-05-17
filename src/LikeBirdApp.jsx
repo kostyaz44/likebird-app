@@ -497,7 +497,24 @@ function LikeBirdAppInner() {
   }, [darkMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const loadJson = (key, setter, def) => { try { const s = localStorage.getItem(key); if (s) setter(JSON.parse(s)); else if (def) setter(def); } catch { if (def) setter(def); } };
+    const loadJson = (key, setter, def) => {
+      try {
+        const s = localStorage.getItem(key);
+        if (s) {
+          const parsed = JSON.parse(s);
+          // Защита: если в LS лежит null/string/number — используем def
+          if (parsed === null || parsed === undefined) {
+            if (def !== undefined) setter(def);
+          } else {
+            setter(parsed);
+          }
+        } else if (def !== undefined) {
+          setter(def);
+        }
+      } catch {
+        if (def !== undefined) setter(def);
+      }
+    };
     
     // ===== АВТОРИЗАЦИЯ: проверка сохранённой сессии =====
     try {
@@ -887,7 +904,9 @@ function LikeBirdAppInner() {
         } catch { /* silent */ }
       }),
       guardedSubscribe('likebird-shifts', (val) => {
-        if (val && typeof val === 'object') { setShiftsData(val); try { try { localStorage.setItem('likebird-shifts', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }
+        const safe = (val && typeof val === 'object' && !Array.isArray(val)) ? val : {};
+        setShiftsData(safe);
+        try { localStorage.setItem('likebird-shifts', JSON.stringify(safe)); } catch { /* silent */ }
       }),
       guardedSubscribe('likebird-invite-codes', (val) => {
         if (!Array.isArray(val)) return;
