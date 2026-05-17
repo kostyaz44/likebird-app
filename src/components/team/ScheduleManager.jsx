@@ -45,7 +45,7 @@ export default function ScheduleManager() {
   // Активные сотрудники, у которых есть аккаунт (призраков отсеиваем)
   const activeEmployees = employees
     .filter(e => e.active)
-    .filter(emp => regUsers.find(u => u.name === emp.name || u.login === emp.name))
+    .filter(emp => regUsers.find(u => (emp.login && u.login === emp.login) || u.name === emp.name || u.login === emp.name))
     .map(e => e.name);
 
   // Расчёт часов из времени (учитывает перерыв)
