@@ -746,13 +746,29 @@ function LikeBirdAppInner() {
       guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); try { try { localStorage.setItem('likebird-admin-password', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-employees', (val) => {
         if (!Array.isArray(val)) return;
-        // Синхронизируем employees с registered users: добавляем недостающих
-        const regUsers = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
+        // Синхронизируем employees с registered users: матчим по login (стабильный ID),
+        // если login совпадает — обновляем name. Если ничего не нашли — добавляем нового.
+        const regUsersLocal = (() => { try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { return []; } })();
         let merged = [...val];
-        regUsers.forEach(u => {
+        regUsersLocal.forEach(u => {
           const name = u.name || u.login;
-          if (!merged.find(e => e.name === name)) {
-            merged.push({ id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6) + Math.random(), name, role: u.role || 'seller', salaryMultiplier: 1.0, active: true });
+          // 1) Ищем по login (если есть привязка)
+          let idx = merged.findIndex(e => e.login && e.login === u.login);
+          // 2) Если не нашли по login, ищем по имени (legacy совместимость)
+          if (idx === -1) idx = merged.findIndex(e => e.name === name || e.name === u.login);
+          if (idx !== -1) {
+            // Нашли — синхронизируем name, role и login (если был пропущен)
+            merged[idx] = { ...merged[idx], name, role: u.role || merged[idx].role || 'seller', login: u.login };
+          } else {
+            // Реально новый — добавляем
+            merged.push({
+              id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6) + Math.random(),
+              name,
+              role: u.role || 'seller',
+              salaryMultiplier: 1.0,
+              active: true,
+              login: u.login,
+            });
           }
         });
         setEmployees(merged);
@@ -1041,12 +1057,27 @@ function LikeBirdAppInner() {
 
   // Сохраняет данные: локально + в Firebase (для всех устройств)
   // FIX: устанавливает guard чтобы подписки не перезаписывали данные обратно
+  // Рекурсивно удаляет undefined-поля. Firebase их не принимает.
+  const stripUndefinedDeep = (val) => {
+    if (val === null || val === undefined) return val;
+    if (Array.isArray(val)) return val.map(stripUndefinedDeep);
+    if (typeof val === 'object') {
+      const out = {};
+      for (const k of Object.keys(val)) {
+        if (val[k] === undefined) continue;
+        out[k] = stripUndefinedDeep(val[k]);
+      }
+      return out;
+    }
+    return val;
+  };
+
   const save = (key, data) => {
     fbWriteKeys.current.add(key);
     fbWriting.current = true;
     try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) { logErr('save:localStorage:' + key, e); }
     if (navigator.onLine !== false) {
-      try { fbSave(key, data); } catch (e) { logErr('save:firebase', e); }
+      try { fbSave(key, stripUndefinedDeep(data)); } catch (e) { logErr('save:firebase', e); }
     } else {
       try { const q = JSON.parse(localStorage.getItem('likebird-offline-queue') || '[]'); if (!q.includes(key)) { q.push(key); localStorage.setItem('likebird-offline-queue', JSON.stringify(q)); } } catch { /* silent */ }
     }
@@ -1311,33 +1342,64 @@ function LikeBirdAppInner() {
   const updateEmployees = (newEmployees) => { setEmployees(newEmployees); save('likebird-employees', newEmployees); };
 
   // Миграция имени сотрудника: обновляет имя во всех связанных записях
-  // (reports, expenses, bonuses, penalties, timeOff, employees, scheduleData).
-  // shiftsData использует login как ключ, поэтому миграция не нужна.
-  const migrateEmployeeName = (oldName, newName) => {
+  // (reports, expenses, bonuses, employees, scheduleData).
+  // shiftsData использует login как ключ — миграция не нужна.
+  //
+  // ВАЖНО: читаем данные из localStorage напрямую, чтобы избежать race condition
+  // с устаревшим React state в момент вызова.
+  const migrateEmployeeName = (oldName, newName, userLogin) => {
     if (!oldName || !newName || oldName === newName) return;
 
+    const readLS = (key, fallback) => {
+      try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+      catch { return fallback; }
+    };
+
     // 1. reports
-    const updReports = reports.map(r => r.employee === oldName ? { ...r, employee: newName } : r);
+    const curReports = readLS('likebird-reports', []);
+    const updReports = curReports.map(r => r.employee === oldName ? { ...r, employee: newName } : r);
     setReports(updReports); save('likebird-reports', updReports);
 
     // 2. expenses
-    const updExpenses = expenses.map(e => e.employee === oldName ? { ...e, employee: newName } : e);
+    const curExpenses = readLS('likebird-expenses', []);
+    const updExpenses = curExpenses.map(e => e.employee === oldName ? { ...e, employee: newName } : e);
     setExpenses(updExpenses); save('likebird-expenses', updExpenses);
 
     // 3. bonuses
-    const updBonuses = bonuses.map(b => b.employeeName === oldName ? { ...b, employeeName: newName } : b);
+    const curBonuses = readLS('likebird-bonuses', []);
+    const updBonuses = curBonuses.map(b => b.employeeName === oldName ? { ...b, employeeName: newName } : b);
     setBonuses(updBonuses); save('likebird-bonuses', updBonuses);
 
-    // 4. employees record
-    const updEmployees = employees.map(e => e.name === oldName ? { ...e, name: newName } : e);
-    setEmployees(updEmployees); save('likebird-employees', updEmployees);
+    // 4. employees — переименование + дедупликация + привязка login
+    let curEmployees = readLS('likebird-employees', []);
+    // Шаг 1: переименовываем все записи с oldName в newName и проставляем login
+    curEmployees = curEmployees.map(e => {
+      const matchByOldName = e.name === oldName;
+      const matchByLogin = userLogin && e.login === userLogin;
+      if (matchByOldName || matchByLogin) {
+        return { ...e, name: newName, login: userLogin || e.login };
+      }
+      return e;
+    });
+    // Шаг 2: дедупликация — после переименования могут оказаться 2 записи с newName
+    // (например, старая «Лена» + новая «Елена» которая уже была автодобавлена)
+    // Оставляем первую активную и удаляем дубликаты
+    const seenNames = new Set();
+    curEmployees = curEmployees.filter(e => {
+      const key = e.name;
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
+    });
+    setEmployees(curEmployees); save('likebird-employees', curEmployees);
 
     // 5. scheduleData.shifts — ключ это имя сотрудника
-    if (scheduleData?.shifts && scheduleData.shifts[oldName]) {
-      const newShifts = { ...scheduleData.shifts };
+    const curSchedule = readLS('likebird-schedule', {});
+    if (curSchedule?.shifts && curSchedule.shifts[oldName]) {
+      const newShifts = { ...curSchedule.shifts };
       newShifts[newName] = newShifts[oldName];
       delete newShifts[oldName];
-      const newScheduleData = { ...scheduleData, shifts: newShifts };
+      const newScheduleData = { ...curSchedule, shifts: newShifts };
       setScheduleData(newScheduleData);
       save('likebird-schedule', newScheduleData);
     }
