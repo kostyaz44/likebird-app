@@ -71,10 +71,28 @@ const isAllowedKey = (key) => SYNC_KEYS.has(key) || isDynamicKey(key);
 // likebird-reports → data/likebird-reports
 const toFbPath = (key) => `data/${key}`;
 
+// Глубокая очистка undefined: Firebase не принимает undefined в значениях.
+// Рекурсивно удаляет такие поля из объектов и массивов.
+const cleanUndefined = (value) => {
+  if (value === null) return null;
+  if (Array.isArray(value)) return value.map(cleanUndefined);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) {
+      const v = value[k];
+      if (v === undefined) continue; // пропускаем undefined
+      out[k] = cleanUndefined(v);
+    }
+    return out;
+  }
+  return value;
+};
+
 // Сохранить данные в Firebase
 export const fbSave = (key, data) => {
   if (!isAllowedKey(key)) return;
-  set(ref(db, toFbPath(key)), data).catch((e) => {
+  const safe = cleanUndefined(data);
+  set(ref(db, toFbPath(key)), safe).catch((e) => {
     console.warn('[Firebase] Ошибка записи', key, e.message);
   });
 };
