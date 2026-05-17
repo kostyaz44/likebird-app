@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, onValue, get, onDisconnect, serverTimestamp } from 'firebase/database';
+import { getDatabase, ref, set, onValue, get, onDisconnect } from 'firebase/database';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAoZOo5LYtUKYiFhntbr0O5LfCKQEHn3jo",
@@ -71,15 +71,89 @@ const isAllowedKey = (key) => SYNC_KEYS.has(key) || isDynamicKey(key);
 // likebird-reports → data/likebird-reports
 const toFbPath = (key) => `data/${key}`;
 
-// Сохранить данные в Firebase
-export const fbSave = (key, data) => {
-  if (!isAllowedKey(key)) return;
-  set(ref(db, toFbPath(key)), data).catch((e) => {
+// === Очистка undefined (Firebase не принимает undefined) ===
+// Рекурсивно удаляет undefined поля из объектов и массивов.
+const cleanUndefined = (value) => {
+  if (value === null) return null;
+  if (Array.isArray(value)) return value.map(cleanUndefined);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) {
+      const v = value[k];
+      if (v === undefined) continue;
+      out[k] = cleanUndefined(v);
+    }
+    return out;
+  }
+  return value;
+};
+
+// === Контроль размера payload ===
+// Realtime Database ограничивает запись 10MB, но рекомендуется <1MB.
+// Предупреждаем в консоль если payload подозрительно большой.
+const PAYLOAD_WARNING_BYTES = 1_000_000; // 1MB
+const PAYLOAD_HARD_LIMIT_BYTES = 9_000_000; // 9MB (ограничение FB ~10MB)
+const checkPayloadSize = (key, data) => {
+  try {
+    const sizeBytes = JSON.stringify(data).length;
+    if (sizeBytes > PAYLOAD_HARD_LIMIT_BYTES) {
+      console.error(`[Firebase] Слишком большой payload для "${key}": ${(sizeBytes / 1_000_000).toFixed(1)}MB. Запись отклонена.`);
+      return false;
+    }
+    if (sizeBytes > PAYLOAD_WARNING_BYTES) {
+      console.warn(`[Firebase] Большой payload для "${key}": ${(sizeBytes / 1_000_000).toFixed(2)}MB. Рекомендуется <1MB.`);
+    }
+    return true;
+  } catch {
+    return true; // если не смогли посчитать, разрешаем запись
+  }
+};
+
+// === Debounce для частых записей ===
+// Если в течение N мс приходит несколько вызовов с одним ключом — отправится только последний.
+// Это снижает нагрузку на Firebase при быстром вводе (5 продаж за 2 сек ≠ 5 записей).
+const DEBOUNCE_MS = 300;
+const pendingWrites = new Map(); // key → { timer, data }
+
+const flushWrite = (key) => {
+  const pending = pendingWrites.get(key);
+  if (!pending) return;
+  pendingWrites.delete(key);
+  const safe = cleanUndefined(pending.data);
+  if (!checkPayloadSize(key, safe)) return;
+  set(ref(db, toFbPath(key)), safe).catch((e) => {
     console.warn('[Firebase] Ошибка записи', key, e.message);
   });
 };
 
-// Получить данные из Firebase один раз (Promise)
+// === Сохранить данные в Firebase (с debounce и очисткой undefined) ===
+export const fbSave = (key, data) => {
+  if (!isAllowedKey(key)) return;
+  // Если уже есть pending — обновляем данные и сбрасываем таймер
+  const existing = pendingWrites.get(key);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => flushWrite(key), DEBOUNCE_MS);
+  pendingWrites.set(key, { timer, data });
+};
+
+// Принудительный flush всех ожидающих записей (например при unload страницы)
+export const fbFlushPending = () => {
+  // Копируем ключи в массив, т.к. flushWrite модифицирует Map
+  const keys = Array.from(pendingWrites.keys());
+  keys.forEach(k => {
+    const p = pendingWrites.get(k);
+    if (p) clearTimeout(p.timer);
+    flushWrite(k);
+  });
+};
+
+// При закрытии вкладки — сбрасываем pending writes
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', fbFlushPending);
+  window.addEventListener('pagehide', fbFlushPending);
+}
+
+// === Получить данные из Firebase один раз (Promise) ===
 export const fbGet = async (key) => {
   try {
     const snapshot = await get(ref(db, `data/${key}`));
@@ -91,13 +165,14 @@ export const fbGet = async (key) => {
   }
 };
 
-// Подписаться на изменения ключа в Firebase
+// === Подписаться на изменения ключа в Firebase ===
+// ВАЖНО: коллбек теперь вызывается ВСЕГДА (включая случай когда ключ удалён → null).
+// Старая логика if (exists()) пропускала удаления и подписчик мог хранить устаревшие данные.
 export const fbSubscribe = (key, callback) => {
   if (!isAllowedKey(key)) return () => {};
   const unsubscribe = onValue(ref(db, toFbPath(key)), (snapshot) => {
-    if (snapshot.exists()) {
-      callback(snapshot.val());
-    }
+    const val = snapshot.exists() ? snapshot.val() : null;
+    try { callback(val); } catch (e) { console.warn('[Firebase] Ошибка в callback', key, e); }
   }, (error) => {
     console.warn('[Firebase] Ошибка подписки', key, error.message);
   });
@@ -106,27 +181,48 @@ export const fbSubscribe = (key, callback) => {
 
 // === Presence (онлайн-статус сотрудников) ===
 
+let presenceHeartbeatTimer = null;
+
 export const fbSetPresence = (login, name) => {
   if (!login) return;
   const presenceRef = ref(db, `presence/${login}`);
-  set(presenceRef, {
-    name: name || login,
-    online: true,
-    lastSeen: Date.now()
-  }).catch(() => {});
-  // При отключении — помечаем offline
+
+  // ВАЖНО: onDisconnect регистрируем СНАЧАЛА, ДО set —
+  // чтобы при обрыве в момент set мы успели поставить offline.
   onDisconnect(presenceRef).set({
     name: name || login,
     online: false,
     lastSeen: Date.now()
   }).catch(() => {});
+
+  const writeOnline = () => {
+    set(presenceRef, {
+      name: name || login,
+      online: true,
+      lastSeen: Date.now()
+    }).catch(() => {});
+  };
+
+  writeOnline();
+
+  // Heartbeat: обновляем lastSeen каждую минуту,
+  // чтобы другие клиенты могли определить "зависшие" вкладки.
+  if (presenceHeartbeatTimer) clearInterval(presenceHeartbeatTimer);
+  presenceHeartbeatTimer = setInterval(writeOnline, 60_000); // раз в минуту
+};
+
+// Очистка heartbeat (например при logout)
+export const fbClearPresenceHeartbeat = () => {
+  if (presenceHeartbeatTimer) {
+    clearInterval(presenceHeartbeatTimer);
+    presenceHeartbeatTimer = null;
+  }
 };
 
 export const fbSubscribePresence = (callback) => {
   const presenceRef = ref(db, 'presence');
   return onValue(presenceRef, (snapshot) => {
-    if (snapshot.exists()) {
-      callback(snapshot.val());
-    }
+    const val = snapshot.exists() ? snapshot.val() : {};
+    try { callback(val); } catch (e) { console.warn('[Firebase] presence callback error', e); }
   }, () => {});
 };
