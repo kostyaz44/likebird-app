@@ -30,7 +30,7 @@ export default function TeamView() {
   // Активные сотрудники с аккаунтом (исключаем призраков)
   const activeEmployees = employees
     .filter(e => e.active)
-    .filter(emp => regUsers.find(u => u.name === emp.name || u.login === emp.name))
+    .filter(emp => regUsers.find(u => (emp.login && u.login === emp.login) || u.name === emp.name || u.login === emp.name))
     .map(e => e.name);
   const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
   const [manualFilter, setManualFilter] = useState('all');
