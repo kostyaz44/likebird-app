@@ -77,10 +77,21 @@ export default function EmployeeManager() {
   // Текущий назначенный директор (если есть) — для проверки уникальности
   const currentDirector = regUsers.find(u => u.role === 'director');
 
+  // Удаляет undefined-поля из объекта (Firebase их не принимает)
+  const stripUndefined = (obj) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    const out = {};
+    for (const k of Object.keys(obj)) {
+      if (obj[k] !== undefined) out[k] = obj[k];
+    }
+    return out;
+  };
+
   const saveUsers = (updated) => {
-    setRegUsers(updated);
-    localStorage.setItem('likebird-users', JSON.stringify(updated));
-    fbSave('likebird-users', updated);
+    const clean = (updated || []).map(u => stripUndefined(u));
+    setRegUsers(clean);
+    localStorage.setItem('likebird-users', JSON.stringify(clean));
+    fbSave('likebird-users', clean);
   };
 
   const handleStartEdit = (user) => {
@@ -150,32 +161,46 @@ export default function EmployeeManager() {
         if (u.login === editingUser) {
           const isNewDeputy = editForm.role === 'deputy';
           const isAdminRole = editForm.role === 'admin' || editForm.role === 'deputy' || editForm.role === 'director';
+
+          // Строим объект ЧИСТО — без undefined полей (Firebase их не принимает)
+          const next = { ...u };
+          // Удаляем устаревшие поля, если они были
+          delete next.canViewReports;
+          delete next.deputyCity;
+          delete next.deputyPerSale;
+
+          // Базовые поля
+          next.name = newName;
+          next.role = editForm.role;
+          next.isAdmin = editForm.isAdmin || isAdminRole;
+          next.noSalary = !!editForm.noSalary;
+
+          // canViewReports — пишем ТОЛЬКО если есть значение
           const cvr = editForm.canViewReports;
-          const cvrField = (cvr === 'all' || (Array.isArray(cvr) && cvr.length > 0))
-            ? { canViewReports: cvr }
-            : { canViewReports: undefined };
-          return {
-            ...u,
-            name: newName,
-            role: editForm.role,
-            isAdmin: editForm.isAdmin || isAdminRole,
-            noSalary: !!editForm.noSalary,
-            ...cvrField,
-            ...(isNewDeputy
-              ? { deputyCity: editForm.deputyCity, deputyPerSale: Math.max(0, Number(editForm.deputyPerSale) || 0) }
-              : { deputyCity: undefined, deputyPerSale: undefined }
-            ),
-          };
+          if (cvr === 'all') next.canViewReports = 'all';
+          else if (Array.isArray(cvr) && cvr.length > 0) next.canViewReports = cvr;
+          // иначе не пишем поле вовсе (= 'self' по умолчанию)
+
+          // deputy-поля — пишем ТОЛЬКО если deputy
+          if (isNewDeputy) {
+            next.deputyCity = editForm.deputyCity;
+            next.deputyPerSale = Math.max(0, Number(editForm.deputyPerSale) || 0);
+          }
+
+          return next;
         }
         return u;
       });
 
       // Если назначаем нового deputy — старого переводим в обычные админы
       if (editForm.role === 'deputy' && currentDeputy && currentDeputy.login !== editingUser) {
-        updated = updated.map(u => u.login === currentDeputy.login
-          ? { ...u, role: 'admin', isAdmin: true, deputyCity: undefined, deputyPerSale: undefined }
-          : u
-        );
+        updated = updated.map(u => {
+          if (u.login !== currentDeputy.login) return u;
+          const cleaned = { ...u, role: 'admin', isAdmin: true };
+          delete cleaned.deputyCity;
+          delete cleaned.deputyPerSale;
+          return cleaned;
+        });
       }
       // Если назначаем нового директора — старого переводим в обычные админы
       if (editForm.role === 'director' && currentDirector && currentDirector.login !== editingUser) {
@@ -190,7 +215,7 @@ export default function EmployeeManager() {
 
       // Миграция имени во всех связанных данных
       if (nameChanged && typeof migrateEmployeeName === 'function') {
-        migrateEmployeeName(oldName, newName);
+        migrateEmployeeName(oldName, newName, editingUser); // editingUser = login
       } else {
         // Если имя НЕ менялось — всё равно синхронизируем роль в employees
         const empMatch = employees.find(e => e.name === newName || e.name === editingUser);
@@ -261,10 +286,13 @@ export default function EmployeeManager() {
 
     // Если создаём deputy — старого переводим в обычные админы
     if (isDeputy && currentDeputy) {
-      updated = updated.map(u => u.login === currentDeputy.login
-        ? { ...u, role: 'admin', isAdmin: true, deputyCity: undefined, deputyPerSale: undefined }
-        : u
-      );
+      updated = updated.map(u => {
+        if (u.login !== currentDeputy.login) return u;
+        const cleaned = { ...u, role: 'admin', isAdmin: true };
+        delete cleaned.deputyCity;
+        delete cleaned.deputyPerSale;
+        return cleaned;
+      });
     }
     // Если создаём директора — старого переводим в обычные админы
     if (isDirector && currentDirector) {
@@ -617,6 +645,12 @@ export default function EmployeeManager() {
           {(() => {
             // Сотрудник-«призрак» — есть в employees, но ни одно имя/логин не совпадает с user
             const ghosts = (employees || []).filter(emp => {
+              // Сначала ищем по login (надёжно — login не меняется при переименовании)
+              if (emp.login) {
+                const userByLogin = regUsers.find(u => u.login === emp.login);
+                if (userByLogin) return false;
+              }
+              // Иначе ищем по имени (legacy совместимость)
               const matchByName = regUsers.find(u => u.name === emp.name || u.login === emp.name);
               return !matchByName;
             });
@@ -641,6 +675,35 @@ export default function EmployeeManager() {
                 updateEmployees(employees.filter(e => !ghostIds.has(e.id)));
                 showNotification(`Удалено: ${ghosts.length}`);
               });
+            };
+
+            // 🔗 Связать призрака с существующим user — переименовать все связанные данные
+            const linkGhostToUser = (ghostName) => {
+              if (!regUsers || regUsers.length === 0) {
+                showNotification('Нет пользователей для связывания', 'error');
+                return;
+              }
+              const options = regUsers.map((u, i) => `${i + 1}. ${u.name} (@${u.login})`).join('\n');
+              const answer = window.prompt(
+                `Связать «${ghostName}» с каким пользователем?\n\nВведите номер из списка:\n\n${options}`,
+                '1'
+              );
+              if (!answer) return;
+              const idx = parseInt(answer.trim(), 10) - 1;
+              if (isNaN(idx) || idx < 0 || idx >= regUsers.length) {
+                showNotification('Неверный номер', 'error');
+                return;
+              }
+              const target = regUsers[idx];
+              if (!window.confirm(
+                `Все записи «${ghostName}» (отчёты, расходы, бонусы, график) будут переименованы в «${target.name}».\n\nПродолжить?`
+              )) return;
+              if (typeof migrateEmployeeName === 'function') {
+                migrateEmployeeName(ghostName, target.name);
+                showNotification(`«${ghostName}» → «${target.name}»`);
+              } else {
+                showNotification('Функция миграции недоступна', 'error');
+              }
             };
 
             return (
@@ -683,6 +746,13 @@ export default function EmployeeManager() {
                           {' · id ' + emp.id}
                         </p>
                       </div>
+                      <button
+                        onClick={() => linkGhostToUser(emp.name)}
+                        className="px-2 py-1 bg-cyan-100 text-cyan-700 rounded text-xs hover:bg-cyan-200 font-semibold"
+                        title="Это переименование существующего user'а — связать данные"
+                      >
+                        🔗 Связать
+                      </button>
                       {emp.active && (
                         <button
                           onClick={() => deactivateGhost(emp.id, emp.name)}
