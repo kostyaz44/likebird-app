@@ -14,9 +14,9 @@ export default function EmployeesAdminTab() {
   const {
     currentUser,
     employees,
-    penalties,
-    bonuses,
-    timeOff,
+    penalties: penaltiesRaw,
+    bonuses: bonusesRaw,
+    timeOff: timeOffRaw,
     setPenalties,
     setBonuses,
     setTimeOff,
@@ -29,6 +29,11 @@ export default function EmployeesAdminTab() {
     logAction,
     darkMode,
   } = useApp();
+
+  // Защита от null/undefined (Firebase может вернуть null если ключ пустой)
+  const penalties = Array.isArray(penaltiesRaw) ? penaltiesRaw : [];
+  const bonuses = Array.isArray(bonusesRaw) ? bonusesRaw : [];
+  const timeOff = Array.isArray(timeOffRaw) ? timeOffRaw : [];
 
   const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
 
@@ -195,7 +200,7 @@ export default function EmployeesAdminTab() {
   // Активные сотрудники с аккаунтом (без призраков)
   const activeEmployees = employees
     .filter(e => e.active)
-    .filter(emp => regUsers.find(u => u.name === emp.name || u.login === emp.name));
+    .filter(emp => regUsers.find(u => (emp.login && u.login === emp.login) || u.name === emp.name || u.login === emp.name));
 
   const subTabs = [
     { id: 'penalties', label: '⚠️ Штрафы', count: penalties.length, color: 'red' },
