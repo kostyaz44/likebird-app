@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, X, Edit2, Trash2, Save, Shield } from 'lucide-react';
+import { Users, Plus, X, Edit2, Trash2, Save, Shield, Lock, Check } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { fbSave } from '../../firebase.js';
 import { hashPassword } from '../../utils/auth.js';
@@ -291,11 +291,51 @@ export default function EmployeeManager() {
 
   const handleDeleteUser = (login) => {
     if (login === currentUser?.login) { showNotification('Нельзя удалить себя', 'error'); return; }
-    showConfirm(`Удалить аккаунт ${login}?`, () => {
-      const updated = regUsers.filter(u => u.login !== login);
-      saveUsers(updated);
-      showNotification('Аккаунт удалён');
-    });
+    const u = regUsers.find(x => x.login === login);
+    const displayName = u?.name || login;
+    showConfirm(
+      `Удалить аккаунт «${displayName}» (@${login})?\n\n` +
+      `• Пользователь будет автоматически разлогинен на всех устройствах в течение 30 секунд (или мгновенно при следующей синхронизации).\n` +
+      `• Доступ к приложению будет закрыт.\n` +
+      `• Записи в отчётах, графике, штрафах останутся (имя автора сохранится).\n\n` +
+      `Это действие необратимо.`,
+      () => {
+        const updated = regUsers.filter(u => u.login !== login);
+        saveUsers(updated);
+        showNotification(`Аккаунт «${displayName}» удалён. Сессия пользователя закроется автоматически.`);
+      }
+    );
+  };
+
+  // Мягкая блокировка — аккаунт остаётся, но логин блокируется.
+  // Полезно если нужно временно отстранить сотрудника без потери данных.
+  const handleToggleBan = (login) => {
+    if (login === currentUser?.login) { showNotification('Нельзя заблокировать себя', 'error'); return; }
+    const u = regUsers.find(x => x.login === login);
+    if (!u) return;
+    const isBanned = !!u.banned;
+    const displayName = u.name || login;
+    if (isBanned) {
+      showConfirm(`Разблокировать «${displayName}»?`, () => {
+        const updated = regUsers.map(x => x.login === login ? { ...x, banned: false, banReason: '' } : x);
+        saveUsers(updated);
+        showNotification(`«${displayName}» разблокирован`);
+      });
+    } else {
+      const reason = window.prompt(`Причина блокировки «${displayName}» (необязательно):`, '');
+      if (reason === null) return; // отмена
+      showConfirm(
+        `Заблокировать «${displayName}»?\n\n` +
+        `• Пользователь будет разлогинен и не сможет войти.\n` +
+        `• Все данные сохраняются (можно разблокировать позже).\n` +
+        `• Срабатывает в течение 30 секунд.`,
+        () => {
+          const updated = regUsers.map(x => x.login === login ? { ...x, banned: true, banReason: reason || '' } : x);
+          saveUsers(updated);
+          showNotification(`«${displayName}» заблокирован`);
+        }
+      );
+    }
   };
 
   const handleAddUser = async () => {
@@ -855,6 +895,11 @@ export default function EmployeeManager() {
                         <span className="font-semibold text-sm truncate">{user.name}</span>
                         {isMe && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">я</span>}
                         {user.isAdmin && <Shield className="w-3 h-3 text-red-500" />}
+                        {user.banned && (
+                          <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded border border-red-300" title={user.banReason || 'Без причины'}>
+                            🚫 Заблокирован
+                          </span>
+                        )}
                         {user.noSalary && <span className="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded" title="ЗП не начисляется">💼 без ЗП</span>}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -896,6 +941,15 @@ export default function EmployeeManager() {
                     >
                       <Edit2 className="w-4 h-4" />
                     </button>
+                    {!isMe && (
+                      <button
+                        onClick={() => handleToggleBan(user.login)}
+                        className={`p-1.5 rounded ${user.banned ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}
+                        title={user.banned ? 'Разблокировать' : 'Заблокировать (мягкая блокировка)'}
+                      >
+                        {user.banned ? <Check className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                      </button>
+                    )}
                     {!isMe && (
                       <button
                         onClick={() => handleDeleteUser(user.login)}
