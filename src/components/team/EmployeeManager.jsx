@@ -53,11 +53,13 @@ export default function EmployeeManager() {
   const [editForm, setEditForm] = useState({
     name: '', role: 'seller', isAdmin: false,
     deputyCity: '', deputyPerSale: 75, noSalary: false,
+    managedCities: [],
   });
   const [addMode, setAddMode] = useState(false);
   const [addForm, setAddForm] = useState({
     login: '', name: '', password: '', role: 'seller',
     deputyCity: '', deputyPerSale: 75, noSalary: false,
+    managedCities: [],
   });
   const [addError, setAddError] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -67,6 +69,7 @@ export default function EmployeeManager() {
   const ROLE_LABELS = {
     seller: { label: 'Продавец', color: 'bg-purple-100 text-purple-700', icon: '🐦' },
     senior: { label: 'Старший продавец', color: 'bg-amber-100 text-amber-700', icon: '⭐' },
+    manager: { label: 'Управляющий', color: 'bg-teal-100 text-teal-700', icon: '🏢' },
     admin: { label: 'Администратор', color: 'bg-red-100 text-red-700', icon: '🛡️' },
     deputy: { label: 'Замдиректор', color: 'bg-indigo-100 text-indigo-700', icon: '🎖️' },
     director: { label: 'Директор', color: 'bg-yellow-100 text-yellow-800', icon: '👑' },
@@ -104,6 +107,7 @@ export default function EmployeeManager() {
       deputyPerSale: typeof user.deputyPerSale === 'number' ? user.deputyPerSale : 75,
       noSalary: !!user.noSalary,
       canViewReports: user.canViewReports || 'self', // 'self' | 'all' | ['emp1', 'emp2']
+      managedCities: Array.isArray(user.managedCities) ? [...user.managedCities] : [],
     });
   };
 
@@ -136,6 +140,11 @@ export default function EmployeeManager() {
         showNotification('Выберите город для замдиректора', 'error');
         return;
       }
+      // Управляющий обязан иметь хотя бы один город
+      if (editForm.role === 'manager' && (!Array.isArray(editForm.managedCities) || editForm.managedCities.length === 0)) {
+        showNotification('Выберите хотя бы один город для управляющего', 'error');
+        return;
+      }
 
       // Уникальность deputy и director (синхронные проверки через window.confirm)
       if (!checkDeputyUniqueness(editingUser, editForm.role)) return;
@@ -160,7 +169,8 @@ export default function EmployeeManager() {
       let updated = regUsers.map(u => {
         if (u.login === editingUser) {
           const isNewDeputy = editForm.role === 'deputy';
-          const isAdminRole = editForm.role === 'admin' || editForm.role === 'deputy' || editForm.role === 'director';
+          const isNewManager = editForm.role === 'manager';
+          const isAdminRole = editForm.role === 'admin' || editForm.role === 'deputy' || editForm.role === 'director' || editForm.role === 'manager';
 
           // Строим объект ЧИСТО — без undefined полей (Firebase их не принимает)
           const next = { ...u };
@@ -168,6 +178,7 @@ export default function EmployeeManager() {
           delete next.canViewReports;
           delete next.deputyCity;
           delete next.deputyPerSale;
+          delete next.managedCities;
 
           // Базовые поля
           next.name = newName;
@@ -185,6 +196,16 @@ export default function EmployeeManager() {
           if (isNewDeputy) {
             next.deputyCity = editForm.deputyCity;
             next.deputyPerSale = Math.max(0, Number(editForm.deputyPerSale) || 0);
+          }
+
+          // managedCities — пишем для manager (обязательно) или для любой другой роли, если задано (директор может ограничить кого угодно)
+          const mc = Array.isArray(editForm.managedCities) ? editForm.managedCities.filter(Boolean) : [];
+          if (isNewManager) {
+            // Для управляющего поле обязательно
+            next.managedCities = mc;
+          } else if (mc.length > 0 && editForm.role !== 'director') {
+            // Директор не ограничивается; для остальных — можно дать ограничение
+            next.managedCities = mc;
           }
 
           return next;
@@ -260,6 +281,9 @@ export default function EmployeeManager() {
     if (addForm.role === 'deputy' && !addForm.deputyCity) {
       setAddError('Выберите город для замдиректора'); return;
     }
+    if (addForm.role === 'manager' && (!Array.isArray(addForm.managedCities) || addForm.managedCities.length === 0)) {
+      setAddError('Выберите хотя бы один город для управляющего'); return;
+    }
 
     // Уникальность deputy и director (синхронные проверки)
     if (!checkDeputyUniqueness(null, addForm.role)) return;
@@ -268,17 +292,23 @@ export default function EmployeeManager() {
     const hashed = await hashPassword(addForm.password);
     const isDeputy = addForm.role === 'deputy';
     const isDirector = addForm.role === 'director';
+    const isManager = addForm.role === 'manager';
+    const mcList = Array.isArray(addForm.managedCities) ? addForm.managedCities.filter(Boolean) : [];
     const newU = {
       login: addForm.login.trim(),
       name: (addForm.name.trim() || addForm.login.trim()),
       passwordHash: hashed,
       createdAt: Date.now(),
       role: addForm.role,
-      isAdmin: addForm.role === 'admin' || isDeputy || isDirector,
+      isAdmin: addForm.role === 'admin' || isDeputy || isDirector || isManager,
       noSalary: !!addForm.noSalary,
       ...(isDeputy
         ? { deputyCity: addForm.deputyCity, deputyPerSale: Math.max(0, Number(addForm.deputyPerSale) || 0) }
         : {}
+      ),
+      ...(isManager
+        ? { managedCities: mcList }
+        : (mcList.length > 0 && !isDirector ? { managedCities: mcList } : {})
       ),
     };
 
@@ -306,13 +336,14 @@ export default function EmployeeManager() {
     if (!employees.find(e => e.name === newU.name)) {
       addEmployee(newU.name, newU.role);
     }
-    setAddForm({ login: '', name: '', password: '', role: 'seller', deputyCity: '', deputyPerSale: 75, noSalary: false });
+    setAddForm({ login: '', name: '', password: '', role: 'seller', deputyCity: '', deputyPerSale: 75, noSalary: false, managedCities: [] });
     setAddMode(false);
     showNotification(`Аккаунт ${newU.login} создан`);
   };
 
   // Если пользователь не админ — не рендерим
-  if (!isMasterAdmin && currentUser?.role !== 'admin') return null;
+  // Кто видит этот блок: admin, deputy, director, manager (управляющий тоже может управлять командой)
+  if (!isMasterAdmin && currentUser?.role !== 'admin' && currentUser?.role !== 'manager') return null;
 
   return (
     <div className={`rounded-2xl shadow border-2 border-purple-200 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
@@ -372,9 +403,13 @@ export default function EmployeeManager() {
               >
                 <option value="seller">🐦 Продавец</option>
                 <option value="senior">⭐ Старший продавец</option>
-                <option value="admin">🛡️ Администратор</option>
-                <option value="deputy">🎖️ Замдиректор</option>
-                <option value="director">👑 Директор</option>
+                {/* Высшие роли — только директор/админ может назначать; manager не видит */}
+                {currentUser?.role !== 'manager' && <>
+                  <option value="manager">🏢 Управляющий (по городу)</option>
+                  <option value="admin">🛡️ Администратор</option>
+                  <option value="deputy">🎖️ Замдиректор</option>
+                  <option value="director">👑 Директор</option>
+                </>}
               </select>
 
               {/* Поля для замдиректора */}
@@ -407,6 +442,70 @@ export default function EmployeeManager() {
                 </div>
               )}
 
+              {/* Поля для управляющего (manager) — выбор городов */}
+              {addForm.role === 'manager' && (
+                <div className="bg-teal-50 border border-teal-200 rounded-lg p-2 space-y-2">
+                  <p className="text-[11px] text-teal-700 font-semibold">🏢 Управляет городами (видит ТОЛЬКО эти):</p>
+                  {getCities().length === 0 ? (
+                    <p className="text-[10px] text-amber-700">⚠ Нет городов. Сначала добавьте точки в Админ-панели.</p>
+                  ) : (
+                    <div className="space-y-1 max-h-32 overflow-y-auto bg-white p-2 rounded border border-teal-100">
+                      {getCities().map(c => (
+                        <label key={c} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                          <input
+                            type="checkbox"
+                            checked={(addForm.managedCities || []).includes(c)}
+                            onChange={(e) => {
+                              const list = addForm.managedCities || [];
+                              const next = e.target.checked
+                                ? [...list, c]
+                                : list.filter(n => n !== c);
+                              setAddForm({ ...addForm, managedCities: next });
+                            }}
+                            className="w-3.5 h-3.5"
+                          />
+                          <span>📍 {c}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-teal-600">
+                    Управляющий имеет полные права администратора, но видит отчёты, аналитику и сотрудников ТОЛЬКО выбранных городов.
+                  </p>
+                </div>
+              )}
+
+              {/* Ограничение по городам для других ролей (опционально, выдаёт директор) */}
+              {addForm.role !== 'manager' && addForm.role !== 'deputy' && addForm.role !== 'director' && currentUser?.role === 'director' && getCities().length > 0 && (
+                <details className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                  <summary className="text-[11px] text-gray-600 font-semibold cursor-pointer">
+                    🔒 Ограничить доступ к городам (опционально)
+                  </summary>
+                  <div className="mt-2 space-y-1 max-h-32 overflow-y-auto bg-white p-2 rounded border border-gray-100">
+                    {getCities().map(c => (
+                      <label key={c} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                        <input
+                          type="checkbox"
+                          checked={(addForm.managedCities || []).includes(c)}
+                          onChange={(e) => {
+                            const list = addForm.managedCities || [];
+                            const next = e.target.checked
+                              ? [...list, c]
+                              : list.filter(n => n !== c);
+                            setAddForm({ ...addForm, managedCities: next });
+                          }}
+                          className="w-3.5 h-3.5"
+                        />
+                        <span>📍 {c}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Если ничего не выбрано — пользователь видит все города (стандартно).
+                  </p>
+                </details>
+              )}
+
               {/* Чекбокс "Не начислять ЗП" */}
               <label className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg cursor-pointer">
                 <input
@@ -430,15 +529,21 @@ export default function EmployeeManager() {
             </div>
           )}
 
-          {/* Список пользователей */}
+          {/* Список пользователей. Manager видит только seller/senior (не других руководителей) */}
           <div className="space-y-2 max-h-96 overflow-y-auto">
-            {regUsers.length === 0 ? (
-              <div className="text-center py-6">
-                <Users className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                <p className="text-sm text-gray-400">Нет зарегистрированных пользователей</p>
-              </div>
-            ) : (
-              regUsers.map(user => {
+            {(() => {
+              const visibleUsers = currentUser?.role === 'manager'
+                ? regUsers.filter(u => u.role === 'seller' || u.role === 'senior' || !u.role)
+                : regUsers;
+              if (visibleUsers.length === 0) {
+                return (
+                  <div className="text-center py-6">
+                    <Users className="w-10 h-10 mx-auto text-gray-300 mb-2" />
+                    <p className="text-sm text-gray-400">Нет зарегистрированных пользователей</p>
+                  </div>
+                );
+              }
+              return visibleUsers.map(user => {
                 const roleInfo = ROLE_LABELS[user.role || 'seller'] || ROLE_LABELS.seller;
                 const isEditing = editingUser === user.login;
                 const isMe = user.login === currentUser?.login;
@@ -461,9 +566,12 @@ export default function EmployeeManager() {
                       >
                         <option value="seller">🐦 Продавец</option>
                         <option value="senior">⭐ Старший продавец</option>
-                        <option value="admin">🛡️ Администратор</option>
-                        <option value="deputy">🎖️ Замдиректор</option>
-                <option value="director">👑 Директор</option>
+                        {currentUser?.role !== 'manager' && <>
+                          <option value="manager">🏢 Управляющий (по городу)</option>
+                          <option value="admin">🛡️ Администратор</option>
+                          <option value="deputy">🎖️ Замдиректор</option>
+                          <option value="director">👑 Директор</option>
+                        </>}
                       </select>
 
                       {/* Поля для замдиректора */}
@@ -496,8 +604,72 @@ export default function EmployeeManager() {
                         </div>
                       )}
 
+                      {/* Поля для управляющего (manager) — выбор городов */}
+                      {editForm.role === 'manager' && (
+                        <div className="bg-teal-50 border border-teal-200 rounded-lg p-2 space-y-2">
+                          <p className="text-[11px] text-teal-700 font-semibold">🏢 Управляет городами (видит ТОЛЬКО эти):</p>
+                          {getCities().length === 0 ? (
+                            <p className="text-[10px] text-amber-700">⚠ Нет городов. Сначала добавьте точки в Админ-панели.</p>
+                          ) : (
+                            <div className="space-y-1 max-h-32 overflow-y-auto bg-white p-2 rounded border border-teal-100">
+                              {getCities().map(c => (
+                                <label key={c} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                                  <input
+                                    type="checkbox"
+                                    checked={(editForm.managedCities || []).includes(c)}
+                                    onChange={(e) => {
+                                      const list = editForm.managedCities || [];
+                                      const next = e.target.checked
+                                        ? [...list, c]
+                                        : list.filter(n => n !== c);
+                                      setEditForm({ ...editForm, managedCities: next });
+                                    }}
+                                    className="w-3.5 h-3.5"
+                                  />
+                                  <span>📍 {c}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-[10px] text-teal-600">
+                            Полные права администратора, но только в выбранных городах.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Ограничение по городам для других ролей (опционально, директор) */}
+                      {editForm.role !== 'manager' && editForm.role !== 'deputy' && editForm.role !== 'director' && currentUser?.role === 'director' && getCities().length > 0 && (
+                        <details className="bg-gray-50 border border-gray-200 rounded-lg p-2" open={(editForm.managedCities || []).length > 0}>
+                          <summary className="text-[11px] text-gray-600 font-semibold cursor-pointer">
+                            🔒 Ограничить доступ к городам {(editForm.managedCities || []).length > 0 && <span className="text-teal-600">· активно ({editForm.managedCities.length})</span>}
+                          </summary>
+                          <div className="mt-2 space-y-1 max-h-32 overflow-y-auto bg-white p-2 rounded border border-gray-100">
+                            {getCities().map(c => (
+                              <label key={c} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={(editForm.managedCities || []).includes(c)}
+                                  onChange={(e) => {
+                                    const list = editForm.managedCities || [];
+                                    const next = e.target.checked
+                                      ? [...list, c]
+                                      : list.filter(n => n !== c);
+                                    setEditForm({ ...editForm, managedCities: next });
+                                  }}
+                                  className="w-3.5 h-3.5"
+                                />
+                                <span>📍 {c}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-gray-500 mt-1">
+                            Если ничего не выбрано — видит все города (стандартно).
+                          </p>
+                        </details>
+                      )}
+
                       {/* Видимость чужих отчётов в "Итог дня" */}
-                      {editForm.role !== 'admin' && editForm.role !== 'deputy' && editForm.role !== 'director' && !editForm.isAdmin && (
+                      {editForm.role !== 'admin' && editForm.role !== 'deputy' && editForm.role !== 'director' && editForm.role !== 'manager' && !editForm.isAdmin && (
                         <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 space-y-2">
                           <p className="text-[11px] text-cyan-700 font-semibold">👁️ Какие отчёты видит в «Итог дня»:</p>
                           <select
@@ -607,6 +779,11 @@ export default function EmployeeManager() {
                             📍 {user.deputyCity} · {user.deputyPerSale || 0}₽/товар
                           </span>
                         )}
+                        {Array.isArray(user.managedCities) && user.managedCities.length > 0 && (
+                          <span className="text-[10px] bg-teal-50 text-teal-700 px-1.5 py-0.5 rounded border border-teal-200" title={`Видит города: ${user.managedCities.join(', ')}`}>
+                            🏢 {user.managedCities.length === 1 ? user.managedCities[0] : `${user.managedCities.length} городов`}
+                          </span>
+                        )}
                         {user.canViewReports === 'all' && (
                           <span className="text-[10px] bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded border border-cyan-200" title="Видит все отчёты в Итог дня">
                             👁️ все отчёты
@@ -637,8 +814,8 @@ export default function EmployeeManager() {
                     )}
                   </div>
                 );
-              })
-            )}
+              });
+            })()}
           </div>
 
           {/* === БЛОК: ПРИЗРАКИ (employees без user) === */}
