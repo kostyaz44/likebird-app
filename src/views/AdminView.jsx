@@ -41,6 +41,7 @@ export default function AdminView() {
     writeOffs,
     customAliases,
     archivedProducts,
+    extractCity, getItemCity, getEmployeeCity,
     // --- функции бизнес-логики ---
     addBonus, addCustomProduct, addEmployee, addLocation, addPenalty,
     addStockHistoryEntry, addTimeOff, addWriteOff, checkAdminPassword,
@@ -1186,6 +1187,129 @@ export default function AdminView() {
                   <button onClick={() => showConfirm('Удалить ВСЕ расходы? Это действие необратимо!', () => { setExpenses([]); save('likebird-expenses', []); logAction('Удалены все расходы', ''); showNotification('Расходы удалены'); })} className="w-full bg-red-100 text-red-600 py-2 rounded hover:bg-red-200">
                     Удалить все расходы
                   </button>
+
+                  {/* === BACKFILL ГОРОДОВ === */}
+                  {(() => {
+                    // Подсчёт записей без определимого города
+                    const reportsNoCity = (reports || []).filter(r => !getItemCity(r));
+                    const expensesNoCity = (expenses || []).filter(e => !getItemCity(e));
+                    const employeesNoCity = (employees || []).filter(e => !e.city);
+                    const usersNoCity = (() => {
+                      try {
+                        const arr = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+                        return arr.filter(u => !u.city && u.role !== 'admin' && u.role !== 'deputy' && u.role !== 'director' && u.role !== 'manager');
+                      } catch { return []; }
+                    })();
+                    const totalNoCity = reportsNoCity.length + expensesNoCity.length + employeesNoCity.length + usersNoCity.length;
+
+                    const cities = getCities();
+                    const totalWithCity = (reports || []).length - reportsNoCity.length;
+                    if (totalNoCity === 0) {
+                      return (
+                        <div className="border-t border-gray-200 my-3 pt-3">
+                          <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                            <p className="text-sm text-green-700 font-semibold">✅ Все записи имеют город</p>
+                            <p className="text-[11px] text-green-600 mt-1">
+                              Отчётов с городом: {totalWithCity} · Сотрудников с городом: {(employees || []).length - employeesNoCity.length}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="border-t border-amber-200 my-3 pt-3">
+                        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 space-y-2">
+                          <p className="text-sm font-bold text-amber-800">🏙️ Заполнение городов (Backfill)</p>
+                          <p className="text-[11px] text-amber-700">
+                            Найдены данные без указанного города. Менеджеры по городам их не видят — для безопасности.
+                            Можно массово присвоить им город (например, исторические отчёты Ростова-на-Дону).
+                          </p>
+                          <div className="bg-white rounded p-2 text-[11px] space-y-0.5">
+                            {reportsNoCity.length > 0 && <div>📊 Отчётов без города: <b className="text-red-600">{reportsNoCity.length}</b></div>}
+                            {expensesNoCity.length > 0 && <div>💸 Расходов без города: <b className="text-red-600">{expensesNoCity.length}</b></div>}
+                            {employeesNoCity.length > 0 && <div>👥 Сотрудников без города: <b className="text-red-600">{employeesNoCity.length}</b></div>}
+                            {usersNoCity.length > 0 && <div>🔑 Аккаунтов без города: <b className="text-red-600">{usersNoCity.length}</b></div>}
+                          </div>
+
+                          {cities.length === 0 ? (
+                            <p className="text-[11px] text-red-600">⚠ Нет городов в системе. Добавьте города в разделе «📍 Точки».</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              <p className="text-[11px] font-semibold text-amber-800">Присвоить всем «без города»:</p>
+                              {cities.map(targetCity => (
+                                <button
+                                  key={targetCity}
+                                  onClick={() => {
+                                    const msg =
+                                      `Присвоить городу «${targetCity}»:\n\n` +
+                                      `• Отчётов: ${reportsNoCity.length}\n` +
+                                      `• Расходов: ${expensesNoCity.length}\n` +
+                                      `• Сотрудников: ${employeesNoCity.length}\n` +
+                                      `• Аккаунтов: ${usersNoCity.length}\n\n` +
+                                      `Это безопасное действие — записи с уже указанным городом не тронутся.\n\n` +
+                                      `Продолжить?`;
+                                    showConfirm(msg, () => {
+                                      // 1) Отчёты
+                                      if (reportsNoCity.length > 0) {
+                                        const ids = new Set(reportsNoCity.map(r => r.id));
+                                        updateReports((reports || []).map(r => ids.has(r.id) ? { ...r, city: targetCity } : r));
+                                      }
+                                      // 2) Расходы
+                                      if (expensesNoCity.length > 0) {
+                                        const ids = new Set(expensesNoCity.map(e => e.id));
+                                        const updatedExp = (expenses || []).map(e => ids.has(e.id) ? { ...e, city: targetCity } : e);
+                                        setExpenses(updatedExp);
+                                        save('likebird-expenses', updatedExp);
+                                      }
+                                      // 3) Сотрудники
+                                      if (employeesNoCity.length > 0) {
+                                        const ids = new Set(employeesNoCity.map(e => e.id));
+                                        updateEmployees((employees || []).map(e => ids.has(e.id) ? { ...e, city: targetCity } : e));
+                                      }
+                                      // 4) Аккаунты (likebird-users) — обновляем через save (тогда Firebase подхватит)
+                                      if (usersNoCity.length > 0) {
+                                        try {
+                                          const allUsers = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+                                          const logins = new Set(usersNoCity.map(u => u.login));
+                                          const updatedUsers = allUsers.map(u => logins.has(u.login) ? { ...u, city: targetCity } : u);
+                                          save('likebird-users', updatedUsers);
+                                        } catch { /* silent */ }
+                                      }
+                                      logAction(`Backfill: ${targetCity}`, `R:${reportsNoCity.length} E:${expensesNoCity.length} Emp:${employeesNoCity.length} U:${usersNoCity.length}`);
+                                      showNotification(`Присвоено городу «${targetCity}»`);
+                                    });
+                                  }}
+                                  className="w-full bg-amber-200 hover:bg-amber-300 text-amber-900 py-2 rounded font-medium text-sm"
+                                >
+                                  📍 → {targetCity}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          <details className="mt-2">
+                            <summary className="text-[11px] text-gray-600 cursor-pointer">🔍 Подробности</summary>
+                            <div className="mt-1 max-h-40 overflow-y-auto bg-white rounded p-2 text-[10px] space-y-0.5">
+                              {reportsNoCity.slice(0, 30).map(r => (
+                                <div key={`r-${r.id}`} className="text-gray-600">
+                                  📊 {(r.date||'').split(',')[0]} · {r.employee} · {r.product} · loc=«{r.location || '—'}»
+                                </div>
+                              ))}
+                              {reportsNoCity.length > 30 && <div className="text-gray-400 italic">…и ещё {reportsNoCity.length - 30}</div>}
+                              {employeesNoCity.map(e => (
+                                <div key={`emp-${e.id}`} className="text-gray-600">👥 {e.name}</div>
+                              ))}
+                              {usersNoCity.map(u => (
+                                <div key={`u-${u.login}`} className="text-gray-600">🔑 {u.name} (@{u.login})</div>
+                              ))}
+                            </div>
+                          </details>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="border-t border-red-200 my-3 pt-3">
                     <p className="text-xs text-red-400 mb-2">⚠️ Полная очистка удалит ВСЕ данные приложения: отчёты, расходы, склад, сотрудников, настройки и т.д. Это действие нельзя отменить!</p>
                     <button onClick={clearAllData} className="w-full bg-red-500 text-white py-3 rounded-lg font-semibold hover:bg-red-600">🗑️ Очистить ВСЕ данные</button>

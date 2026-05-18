@@ -9,7 +9,7 @@ import EmployeesAdminTab from '../components/team/EmployeesAdminTab';
 import EventsManager from '../components/team/EventsManager';
 
 export default function TeamView() {
-  const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, visibleReports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
+  const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, visibleEmployees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, visibleReports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
   const reports = visibleReports; // фильтрация по городам в контексте
 
   // Флаг админа — для отображения админ-вкладок и блоков управления (включая manager — управляющего)
@@ -28,8 +28,8 @@ export default function TeamView() {
     return () => { window.removeEventListener('storage', refresh); clearInterval(interval); };
   }, []);
 
-  // Активные сотрудники с аккаунтом (исключаем призраков)
-  const activeEmployees = employees
+  // Активные сотрудники с аккаунтом (исключаем призраков). Для менеджера — только его города (visibleEmployees).
+  const activeEmployees = visibleEmployees
     .filter(e => e.active)
     .filter(emp => regUsers.find(u => (emp.login && u.login === emp.login) || u.name === emp.name || u.login === emp.name))
     .map(e => e.name);
@@ -626,7 +626,7 @@ export default function TeamView() {
               {/* Mention autocomplete */}
               {showMentions && (
                 <div className="bg-white rounded-xl shadow border p-2 space-y-1">
-                  {employees.filter(e => e.active && activeEmployees.includes(e.name)).map(e => (
+                  {visibleEmployees.filter(e => e.active && activeEmployees.includes(e.name)).map(e => (
                     <button key={e.id} onClick={() => { setChatText(chatText + e.name + ' '); setShowMentions(false); }}
                       className="w-full text-left px-3 py-2 rounded-lg hover:bg-blue-50 text-sm">{e.name}</button>
                   ))}
