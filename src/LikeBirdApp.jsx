@@ -1736,20 +1736,81 @@ function LikeBirdAppInner() {
   const ROLE_ACCESS = {
     seller: ['catalog','shift','profile','game','chat','analytics-own','notifications','reports','day-report','team'],
     senior: ['catalog','shift','profile','game','chat','analytics-own','reports','day-report','stock','team','analytics','notifications'],
-    manager: ['catalog','shift','profile','game','chat','analytics-own','reports','day-report','stock','team','analytics','notifications'],
+    manager: ['*'], // Управляющий (местный директор) — полные права, но ограничен городами managedCities
     admin: ['*'],
     deputy: ['*'], // Замдиректор имеет все права как админ
     director: ['*'], // Директор — высшая роль (Константин/владелец)
   };
   const hasAccess = (action) => {
     const role = currentUser?.role || 'seller';
-    // Админ, замдиректор или директор — полный доступ
-    if (role === 'admin' || role === 'deputy' || role === 'director' || currentUser?.isAdmin) return true;
+    // Админ, управляющий, замдиректор или директор — полный доступ
+    if (role === 'admin' || role === 'manager' || role === 'deputy' || role === 'director' || currentUser?.isAdmin) return true;
     const allowed = ROLE_ACCESS[role];
     if (!allowed) return false;
     if (allowed.includes('*')) return true;
     return allowed.includes(action);
   };
+
+  // === BLOCK 8b: City-based access (мульти-городовая фильтрация) ===
+  // Извлекает город из location-строки ("Город - Точка" или просто "Город").
+  const extractCity = (loc) => {
+    if (!loc) return null;
+    return String(loc).split(' - ')[0].trim();
+  };
+
+  // Возвращает массив городов, которые видит текущий пользователь.
+  // null = все города (нет ограничений). Иначе — массив строк.
+  // Управляющий (manager) ВСЕГДА ограничен своими managedCities.
+  // Для других ролей managedCities — опциональное ограничение (выдаётся директором).
+  // Замдиректор (deputy) — НЕ ограничен (видит всё, как админ), его deputyCity влияет только на бонусы.
+  // Директор и админ без managedCities — видят всё.
+  const accessibleCities = useMemo(() => {
+    if (!currentUser) return null;
+    const role = currentUser.role;
+    const cities = Array.isArray(currentUser.managedCities) ? currentUser.managedCities.filter(Boolean) : [];
+
+    // Директор всегда видит всё (его managedCities игнорируется — он владелец)
+    if (role === 'director') return null;
+
+    // Управляющий ОБЯЗАН иметь хотя бы один город; если не задано — видит пустоту (для безопасности)
+    if (role === 'manager') return cities;
+
+    // Остальные роли: если managedCities явно задано — ограничены, иначе видят всё
+    if (cities.length > 0) return cities;
+
+    return null;
+  }, [currentUser]);
+
+  // Проверка доступа к конкретному городу
+  const canAccessCity = (city) => {
+    if (!accessibleCities) return true; // null = доступ ко всем
+    if (!city) return true; // если у отчёта нет города — показываем (наследие)
+    return accessibleCities.includes(city);
+  };
+
+  // Фильтрация массива отчётов/расходов по доступным городам.
+  // Если у записи нет location — она доступна всем (наследие старых данных).
+  const filterByAccessibleCities = (items) => {
+    if (!accessibleCities) return items || [];
+    if (!Array.isArray(items)) return [];
+    return items.filter(item => {
+      const loc = item?.location || item?.saleLocation;
+      if (!loc) return true; // записи без локации видят все
+      const city = extractCity(loc);
+      return accessibleCities.includes(city);
+    });
+  };
+
+  // Видимые коллекции — отфильтрованные по городам.
+  // Используются в Views для отображения; raw reports/expenses остаются для админских операций.
+  const visibleReports = useMemo(
+    () => accessibleCities ? filterByAccessibleCities(reports) : reports,
+    [reports, accessibleCities]
+  );
+  const visibleExpenses = useMemo(
+    () => accessibleCities ? filterByAccessibleCities(expenses) : expenses,
+    [expenses, accessibleCities]
+  );
 
   // === BLOCK 4: Image compression utility ===
   const compressImage = (file, maxSize = 800, quality = 0.7) => new Promise((resolve) => {
@@ -2242,9 +2303,10 @@ function LikeBirdAppInner() {
 
   const updateGivenToAdmin = (emp, amount) => { const key = emp + '_' + selectedDate; const updated = {...givenToAdmin, [key]: amount}; setGivenToAdmin(updated); save('likebird-given', updated); };
   const getGivenToAdmin = (emp) => givenToAdmin[emp + '_' + selectedDate] || 0;
-  const getReportsByDate = (date) => reports.filter(r => (r.date||'').split(',')[0] === date);
-  const getExpensesByDate = (date) => expenses.filter(e => (e.date||'').split(',')[0] === date);
-  const getAllDates = () => [...new Set(reports.map(r => (r.date||'').split(',')[0]))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1); });
+  // Используем visibleReports/visibleExpenses чтобы автоматически применить городскую фильтрацию.
+  const getReportsByDate = (date) => visibleReports.filter(r => (r.date||'').split(',')[0] === date);
+  const getExpensesByDate = (date) => visibleExpenses.filter(e => (e.date||'').split(',')[0] === date);
+  const getAllDates = () => [...new Set(visibleReports.map(r => (r.date||'').split(',')[0]))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1); });
   const navigateDate = (dir) => { const dates = getAllDates(); const idx = dates.indexOf(selectedDate); if (dir === 'prev' && idx < dates.length - 1) setSelectedDate(dates[idx + 1]); else if (dir === 'next' && idx > 0) setSelectedDate(dates[idx - 1]); };
 
   const handleParseText = useCallback((inputText) => {
@@ -2585,6 +2647,8 @@ function LikeBirdAppInner() {
     deleteExpense, updateGivenToAdmin, getGivenToAdmin,
     getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName, migrateEmployeeName,
     hasAccess, exportData, importData, clearAllData,
+    accessibleCities, canAccessCity, filterByAccessibleCities,
+    visibleReports, visibleExpenses, extractCity,
     addPenalty, addBonus, addTimeOff, addWriteOff,
     generateAutoOrder, getAutoOrderText, updateSalesPlan,
     updateLocations, addLocation, removeLocation, toggleLocationActive,
