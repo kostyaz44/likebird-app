@@ -213,6 +213,13 @@ export default function AuthView() {
     const hashedPass = await hashPassword(password);
     if (hashedPass !== user.passwordHash) { setError('Неверный пароль'); setPassword(''); return; }
 
+    // Проверка блокировки — заблокированный аккаунт не может войти
+    if (user.banned || user.disabled) {
+      setError(`⛔ Аккаунт заблокирован${user.banReason ? ': ' + user.banReason : ''}`);
+      setPassword('');
+      return;
+    }
+
     const authData = { authenticated: true, name: user.name, login: user.login, expiry: Date.now() + (30*24*60*60*1000) };
     localStorage.setItem('likebird-auth', JSON.stringify(authData));
     localStorage.setItem('likebird-employee', user.name);
