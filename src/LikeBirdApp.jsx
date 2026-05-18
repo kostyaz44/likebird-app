@@ -1657,7 +1657,11 @@ function LikeBirdAppInner() {
   
   // KPI и цели
   const updateEmployeeKPI = (kpi) => { setEmployeeKPI(kpi); save('likebird-kpi', kpi); };
-  const updateShiftsData = (s) => { setShiftsData(s); save('likebird-shifts', s); };
+  const updateShiftsData = (s) => {
+    const safe = (s && typeof s === 'object' && !Array.isArray(s)) ? s : {};
+    setShiftsData(safe);
+    save('likebird-shifts', safe);
+  };
   const updateCustomAchievements = (a) => { setCustomAchievements(a); save('likebird-custom-achievements', a); };
   const updateAchievementsGranted = (g) => { setAchievementsGranted(g); save('likebird-achievements-granted', g); };
   const updateProfilesData = (p) => { setProfilesData(p); save('likebird-profiles', p); };
@@ -2395,7 +2399,7 @@ function LikeBirdAppInner() {
       const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
       const u = users.find(u => (u.name || u.login) === emp);
       const login = u?.login || emp;
-      const shift = shiftsData[`${login}_${selectedDate}`];
+      const shift = (shiftsData || {})[`${login}_${selectedDate}`];
       if (shift?.openTime) {
         shiftLine = `⏱️ Смена: ${shift.openTime}`;
         if (shift.closeTime) {
