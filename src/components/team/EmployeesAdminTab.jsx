@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AlertTriangle, Gift, Palmtree, Edit3, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { parseYear } from '../../utils/dates.js';
@@ -14,6 +14,7 @@ export default function EmployeesAdminTab() {
   const {
     currentUser,
     employees,
+    visibleEmployees,
     penalties: penaltiesRaw,
     bonuses: bonusesRaw,
     timeOff: timeOffRaw,
@@ -35,7 +36,10 @@ export default function EmployeesAdminTab() {
   const bonuses = Array.isArray(bonusesRaw) ? bonusesRaw : [];
   const timeOff = Array.isArray(timeOffRaw) ? timeOffRaw : [];
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.role === 'manager';
+
+  // Set ID-шников видимых сотрудников — для фильтрации записей штрафов/бонусов/отпусков
+  const visibleEmployeeIds = useMemo(() => new Set((visibleEmployees || []).map(e => e.id)), [visibleEmployees]);
 
   const [activeSubTab, setActiveSubTab] = useState('penalties');
 
@@ -197,15 +201,21 @@ export default function EmployeesAdminTab() {
     return () => { window.removeEventListener('storage', refresh); clearInterval(interval); };
   }, []);
 
-  // Активные сотрудники с аккаунтом (без призраков)
-  const activeEmployees = employees
+  // Активные сотрудники с аккаунтом (без призраков).
+  // Для менеджера — только его города (visibleEmployees).
+  const activeEmployees = visibleEmployees
     .filter(e => e.active)
     .filter(emp => regUsers.find(u => (emp.login && u.login === emp.login) || u.name === emp.name || u.login === emp.name));
 
+  // Видимые штрафы/бонусы/отпуска — только для сотрудников из visibleEmployees
+  const visiblePenalties = penalties.filter(p => visibleEmployeeIds.has(p.employeeId));
+  const visibleBonuses = bonuses.filter(b => visibleEmployeeIds.has(b.employeeId));
+  const visibleTimeOff = timeOff.filter(t => visibleEmployeeIds.has(t.employeeId));
+
   const subTabs = [
-    { id: 'penalties', label: '⚠️ Штрафы', count: penalties.length, color: 'red' },
-    { id: 'bonuses', label: '🎁 Бонусы', count: bonuses.length, color: 'green' },
-    { id: 'timeoff', label: '🏖️ Отпуска', count: timeOff.length, color: 'blue' },
+    { id: 'penalties', label: '⚠️ Штрафы', count: visiblePenalties.length, color: 'red' },
+    { id: 'bonuses', label: '🎁 Бонусы', count: visibleBonuses.length, color: 'green' },
+    { id: 'timeoff', label: '🏖️ Отпуска', count: visibleTimeOff.length, color: 'blue' },
   ];
 
   return (
@@ -286,7 +296,7 @@ export default function EmployeesAdminTab() {
           <div className={`rounded-xl p-4 shadow ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <h3 className="font-bold mb-3">📋 История штрафов</h3>
             <div className="space-y-2 max-h-96 overflow-y-auto">
-              {penalties
+              {visiblePenalties
                 .slice()
                 .reverse()
                 .slice(0, 40)
@@ -317,7 +327,7 @@ export default function EmployeesAdminTab() {
                     </div>
                   );
                 })}
-              {penalties.length === 0 && (
+              {visiblePenalties.length === 0 && (
                 <p className="text-gray-400 text-center py-6">Нет штрафов</p>
               )}
             </div>
@@ -374,7 +384,7 @@ export default function EmployeesAdminTab() {
           <div className={`rounded-xl p-4 shadow ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <h3 className="font-bold mb-3">📋 История бонусов</h3>
             <div className="space-y-2 max-h-96 overflow-y-auto">
-              {bonuses
+              {visibleBonuses
                 .slice()
                 .reverse()
                 .slice(0, 40)
@@ -466,7 +476,7 @@ export default function EmployeesAdminTab() {
                     </div>
                   );
                 })}
-              {bonuses.length === 0 && (
+              {visibleBonuses.length === 0 && (
                 <p className="text-gray-400 text-center py-6">Нет бонусов</p>
               )}
             </div>
@@ -548,7 +558,7 @@ export default function EmployeesAdminTab() {
           <div className={`rounded-xl p-4 shadow ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <h3 className="font-bold mb-3">🔴 Сейчас отсутствуют</h3>
             <div className="space-y-2">
-              {getActiveTimeOff().map(t => {
+              {getActiveTimeOff().filter(t => visibleEmployeeIds.has(t.employeeId)).map(t => {
                 const emp = employees.find(e => e.id === t.employeeId);
                 return (
                   <div
@@ -581,7 +591,7 @@ export default function EmployeesAdminTab() {
                   </div>
                 );
               })}
-              {getActiveTimeOff().length === 0 && (
+              {getActiveTimeOff().filter(t => visibleEmployeeIds.has(t.employeeId)).length === 0 && (
                 <p className="text-gray-400 text-center py-4">Все на работе</p>
               )}
             </div>
@@ -591,7 +601,7 @@ export default function EmployeesAdminTab() {
           <div className={`rounded-xl p-4 shadow ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <h3 className="font-bold mb-3">📋 Все записи</h3>
             <div className="space-y-2 max-h-96 overflow-y-auto">
-              {timeOff
+              {visibleTimeOff
                 .slice()
                 .reverse()
                 .slice(0, 40)
@@ -640,7 +650,7 @@ export default function EmployeesAdminTab() {
                     </div>
                   );
                 })}
-              {timeOff.length === 0 && (
+              {visibleTimeOff.length === 0 && (
                 <p className="text-gray-400 text-center py-6">Записей пока нет</p>
               )}
             </div>

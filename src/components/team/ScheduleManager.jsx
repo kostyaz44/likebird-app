@@ -14,6 +14,7 @@ export default function ScheduleManager() {
     scheduleData,
     setScheduleData,
     employees,
+    visibleEmployees,
     save,
     logAction,
     showNotification,
@@ -27,7 +28,7 @@ export default function ScheduleManager() {
   const [scheduleViewMode, setScheduleViewMode] = useState('list');
   const [expanded, setExpanded] = useState(false);
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.role === 'manager';
 
   // Подписка на regUsers — нужна для отсева "призраков" (employees без user-аккаунта)
   const [regUsers, setRegUsers] = useState(() => {
@@ -42,8 +43,9 @@ export default function ScheduleManager() {
     return () => { window.removeEventListener('storage', refresh); clearInterval(interval); };
   }, []);
 
-  // Активные сотрудники, у которых есть аккаунт (призраков отсеиваем)
-  const activeEmployees = employees
+  // Активные сотрудники, у которых есть аккаунт (призраков отсеиваем).
+  // Для менеджера — только сотрудники его городов (visibleEmployees).
+  const activeEmployees = visibleEmployees
     .filter(e => e.active)
     .filter(emp => regUsers.find(u => (emp.login && u.login === emp.login) || u.name === emp.name || u.login === emp.name))
     .map(e => e.name);

@@ -13,8 +13,8 @@ import { calculateAdminEarnings } from '../../utils/salary.js';
  */
 export default function SalaryPanel() {
   const {
-    reports,
-    expenses,
+    visibleReports,
+    visibleExpenses,
     salarySettings,
     setSalarySettings,
     save,
@@ -25,8 +25,10 @@ export default function SalaryPanel() {
     currentUser,
     expenseCategories,
   } = useApp();
+  const reports = visibleReports;
+  const expenses = visibleExpenses;
 
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.role === 'manager';
 
   // Период: неделя/месяц
   const [period, setPeriod] = useState('week'); // 'week' | 'month'

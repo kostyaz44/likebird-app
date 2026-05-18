@@ -54,12 +54,14 @@ export default function EmployeeManager() {
     name: '', role: 'seller', isAdmin: false,
     deputyCity: '', deputyPerSale: 75, noSalary: false,
     managedCities: [],
+    city: '',
   });
   const [addMode, setAddMode] = useState(false);
   const [addForm, setAddForm] = useState({
     login: '', name: '', password: '', role: 'seller',
     deputyCity: '', deputyPerSale: 75, noSalary: false,
     managedCities: [],
+    city: '',
   });
   const [addError, setAddError] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -99,6 +101,8 @@ export default function EmployeeManager() {
 
   const handleStartEdit = (user) => {
     setEditingUser(user.login);
+    // Найдём связанного employee, чтобы взять city оттуда если у user нет
+    const emp = employees.find(e => (e.login && e.login === user.login) || e.name === user.name);
     setEditForm({
       name: user.name,
       role: user.role || 'seller',
@@ -106,8 +110,9 @@ export default function EmployeeManager() {
       deputyCity: user.deputyCity || '',
       deputyPerSale: typeof user.deputyPerSale === 'number' ? user.deputyPerSale : 75,
       noSalary: !!user.noSalary,
-      canViewReports: user.canViewReports || 'self', // 'self' | 'all' | ['emp1', 'emp2']
+      canViewReports: user.canViewReports || 'self',
       managedCities: Array.isArray(user.managedCities) ? [...user.managedCities] : [],
+      city: user.city || emp?.city || '',
     });
   };
 
@@ -179,12 +184,16 @@ export default function EmployeeManager() {
           delete next.deputyCity;
           delete next.deputyPerSale;
           delete next.managedCities;
+          delete next.city;
 
           // Базовые поля
           next.name = newName;
           next.role = editForm.role;
           next.isAdmin = editForm.isAdmin || isAdminRole;
           next.noSalary = !!editForm.noSalary;
+
+          // city — родной город сотрудника (для фильтрации отчётов/команды)
+          if (editForm.city) next.city = editForm.city;
 
           // canViewReports — пишем ТОЛЬКО если есть значение
           const cvr = editForm.canViewReports;
@@ -234,16 +243,35 @@ export default function EmployeeManager() {
       // Сохраняем users
       saveUsers(updated);
 
-      // Миграция имени во всех связанных данных
+      // Миграция имени во всех связанных данных + синхронизация city/role в employees
       if (nameChanged && typeof migrateEmployeeName === 'function') {
         migrateEmployeeName(oldName, newName, editingUser); // editingUser = login
+        // Дополнительно: синхронизировать city в employees после миграции имени
+        if (editForm.city) {
+          setTimeout(() => {
+            try {
+              const fresh = JSON.parse(localStorage.getItem('likebird-employees') || '[]');
+              const updatedEmps = fresh.map(e => (e.login === editingUser || e.name === newName)
+                ? { ...e, city: editForm.city }
+                : e
+              );
+              updateEmployees(updatedEmps);
+            } catch { /* silent */ }
+          }, 100);
+        }
       } else {
-        // Если имя НЕ менялось — всё равно синхронизируем роль в employees
-        const empMatch = employees.find(e => e.name === newName || e.name === editingUser);
+        // Если имя НЕ менялось — всё равно синхронизируем роль и city в employees
+        const empMatch = employees.find(e => (e.login && e.login === editingUser) || e.name === newName || e.name === editingUser);
         if (empMatch) {
-          updateEmployees(employees.map(e =>
-            e.id === empMatch.id ? { ...e, name: newName, role: editForm.role } : e
-          ));
+          updateEmployees(employees.map(e => {
+            if (e.id !== empMatch.id) return e;
+            const upd = { ...e, name: newName, role: editForm.role };
+            if (editForm.city) upd.city = editForm.city;
+            else delete upd.city;
+            // login для будущей привязки
+            if (!upd.login) upd.login = editingUser;
+            return upd;
+          }));
         }
       }
 
@@ -284,6 +312,10 @@ export default function EmployeeManager() {
     if (addForm.role === 'manager' && (!Array.isArray(addForm.managedCities) || addForm.managedCities.length === 0)) {
       setAddError('Выберите хотя бы один город для управляющего'); return;
     }
+    // Менеджер обязан указать город для нового продавца — иначе тот никому не виден
+    if (currentUser?.role === 'manager' && (addForm.role === 'seller' || addForm.role === 'senior') && !(addForm.city || '').trim()) {
+      setAddError('Укажите город сотрудника (иначе он не будет виден)'); return;
+    }
 
     // Уникальность deputy и director (синхронные проверки)
     if (!checkDeputyUniqueness(null, addForm.role)) return;
@@ -294,6 +326,7 @@ export default function EmployeeManager() {
     const isDirector = addForm.role === 'director';
     const isManager = addForm.role === 'manager';
     const mcList = Array.isArray(addForm.managedCities) ? addForm.managedCities.filter(Boolean) : [];
+    const userCity = (addForm.city || '').trim();
     const newU = {
       login: addForm.login.trim(),
       name: (addForm.name.trim() || addForm.login.trim()),
@@ -302,6 +335,7 @@ export default function EmployeeManager() {
       role: addForm.role,
       isAdmin: addForm.role === 'admin' || isDeputy || isDirector || isManager,
       noSalary: !!addForm.noSalary,
+      ...(userCity ? { city: userCity } : {}),
       ...(isDeputy
         ? { deputyCity: addForm.deputyCity, deputyPerSale: Math.max(0, Number(addForm.deputyPerSale) || 0) }
         : {}
@@ -334,9 +368,14 @@ export default function EmployeeManager() {
 
     saveUsers(updated);
     if (!employees.find(e => e.name === newU.name)) {
-      addEmployee(newU.name, newU.role);
+      addEmployee(newU.name, newU.role, userCity || null);
+    } else if (userCity) {
+      // Уже есть employee — обновим ему city и login
+      updateEmployees(employees.map(e =>
+        e.name === newU.name ? { ...e, city: userCity, login: newU.login } : e
+      ));
     }
-    setAddForm({ login: '', name: '', password: '', role: 'seller', deputyCity: '', deputyPerSale: 75, noSalary: false, managedCities: [] });
+    setAddForm({ login: '', name: '', password: '', role: 'seller', deputyCity: '', deputyPerSale: 75, noSalary: false, managedCities: [], city: '' });
     setAddMode(false);
     showNotification(`Аккаунт ${newU.login} создан`);
   };
@@ -411,6 +450,27 @@ export default function EmployeeManager() {
                   <option value="director">👑 Директор</option>
                 </>}
               </select>
+
+              {/* Родной город сотрудника — определяет фильтрацию и подставляется в отчёты */}
+              {(addForm.role === 'seller' || addForm.role === 'senior') && getCities().length > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 space-y-1">
+                  <p className="text-[11px] text-blue-700 font-semibold">🏙️ Родной город (показывается в отчётах):</p>
+                  <select
+                    value={addForm.city || ''}
+                    onChange={(e) => setAddForm({ ...addForm, city: e.target.value })}
+                    className="w-full p-2 border-2 rounded text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="">— не указан —</option>
+                    {(currentUser?.role === 'manager' && Array.isArray(currentUser.managedCities)
+                      ? getCities().filter(c => currentUser.managedCities.includes(c))
+                      : getCities()
+                    ).map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <p className="text-[10px] text-blue-600">
+                    При создании отчёта сотрудник может выбрать другой город (на случай миграции).
+                  </p>
+                </div>
+              )}
 
               {/* Поля для замдиректора */}
               {addForm.role === 'deputy' && (
@@ -529,12 +589,18 @@ export default function EmployeeManager() {
             </div>
           )}
 
-          {/* Список пользователей. Manager видит только seller/senior (не других руководителей) */}
-          <div className="space-y-2 max-h-96 overflow-y-auto">
+          {/* Список пользователей. Manager видит только seller/senior из своих городов. */}
+          {/* Директор/админ — все, сгруппированные по городам. */}
+          <div className="space-y-3 max-h-96 overflow-y-auto">
             {(() => {
-              const visibleUsers = currentUser?.role === 'manager'
+              // 1) Базовый отбор по роли (manager не видит других руководителей)
+              let visibleUsers = currentUser?.role === 'manager'
                 ? regUsers.filter(u => u.role === 'seller' || u.role === 'senior' || !u.role)
                 : regUsers;
+              // 2) Менеджер видит только сотрудников из своих городов (по user.city)
+              if (currentUser?.role === 'manager' && Array.isArray(currentUser.managedCities)) {
+                visibleUsers = visibleUsers.filter(u => u.city && currentUser.managedCities.includes(u.city));
+              }
               if (visibleUsers.length === 0) {
                 return (
                   <div className="text-center py-6">
@@ -543,7 +609,8 @@ export default function EmployeeManager() {
                   </div>
                 );
               }
-              return visibleUsers.map(user => {
+
+              const renderUserCard = (user) => {
                 const roleInfo = ROLE_LABELS[user.role || 'seller'] || ROLE_LABELS.seller;
                 const isEditing = editingUser === user.login;
                 const isMe = user.login === currentUser?.login;
@@ -573,6 +640,27 @@ export default function EmployeeManager() {
                           <option value="director">👑 Директор</option>
                         </>}
                       </select>
+
+                      {/* Родной город сотрудника */}
+                      {(editForm.role === 'seller' || editForm.role === 'senior') && getCities().length > 0 && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 space-y-1">
+                          <p className="text-[11px] text-blue-700 font-semibold">🏙️ Родной город (показывается в отчётах):</p>
+                          <select
+                            value={editForm.city || ''}
+                            onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
+                            className="w-full p-2 border-2 rounded text-sm focus:border-blue-500 focus:outline-none"
+                          >
+                            <option value="">— не указан —</option>
+                            {(currentUser?.role === 'manager' && Array.isArray(currentUser.managedCities)
+                              ? getCities().filter(c => currentUser.managedCities.includes(c))
+                              : getCities()
+                            ).map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                          <p className="text-[10px] text-blue-600">
+                            При создании отчёта сотрудник может выбрать другой город (на случай миграции).
+                          </p>
+                        </div>
+                      )}
 
                       {/* Поля для замдиректора */}
                       {editForm.role === 'deputy' && (
@@ -774,6 +862,11 @@ export default function EmployeeManager() {
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${roleInfo.color}`}>
                           {roleInfo.icon} {roleInfo.label}
                         </span>
+                        {user.city && (
+                          <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
+                            🏙️ {user.city}
+                          </span>
+                        )}
                         {user.role === 'deputy' && user.deputyCity && (
                           <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200">
                             📍 {user.deputyCity} · {user.deputyPerSale || 0}₽/товар
@@ -812,6 +905,45 @@ export default function EmployeeManager() {
                         <Trash2 className="w-4 h-4" />
                       </button>
                     )}
+                  </div>
+                );
+              };
+
+              // Группировка по городам для директора/админа (для манагера — без группировки, у него только свои)
+              const shouldGroup = currentUser?.role !== 'manager';
+              if (!shouldGroup) {
+                return visibleUsers.map(user => renderUserCard(user));
+              }
+
+              // Сгруппировать по user.city; кто без city → группа «🌍 Без города»
+              const groups = {};
+              const NO_CITY = '__no_city__';
+              visibleUsers.forEach(u => {
+                const key = u.city || NO_CITY;
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(u);
+              });
+
+              // Известные города в порядке locations + неизвестные + без города
+              const knownCities = getCities();
+              const groupOrder = [
+                ...knownCities.filter(c => groups[c]),
+                ...Object.keys(groups).filter(k => k !== NO_CITY && !knownCities.includes(k)),
+                ...(groups[NO_CITY] ? [NO_CITY] : []),
+              ];
+
+              return groupOrder.map(cityKey => {
+                const list = groups[cityKey];
+                const label = cityKey === NO_CITY ? '🌍 Без города' : `🏙️ ${cityKey}`;
+                return (
+                  <div key={cityKey} className="space-y-1">
+                    <div className="flex items-center gap-2 px-1 py-1 sticky top-0 bg-white/95 backdrop-blur-sm z-10">
+                      <span className="text-xs font-bold text-gray-600">{label}</span>
+                      <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{list.length}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {list.map(user => renderUserCard(user))}
+                    </div>
                   </div>
                 );
               });
