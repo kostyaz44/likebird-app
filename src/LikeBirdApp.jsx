@@ -522,14 +522,29 @@ function LikeBirdAppInner() {
       if (authData) {
         const parsed = JSON.parse(authData);
         if (parsed.authenticated && parsed.expiry > Date.now()) {
-          setIsAuthenticated(true);
-          setAuthName(parsed.name || '');
-          // Загружаем полный объект пользователя
+          // Проверяем что аккаунт ещё существует и не заблокирован
           try {
             const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
             const foundUser = users.find(u => u.login === parsed.login);
-            if (foundUser) setCurrentUser(foundUser);
-          } catch { /* silent */ }
+            if (!foundUser) {
+              // Аккаунт удалён — чистим сессию
+              localStorage.removeItem('likebird-auth');
+              localStorage.removeItem('likebird-employee');
+            } else if (foundUser.banned || foundUser.disabled) {
+              // Аккаунт заблокирован — чистим сессию
+              localStorage.removeItem('likebird-auth');
+              localStorage.removeItem('likebird-employee');
+            } else {
+              // Всё ок — восстанавливаем сессию
+              setIsAuthenticated(true);
+              setAuthName(parsed.name || '');
+              setCurrentUser(foundUser);
+            }
+          } catch {
+            // Если данных пока нет (offline старт) — даём войти оптимистически, но в подписке проверка отработает
+            setIsAuthenticated(true);
+            setAuthName(parsed.name || '');
+          }
         }
       }
     } catch { /* silent */ }
@@ -893,13 +908,30 @@ function LikeBirdAppInner() {
       guardedSubscribe('likebird-users', (val) => {
         if (!Array.isArray(val)) return;
         try { try { localStorage.setItem('likebird-users', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ }
-        // Обновляем currentUser если его данные изменились (например роль)
+        // Реактивная проверка аккаунта: если currentUser удалён/заблокирован — принудительный logout.
         try {
           const authRaw = localStorage.getItem('likebird-auth');
           if (authRaw) {
             const auth = JSON.parse(authRaw);
+            // Не проверяем если ещё не залогинены или данные ещё подгружаются
+            if (!auth?.login || val.length === 0) {
+              const me = val.find(u => u.login === auth?.login);
+              if (me) setCurrentUser(me);
+              return;
+            }
             const me = val.find(u => u.login === auth.login);
-            if (me) setCurrentUser(me);
+            if (!me) {
+              // Аккаунт удалён администратором
+              forceLogout('account_deleted');
+              return;
+            }
+            if (me.banned || me.disabled) {
+              // Аккаунт заблокирован (мягкий бан — данные сохраняются)
+              forceLogout('account_banned', me.banReason);
+              return;
+            }
+            // Обновляем currentUser если его данные изменились (например роль или managedCities)
+            setCurrentUser(me);
           }
         } catch { /* silent */ }
       }),
@@ -1751,6 +1783,80 @@ function LikeBirdAppInner() {
     if (allowed.includes('*')) return true;
     return allowed.includes(action);
   };
+
+  // === BLOCK 8a: Принудительный logout при удалении/блокировке аккаунта ===
+  // Срабатывает из Firebase подписки на likebird-users, периодической проверки или focus окна.
+  // Показывает уведомление, очищает сессию и перезагружает страницу через 4 секунды.
+  const forceLogoutInProgressRef = useRef(false);
+  const forceLogout = (reason = 'account_deleted', extra = '') => {
+    if (forceLogoutInProgressRef.current) return; // защита от повторного срабатывания
+    forceLogoutInProgressRef.current = true;
+    const messages = {
+      account_deleted: '⛔ Ваш аккаунт удалён администратором.\nСессия будет завершена.',
+      account_banned: `⛔ Доступ к аккаунту заблокирован${extra ? ': ' + extra : '.'}\nСессия будет завершена.`,
+      session_invalid: '⚠️ Сессия недействительна. Войдите заново.',
+    };
+    // Полноэкранный блокирующий оверлей, чтобы юзер не мог делать действия
+    try {
+      const overlay = document.createElement('div');
+      overlay.id = 'force-logout-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;color:white;font-family:system-ui,sans-serif;padding:20px;text-align:center;backdrop-filter:blur(8px)';
+      overlay.innerHTML = `
+        <div style="max-width:380px">
+          <div style="font-size:64px;margin-bottom:16px">⛔</div>
+          <div style="font-size:18px;font-weight:600;white-space:pre-line;margin-bottom:12px">${messages[reason] || messages.session_invalid}</div>
+          <div style="font-size:13px;opacity:0.7">Перенаправление через несколько секунд…</div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+    } catch { /* silent */ }
+    // Очищаем сессию ПОСЛЕ показа сообщения, чтобы UI успел отрисоваться
+    setTimeout(() => {
+      try {
+        localStorage.removeItem('likebird-auth');
+        localStorage.removeItem('likebird-employee');
+      } catch { /* silent */ }
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+      setAuthName('');
+      // Перезагрузка страницы — гарантирует очистку любого in-memory state
+      try { window.location.reload(); } catch { /* silent */ }
+    }, 3500);
+  };
+
+  // Дополнительные триггеры проверки аккаунта: focus окна и периодический heartbeat (страховка).
+  // Firebase подписка уже даёт реактивность, это backup на случай разрыва соединения.
+  useEffect(() => {
+    if (!currentUser?.login) return;
+    const myLogin = currentUser.login;
+    const validate = () => {
+      try {
+        const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+        if (!Array.isArray(users) || users.length === 0) return; // данные ещё не подгружены
+        const me = users.find(u => u.login === myLogin);
+        if (!me) {
+          forceLogout('account_deleted');
+        } else if (me.banned || me.disabled) {
+          forceLogout('account_banned', me.banReason);
+        }
+      } catch { /* silent */ }
+    };
+    // При фокусе окна — мгновенная проверка
+    const onFocus = () => validate();
+    window.addEventListener('focus', onFocus);
+    // Storage event — изменения из другой вкладки
+    const onStorage = (e) => {
+      if (e.key === 'likebird-users' || e.key === 'likebird-auth') validate();
+    };
+    window.addEventListener('storage', onStorage);
+    // Периодически — раз в 30 секунд (страховка на случай разрыва соединения)
+    const interval = setInterval(validate, 30000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('storage', onStorage);
+      clearInterval(interval);
+    };
+  }, [currentUser?.login]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // === BLOCK 8b: City-based access (мульти-городовая фильтрация) ===
   // Извлекает город из location-строки ("Город - Точка" или просто "Город").
