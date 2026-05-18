@@ -299,7 +299,7 @@ export default function TeamView() {
               const weekAgoTs = weekAgo.getTime();
               let totalMinutes = 0;
               let isCurrentlyOpen = false;
-              Object.entries(shiftsData).forEach(([key, shift]) => {
+              Object.entries(shiftsData || {}).forEach(([key, shift]) => {
                 if (!key.startsWith(login + '_')) return;
                 if (!shift.openTime) return;
                 // Проверяем что смена за последнюю неделю

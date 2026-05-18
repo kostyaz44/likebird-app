@@ -258,7 +258,7 @@ export default function ProfileView() {
                 const now2 = new Date();
                 const monthStart2 = new Date(now2.getFullYear(), now2.getMonth(), 1);
                 let totalHours = 0; let daysWorked = 0; let overtimeDays = 0;
-                Object.entries(shiftsData).forEach(([key, shift]) => {
+                Object.entries(shiftsData || {}).forEach(([key, shift]) => {
                   if (!key.startsWith(myLoginPV + '_')) return;
                   if (!shift.openTime || !shift.closeTime) return;
                   try {

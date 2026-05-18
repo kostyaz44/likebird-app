@@ -309,7 +309,7 @@ export default function AdminView() {
             return acc;
           }, {});
           const topToday = Object.entries(todayTopProducts).sort((a, b) => b[1] - a[1])[0];
-          const onShiftNow = Object.entries(shiftsData).filter(([key, s]) => {
+          const onShiftNow = Object.entries(shiftsData || {}).filter(([key, s]) => {
             return key.endsWith(`_${todayStr}`) && s.status === 'open';
           }).map(([key]) => {
             const login = key.replace(`_${todayStr}`, '');
