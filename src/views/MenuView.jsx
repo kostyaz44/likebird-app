@@ -5,7 +5,8 @@ import { formatDate, parseYear } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
 
 export default function MenuView() {
-  const { currentUser, employeeName, eventsCalendar, getLowStockItems, getReportsByDate, hasAccess, isOnline, profilesData, reports, setAdminImportMode, setCurrentView, setSelectedDate, shiftsData, userNotifications } = useApp();
+  const { currentUser, employeeName, eventsCalendar, getLowStockItems, getReportsByDate, hasAccess, isOnline, profilesData, visibleReports, setAdminImportMode, setCurrentView, setSelectedDate, shiftsData, userNotifications } = useApp();
+  const reports = visibleReports; // фильтрация по городам в контексте
 
   const todayAllReports = getReportsByDate(formatDate(new Date()));
   // Показываем только МОИ продажи

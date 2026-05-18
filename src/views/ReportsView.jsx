@@ -26,7 +26,8 @@ function FixUnrecognizedButton({ report }) {
 }
 
 export default function ReportsView() {
-  const { darkMode, deleteReport, getAllDates, getEffectiveSalary, getProductName, getReportsByDate, navigateDate, reports, selectedDate, setCurrentView, setSelectedDate } = useApp();
+  const { darkMode, deleteReport, getAllDates, getEffectiveSalary, getProductName, getReportsByDate, navigateDate, visibleReports, selectedDate, setCurrentView, setSelectedDate } = useApp();
+  const reports = visibleReports; // фильтрация по городам уже применена в контексте
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterEmployee, setFilterEmployee] = useState('');

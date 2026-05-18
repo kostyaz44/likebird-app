@@ -35,7 +35,7 @@ export default function AdminView() {
     customAchievements, customProducts, darkMode, employeeKPI, employeeName,
     employees, eventsCalendar, expenseCategories, expenses, inviteCodes,
     isAdminUnlocked, manuals, notifSettings, paymentType, penalties,
-    personnelTab, productPhotos, profilesData, quantity, reports,
+    personnelTab, productPhotos, profilesData, quantity, reports, visibleReports,
     salarySettings, salePrice, salesPlan, scheduleData, shiftPhotos,
     shiftsData, stock, stockHistory, stockTab, totalBirds, userNotifications,
     writeOffs,
@@ -154,16 +154,16 @@ export default function AdminView() {
   const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
   const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
   
-  const todayReports = reports.filter(r => r.date.startsWith(todayStr) && !r.isUnrecognized);
+  const todayReports = visibleReports.filter(r => r.date.startsWith(todayStr) && !r.isUnrecognized);
   const todayApproved = todayReports.filter(r => r.reviewStatus === 'approved' || r.reviewStatus === 'submitted');
   const todayPending = todayReports.filter(r => !r.reviewStatus || r.reviewStatus === 'pending');
-  const weekReports = reports.filter(r => {
+  const weekReports = visibleReports.filter(r => {
     const [datePart] = (r.date||'').split(',');
     const [d, m, y] = datePart.split('.');
     const reportDate = new Date(parseYear(y), m - 1, d);
     return reportDate >= weekAgo && !r.isUnrecognized;
   });
-  const monthReports = reports.filter(r => {
+  const monthReports = visibleReports.filter(r => {
     const [datePart] = (r.date||'').split(',');
     const [d, m, y] = datePart.split('.');
     const reportDate = new Date(parseYear(y), m - 1, d);
@@ -557,15 +557,15 @@ export default function AdminView() {
             {/* Статистика */}
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-yellow-100 rounded-xl p-3 text-center border-2 border-yellow-300">
-                <p className="text-2xl font-bold text-yellow-700">{reports.filter(r => r.reviewStatus === 'pending' || !r.reviewStatus).length}</p>
+                <p className="text-2xl font-bold text-yellow-700">{visibleReports.filter(r => r.reviewStatus === 'pending' || !r.reviewStatus).length}</p>
                 <p className="text-xs text-yellow-600">Ожидают</p>
               </div>
               <div className="bg-green-100 rounded-xl p-3 text-center border-2 border-green-300">
-                <p className="text-2xl font-bold text-green-700">{reports.filter(r => r.reviewStatus === 'approved').length}</p>
+                <p className="text-2xl font-bold text-green-700">{visibleReports.filter(r => r.reviewStatus === 'approved').length}</p>
                 <p className="text-xs text-green-600">Верно</p>
               </div>
               <div className="bg-red-100 rounded-xl p-3 text-center border-2 border-red-300">
-                <p className="text-2xl font-bold text-red-700">{reports.filter(r => r.reviewStatus === 'rejected' || r.reviewStatus === 'revision').length}</p>
+                <p className="text-2xl font-bold text-red-700">{visibleReports.filter(r => r.reviewStatus === 'rejected' || r.reviewStatus === 'revision').length}</p>
                 <p className="text-xs text-red-600">Ошибки</p>
               </div>
             </div>
@@ -573,7 +573,7 @@ export default function AdminView() {
             {/* Группировка по датам */}
             {(() => {
               const groupedByDate = {};
-              reports.forEach(r => {
+              visibleReports.forEach(r => {
                 const dateKey = (r.date||'').split(',')[0];
                 if (!groupedByDate[dateKey]) groupedByDate[dateKey] = [];
                 groupedByDate[dateKey].push(r);
@@ -783,7 +783,7 @@ export default function AdminView() {
               });
             })()}
 
-            {reports.length === 0 && (
+            {visibleReports.length === 0 && (
               <div className="text-center py-10 bg-white rounded-xl shadow">
                 <FileText className="w-16 h-16 mx-auto text-gray-300 mb-3" />
                 <p className="text-gray-500">Нет отчётов для проверки</p>
@@ -1115,7 +1115,7 @@ export default function AdminView() {
                 <div className="p-3 bg-gray-50 rounded-lg">
                   <p className="font-medium">📊 Статистика системы</p>
                   <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
-                    <div>Отчётов: <span className="font-bold">{reports.length}</span></div>
+                    <div>Отчётов: <span className="font-bold">{visibleReports.length}</span></div>
                     <div>Расходов: <span className="font-bold">{expenses.length}</span></div>
                     <div>Товаров: <span className="font-bold">{ALL_PRODUCTS.length + customProducts.length}</span></div>
                     <div>Дней: <span className="font-bold">{getAllDates().length}</span></div>

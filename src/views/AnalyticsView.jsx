@@ -5,7 +5,8 @@ import { formatDate, parseRuDate } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
 
 export default function AnalyticsView() {
-  const { analyticsPeriod, currentUser, darkMode, employeeName, employees, getEffectiveSalary, getProductName, predictDemand, reports, salesPlan, setAnalyticsPeriod, setCurrentView, stock } = useApp();
+  const { analyticsPeriod, currentUser, darkMode, employeeName, employees, getEffectiveSalary, getProductName, predictDemand, visibleReports, salesPlan, setAnalyticsPeriod, setCurrentView, stock } = useApp();
+  const reports = visibleReports; // фильтрация по городам в контексте
 
   const [tab, setTab] = useState('revenue');
   const [period, setPeriod] = useState(30);

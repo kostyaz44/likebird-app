@@ -9,10 +9,11 @@ import EmployeesAdminTab from '../components/team/EmployeesAdminTab';
 import EventsManager from '../components/team/EventsManager';
 
 export default function TeamView() {
-  const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, reports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
+  const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, visibleReports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
+  const reports = visibleReports; // фильтрация по городам в контексте
 
-  // Флаг админа — для отображения админ-вкладок и блоков управления
-  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director';
+  // Флаг админа — для отображения админ-вкладок и блоков управления (включая manager — управляющего)
+  const isAdmin = currentUser?.isAdmin === true || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.role === 'manager';
 
   // Подписка на regUsers — нужна для отсева "призраков" (employees без user-аккаунта)
   const [regUsers, setRegUsers] = useState(() => {
