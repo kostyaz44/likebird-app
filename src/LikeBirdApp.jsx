@@ -1426,10 +1426,11 @@ function LikeBirdAppInner() {
     logAction('Переименование сотрудника', `${oldName} → ${newName}`);
   };
 
-  const addEmployee = (name, role = 'seller') => {
+  const addEmployee = (name, role = 'seller', city = null) => {
     const newEmp = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), name, role, salaryMultiplier: 1.0, active: true };
+    if (city) newEmp.city = city;
     updateEmployees([...employees, newEmp]);
-    logAction('Добавлен сотрудник', name);
+    logAction('Добавлен сотрудник', city ? `${name} (${city})` : name);
   };
   // === BLOCK 8: Enhanced audit for deletions ===
   // eslint-disable-next-line no-unused-vars
@@ -1788,15 +1789,45 @@ function LikeBirdAppInner() {
     return accessibleCities.includes(city);
   };
 
+  // Определяет город сотрудника по имени (lookup в employees → city, fallback user.city)
+  const getEmployeeCity = (employeeName) => {
+    if (!employeeName) return null;
+    // 1) Из employees
+    const emp = (employees || []).find(e => e.name === employeeName || e.login === employeeName);
+    if (emp?.city) return emp.city;
+    // 2) Из users (для совместимости с зарегистрированными пользователями)
+    try {
+      const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+      const u = users.find(x => x.name === employeeName || x.login === employeeName);
+      if (u?.city) return u.city;
+    } catch { /* silent */ }
+    return null;
+  };
+
+  // Определяет город отчёта/расхода. Приоритет:
+  // 1) Явное поле item.city (новые отчёты)
+  // 2) Город из location-строки
+  // 3) Город сотрудника-автора (employee → employees.city || users.city)
+  const getItemCity = (item) => {
+    if (!item) return null;
+    if (item.city) return item.city;
+    const loc = item.location || item.saleLocation;
+    if (loc) {
+      const c = extractCity(loc);
+      if (c) return c;
+    }
+    return getEmployeeCity(item.employee);
+  };
+
   // Фильтрация массива отчётов/расходов по доступным городам.
-  // Если у записи нет location — она доступна всем (наследие старых данных).
+  // Если город определить не удалось — для ограниченного пользователя запись СКРЫВАЕТСЯ
+  // (безопасное поведение: ограниченный видит только записи с явным городом из его списка).
   const filterByAccessibleCities = (items) => {
     if (!accessibleCities) return items || [];
     if (!Array.isArray(items)) return [];
     return items.filter(item => {
-      const loc = item?.location || item?.saleLocation;
-      if (!loc) return true; // записи без локации видят все
-      const city = extractCity(loc);
+      const city = getItemCity(item);
+      if (!city) return false; // нет города → не показываем ограниченному
       return accessibleCities.includes(city);
     });
   };
@@ -1805,11 +1836,28 @@ function LikeBirdAppInner() {
   // Используются в Views для отображения; raw reports/expenses остаются для админских операций.
   const visibleReports = useMemo(
     () => accessibleCities ? filterByAccessibleCities(reports) : reports,
-    [reports, accessibleCities]
+    [reports, accessibleCities, employees]
   );
   const visibleExpenses = useMemo(
     () => accessibleCities ? filterByAccessibleCities(expenses) : expenses,
-    [expenses, accessibleCities]
+    [expenses, accessibleCities, employees]
+  );
+
+  // Фильтрация employees-массива по доступным городам.
+  // Сотрудники без city — для ограниченного пользователя НЕ показываются (безопасно).
+  const filterEmployeesByAccessibleCities = (emps) => {
+    if (!accessibleCities) return emps || [];
+    if (!Array.isArray(emps)) return [];
+    return emps.filter(e => {
+      if (!e?.city) return false;
+      return accessibleCities.includes(e.city);
+    });
+  };
+
+  // Видимый список сотрудников — отфильтрованный по городам менеджера/admin с managedCities
+  const visibleEmployees = useMemo(
+    () => accessibleCities ? filterEmployeesByAccessibleCities(employees) : employees,
+    [employees, accessibleCities]
   );
 
   // === BLOCK 4: Image compression utility ===
@@ -2188,6 +2236,8 @@ function LikeBirdAppInner() {
     const salary = calculateSalary(product.price, priceNum, category, tipsNum, 'normal', salarySettings);
     const now = Date.now();
     const dateStr = params.customDate || new Date().toLocaleString('ru-RU');
+    // Определяем город отчёта: 1) из location, 2) из родного города сотрудника
+    const reportCity = (location ? extractCity(location) : null) || getEmployeeCity(empName) || null;
     // Каждая единица — отдельная запись
     const newReports = Array.from({ length: qty }, (_, i) => {
       let cashAmt = 0, cashlessAmt = 0;
@@ -2206,6 +2256,7 @@ function LikeBirdAppInner() {
         createdAt: now + i, reviewStatus: 'pending',
         photo: photo || null,
         location: location || null,
+        city: reportCity, // Город отчёта — для фильтрации по городам
         discountReason: discountNote || null,
         isBelowBase: priceNum < product.price,
         ...(params.addedBy ? { addedBy: params.addedBy } : {}),
@@ -2241,13 +2292,15 @@ function LikeBirdAppInner() {
       dateStr = new Date().toLocaleString('ru-RU');
     }
     const now = Date.now();
+    // Город отчёта (для парсенных — берём из родного города сотрудника)
+    const parsedReportCity = getEmployeeCity(empName) || null;
     const newReports = [
       // FIX: добавлен tipsModel:'v2' чтобы миграция не обнулила реальные чаевые
-      ...parsedSales.map((s, i) => ({ id: now + i, date: dateStr, product: s.product.name, category: s.category, basePrice: s.product.price, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, tipsModel: 'v2', paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: false, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport })),
-      ...unrecognizedSales.map((s, i) => ({ id: now + 10000 + i, date: dateStr, product: s.extractedName, category: 'Нераспознанный товар', basePrice: 0, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, tipsModel: 'v2', paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: true, originalText: s.originalText, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport })),
+      ...parsedSales.map((s, i) => ({ id: now + i, date: dateStr, product: s.product.name, category: s.category, basePrice: s.product.price, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, tipsModel: 'v2', paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: false, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport, city: parsedReportCity })),
+      ...unrecognizedSales.map((s, i) => ({ id: now + 10000 + i, date: dateStr, product: s.extractedName, category: 'Нераспознанный товар', basePrice: 0, salePrice: s.price, quantity: 1, employee: empName, total: s.price, tips: s.tips || 0, salary: s.salary, tipsModel: 'v2', paymentType: s.paymentType, cashAmount: s.cashAmount, cashlessAmount: s.cashlessAmount, isUnrecognized: true, originalText: s.originalText, workTime: parsedWorkTime, createdAt: now, reviewStatus: 'pending', originalReportText: textReport, city: parsedReportCity })),
     ];
     if (parsedExpenses.length > 0) {
-      const newExpenses = parsedExpenses.map((e, i) => ({ id: now + 20000 + i, date: dateStr, amount: e.amount, description: e.description, employee: empName }));
+      const newExpenses = parsedExpenses.map((e, i) => ({ id: now + 20000 + i, date: dateStr, amount: e.amount, description: e.description, employee: empName, city: parsedReportCity }));
       const updatedExpenses = [...newExpenses, ...expenses];
       setExpenses(updatedExpenses);
       save('likebird-expenses', updatedExpenses);
@@ -2543,7 +2596,7 @@ function LikeBirdAppInner() {
       if (!desc.trim()) { showNotification('Введите описание', 'error'); return; }
       const amtNum = parseInt(amt, 10);
       if (!amtNum || isNaN(amtNum) || amtNum <= 0) { showNotification('Введите положительную сумму', 'error'); return; }
-      const newExp = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), date: new Date().toLocaleString('ru-RU'), amount: amtNum, description: desc.trim(), employee: expenseModal.employee };
+      const newExp = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), date: new Date().toLocaleString('ru-RU'), amount: amtNum, description: desc.trim(), employee: expenseModal.employee, city: getEmployeeCity(expenseModal.employee) || null };
       const updated = [newExp, ...expenses]; setExpenses(updated); save('likebird-expenses', updated);
       showNotification('Расход добавлен');
       setExpenseModal(null);
@@ -2648,7 +2701,8 @@ function LikeBirdAppInner() {
     getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName, migrateEmployeeName,
     hasAccess, exportData, importData, clearAllData,
     accessibleCities, canAccessCity, filterByAccessibleCities,
-    visibleReports, visibleExpenses, extractCity,
+    visibleReports, visibleExpenses, visibleEmployees, extractCity,
+    getItemCity, getEmployeeCity, filterEmployeesByAccessibleCities,
     addPenalty, addBonus, addTimeOff, addWriteOff,
     generateAutoOrder, getAutoOrderText, updateSalesPlan,
     updateLocations, addLocation, removeLocation, toggleLocationActive,
