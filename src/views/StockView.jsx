@@ -6,7 +6,7 @@ import { findProductByPrice } from '../utils/parser.js';
 import { useApp } from '../context/AppContext';
 
 export default function StockView() {
-  const { CUSTOM_ALIASES, DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, autoOrderList, darkMode, employeeName, employees, getLowStockItems, getWeekSales, logAction, partnerStock, predictDemand, save, setCurrentView, setPartnerStock, setStockCategory, setTotalBirds, showConfirm, showInputModal, showNotification, stock, stockCategory, stockHistory, totalBirds, updateStock } = useApp();
+  const { CUSTOM_ALIASES, DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, addStockHistoryEntries, autoOrderList, darkMode, employeeName, employees, getLowStockItems, getWeekSales, logAction, partnerStock, predictDemand, save, setCurrentView, setPartnerStock, setStockCategory, setTotalBirds, showConfirm, showInputModal, showNotification, stock, stockCategory, totalBirds, updateStock } = useApp();
 
   const [actualInput, setActualInput] = useState({});
   const [showLow, setShowLow] = useState(false);
@@ -18,6 +18,8 @@ export default function StockView() {
   const [bulkParsed, setBulkParsed] = useState([]);
   const [bulkTotalBirds, setBulkTotalBirds] = useState(null);
   const [bulkPartnerMoves, setBulkPartnerMoves] = useState([]);
+  const [bulkNotRecognized, setBulkNotRecognized] = useState([]); // Список нераспознанных строк для UI
+  const [bulkSkipNames, setBulkSkipNames] = useState(() => new Set()); // Названия товаров, исключённых из применения
   const [parseStatus, setParseStatus] = useState(''); // FIX: Локальный статус вместо showNotification
   const [editingMin, setEditingMin] = useState(null);
   const [minValue, setMinValue] = useState('');
@@ -68,20 +70,21 @@ export default function StockView() {
   const setMinStock = (name, min) => { const newStock = {...stock}; newStock[name] = {...newStock[name], minStock: Math.max(0, parseInt(min) || 0)}; updateStock(newStock); showNotification(`Минимум для ${name}: ${min}`); };
   const checkActual = (name) => { const actual = parseInt(actualInput[name]); if (isNaN(actual)) { showNotification('Введите число', 'error'); return; } const current = stock[name].count; if (actual !== current) showConfirm(`${name}: факт ${actual}, в системе ${current}. Обновить?`, () => { setStockCount(name, actual); showNotification('Остаток обновлён'); }); else showNotification('Остаток совпадает ✓'); setActualInput({...actualInput, [name]: ''}); };
   // FIX #59: Добавлено логирование в stockHistory при обнулении остатков
-  const resetAllStock = () => showConfirm('Обнулить все остатки в этой категории?', () => { const newStock = {...stock}; categoryItems.forEach(([name]) => { const oldCount = newStock[name].count; if (oldCount !== 0) { newStock[name] = {...newStock[name], count: 0}; addStockHistoryEntry(name, 'reset', -oldCount, `Обнуление категории (${employeeName})`); } }); updateStock(newStock); showNotification('Остатки обнулены'); });
-  
-  const updatePartnerStock = (partner, product, count) => {
-    const newPartners = {...partnerStock};
-    if (!newPartners[partner]) newPartners[partner] = {};
-    newPartners[partner][product] = Math.max(0, count);
-    setPartnerStock(newPartners);
-    save('likebird-partners', newPartners);
-  };
-  
-  const getPartnerTotal = (partner) => {
-    if (!partnerStock[partner]) return 0;
-    return Object.values(partnerStock[partner]).reduce((sum, count) => sum + count, 0);
-  };
+  // FIX: батчуем записи истории — раньше через forEach + addStockHistoryEntry терялись все записи кроме последней (stale closure)
+  const resetAllStock = () => showConfirm('Обнулить все остатки в этой категории?', () => {
+    const newStock = {...stock};
+    const historyBatch = [];
+    categoryItems.forEach(([name]) => {
+      const oldCount = newStock[name].count;
+      if (oldCount !== 0) {
+        newStock[name] = {...newStock[name], count: 0};
+        historyBatch.push({ productName: name, action: 'reset', quantity: -oldCount, note: `Обнуление категории (${employeeName})` });
+      }
+    });
+    updateStock(newStock);
+    addStockHistoryEntries(historyBatch);
+    showNotification('Остатки обнулены');
+  });
   
   const parseBulkInventory = () => {
     if (!bulkText.trim()) {
@@ -202,18 +205,30 @@ export default function StockView() {
       if (matchedPartner) {
         const numMatch = l.match(/([+-]?\s*\d+)/);
         if (numMatch && currentProduct && currentProduct.name !== '__TOTAL_BIRDS__') {
-          let amount = parseInt(numMatch[1].replace(/\s/g, ''));
+          const raw = numMatch[1].replace(/\s/g, '');
+          const hasExplicitSign = /^[+-]/.test(raw);
+          let amount = parseInt(raw);
           const text = l.toLowerCase();
-          if (text.includes('от')) amount = Math.abs(amount);
-          else amount = -Math.abs(amount);
+          // Если знак явно указан в тексте (+5 / -3) — уважаем его как есть.
+          // Иначе определяем направление по ключевым словам:
+          //   «от», «вернул*», «возврат», «забрал у» — приход к нам (партнёр отдал нам)
+          //   всё остальное — расход (мы отдали партнёру)
+          // Важно: \b в JS не работает с кириллицей, поэтому проверяем границы вручную ([^а-яёa-z] или края строки).
+          if (!hasExplicitSign) {
+            const returnRegex = /(^|[^а-яёa-z])(от|вернул[аи]?|возврат|забрал[аи]?\s+у)([^а-яёa-z]|$)/i;
+            const isReturn = returnRegex.test(text);
+            amount = isReturn ? Math.abs(amount) : -Math.abs(amount);
+          }
           
-          partnerMoves.push({
-            partner: matchedPartner,
-            product: currentProduct.name,
-            amount,
-            direction: amount > 0 ? 'приход' : 'расход',
-            line: l
-          });
+          if (amount !== 0) {
+            partnerMoves.push({
+              partner: matchedPartner,
+              product: currentProduct.name,
+              amount,
+              direction: amount > 0 ? 'приход' : 'расход',
+              line: l
+            });
+          }
         }
         continue;
       }
@@ -343,6 +358,8 @@ export default function StockView() {
     setBulkParsed(uniqueParsed);
     setBulkTotalBirds(foundTotalBirds);
     setBulkPartnerMoves(partnerMoves);
+    setBulkNotRecognized(notRecognized); // показываем юзеру что не распознали
+    setBulkSkipNames(new Set()); // сброс исключений при новом парсинге
     
     const foundCount = uniqueParsed.filter(p => p.found).length;
     const notFoundCount = notRecognized.length;
@@ -364,48 +381,73 @@ export default function StockView() {
   const applyBulkInventory = () => {
     const newStock = {...stock};
     let updated = 0;
-    const changes = []; // Собираем лог изменений
-    bulkParsed.filter(p => p.found).forEach(p => {
-      if (newStock[p.name]) {
-        const oldCount = newStock[p.name].count;
-        const diff = p.count - oldCount;
-        if (diff !== 0) {
-          newStock[p.name] = {...newStock[p.name], count: p.count};
-          updated++;
-          changes.push({ name: p.name, oldCount, newCount: p.count, diff });
-          // Записываем в историю склада
-          addStockHistoryEntry(p.name, 'revision', diff, `Ревизия: ${oldCount} → ${p.count}`);
+    const changes = []; // Собираем лог изменений (для logAction)
+    const historyBatch = []; // FIX: батчуем записи в stockHistory — раньше forEach + addStockHistoryEntry терял все записи кроме последней.
+    
+    bulkParsed
+      .filter(p => p.found && !bulkSkipNames.has(p.name)) // FIX: уважаем чекбоксы исключения позиций
+      .forEach(p => {
+        if (newStock[p.name]) {
+          const oldCount = newStock[p.name].count;
+          const diff = p.count - oldCount;
+          if (diff !== 0) {
+            newStock[p.name] = {...newStock[p.name], count: p.count};
+            updated++;
+            changes.push({ name: p.name, oldCount, newCount: p.count, diff });
+            historyBatch.push({ productName: p.name, action: 'revision', quantity: diff, note: `Ревизия: ${oldCount} → ${p.count}` });
+          }
         }
-      }
-    });
+      });
     updateStock(newStock);
+    addStockHistoryEntries(historyBatch); // одна запись в Firebase вместо N
     
     // Сохраняем общее количество птичек
-    if (bulkTotalBirds !== null) {
+    let totalBirdsChanged = false;
+    if (bulkTotalBirds !== null && bulkTotalBirds !== totalBirds) {
       setTotalBirds(bulkTotalBirds);
       save('likebird-totalbirds', bulkTotalBirds);
+      totalBirdsChanged = true;
     }
     
-    // Обрабатываем движения партнёров
-    if (bulkPartnerMoves.length > 0) {
+    // Обрабатываем движения партнёров (с защитой total от ухода в минус)
+    const partnerMovesToApply = bulkPartnerMoves; // skip-set для партнёров не предусмотрен в UI — применяем все
+    if (partnerMovesToApply.length > 0) {
       const newPartners = {...partnerStock};
-      bulkPartnerMoves.forEach(move => {
+      partnerMovesToApply.forEach(move => {
         if (!newPartners[move.partner]) newPartners[move.partner] = { total: 0, history: [] };
-        newPartners[move.partner].total = (newPartners[move.partner].total || 0) - move.amount;
-        newPartners[move.partner].history = [...(newPartners[move.partner].history || []), { ...move, date: new Date().toLocaleDateString('ru-RU') }];
+        // Семантика amount:
+        //   +N  партнёр вернул нам N штук  → его остаток уменьшается на N
+        //   -N  мы отдали партнёру N штук → его остаток увеличивается на |N|
+        // Поэтому total -= move.amount, и обязательно clamp на 0.
+        const nextTotal = (newPartners[move.partner].total || 0) - move.amount;
+        newPartners[move.partner].total = Math.max(0, nextTotal);
+        newPartners[move.partner].history = [
+          ...(newPartners[move.partner].history || []),
+          { ...move, date: new Date().toLocaleDateString('ru-RU') }
+        ];
       });
       setPartnerStock(newPartners);
       save('likebird-partners', newPartners);
     }
     
     // Логируем ревизию в аудит
-    logAction('Ревизия применена', `Обновлено ${updated} позиций${bulkTotalBirds !== null ? `, птичек: ${bulkTotalBirds}` : ''}${bulkPartnerMoves.length > 0 ? `, партнёрских движений: ${bulkPartnerMoves.length}` : ''}`);
+    logAction('Ревизия применена', `Обновлено ${updated} позиций${totalBirdsChanged ? `, птичек: ${bulkTotalBirds}` : ''}${partnerMovesToApply.length > 0 ? `, партнёрских движений: ${partnerMovesToApply.length}` : ''}`);
     
-    showNotification(`Обновлено ${updated} позиций`);
+    // Информативное уведомление
+    const parts = [];
+    if (updated > 0) parts.push(`${updated} позиций`);
+    if (totalBirdsChanged) parts.push(`птичек: ${bulkTotalBirds}`);
+    if (partnerMovesToApply.length > 0) parts.push(`партнёры: ${partnerMovesToApply.length}`);
+    showNotification(parts.length > 0 ? `Применено: ${parts.join(', ')}` : 'Изменений нет');
+    
+    // Полный сброс состояния ревизии
     setBulkText('');
     setBulkParsed([]);
     setBulkTotalBirds(null);
     setBulkPartnerMoves([]);
+    setBulkNotRecognized([]);
+    setBulkSkipNames(new Set());
+    setParseStatus('');
     setShowBulkImport(false);
   };
   
@@ -504,7 +546,7 @@ export default function StockView() {
             <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder="Вставьте текст ревизии..." className="w-full p-3 border-2 rounded-lg font-mono text-sm h-40 focus:border-blue-500 focus:outline-none" />
             <div className="flex gap-2">
               <button onClick={parseBulkInventory} className="flex-1 bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600">🔍 Распознать</button>
-              <button onClick={() => { setBulkText(''); setBulkParsed([]); setBulkTotalBirds(null); setBulkPartnerMoves([]); setParseStatus(''); }} className="px-4 bg-gray-200 rounded-lg hover:bg-gray-300"><RotateCcw className="w-5 h-5" /></button>
+              <button onClick={() => { setBulkText(''); setBulkParsed([]); setBulkTotalBirds(null); setBulkPartnerMoves([]); setBulkNotRecognized([]); setBulkSkipNames(new Set()); setParseStatus(''); }} className="px-4 bg-gray-200 rounded-lg hover:bg-gray-300" title="Очистить"><RotateCcw className="w-5 h-5" /></button>
             </div>
             
             {parseStatus && (
@@ -533,14 +575,55 @@ export default function StockView() {
             
             {bulkParsed.length > 0 && (
               <div className="space-y-2">
-                <p className="font-semibold text-sm">Товары ({bulkParsed.filter(p => p.found).length} распознано):</p>
+                <div className="flex justify-between items-center">
+                  <p className="font-semibold text-sm">Товары ({bulkParsed.filter(p => p.found).length} распознано):</p>
+                  {bulkParsed.some(p => p.found) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const foundNames = bulkParsed.filter(p => p.found).map(p => p.name);
+                        const allSkipped = foundNames.every(n => bulkSkipNames.has(n));
+                        setBulkSkipNames(allSkipped ? new Set() : new Set(foundNames));
+                      }}
+                      className="text-xs text-gray-500 hover:text-gray-700 underline"
+                    >
+                      {(() => {
+                        const foundNames = bulkParsed.filter(p => p.found).map(p => p.name);
+                        const allSkipped = foundNames.length > 0 && foundNames.every(n => bulkSkipNames.has(n));
+                        return allSkipped ? 'Включить все' : 'Снять все';
+                      })()}
+                    </button>
+                  )}
+                </div>
                 <div className="max-h-60 overflow-y-auto space-y-1">
                   {bulkParsed.map((p, i) => {
                     const currentCount = stock[p.name]?.count ?? 0;
                     const diff = p.found ? p.count - currentCount : 0;
+                    const isSkipped = p.found && bulkSkipNames.has(p.name);
+                    const bgClass = !p.found
+                      ? 'bg-red-50'
+                      : isSkipped
+                        ? 'bg-gray-100 opacity-60'
+                        : (diff !== 0 ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50');
                     return (
-                      <div key={i} className={`flex justify-between items-center text-sm p-2 rounded ${p.found ? (diff !== 0 ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50') : 'bg-red-50'}`}>
-                        <span className="flex-1">{p.emoji} {p.name}</span>
+                      <div key={i} className={`flex justify-between items-center text-sm p-2 rounded ${bgClass}`}>
+                        {p.found && (
+                          <input
+                            type="checkbox"
+                            checked={!isSkipped}
+                            onChange={(e) => {
+                              setBulkSkipNames(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.delete(p.name);
+                                else next.add(p.name);
+                                return next;
+                              });
+                            }}
+                            className="mr-2 w-4 h-4 accent-green-600 flex-shrink-0"
+                            title={isSkipped ? 'Включить эту позицию в применение' : 'Исключить эту позицию из применения'}
+                          />
+                        )}
+                        <span className={`flex-1 ${isSkipped ? 'line-through' : ''}`}>{p.emoji} {p.name}</span>
                         {p.found ? (
                           <div className="flex items-center gap-2 text-right">
                             <span className="text-gray-400 text-xs">{currentCount}→</span>
@@ -555,11 +638,10 @@ export default function StockView() {
                   })}
                 </div>
                 {(() => {
-                  const totalDiff = bulkParsed.filter(p => p.found).reduce((sum, p) => {
-                    const currentCount = stock[p.name]?.count ?? 0;
-                    return sum + (p.count - currentCount);
-                  }, 0);
-                  const changedCount = bulkParsed.filter(p => p.found && p.count !== (stock[p.name]?.count ?? 0)).length;
+                  // Считаем итог ТОЛЬКО по неисключённым позициям
+                  const effective = bulkParsed.filter(p => p.found && !bulkSkipNames.has(p.name));
+                  const totalDiff = effective.reduce((sum, p) => sum + (p.count - (stock[p.name]?.count ?? 0)), 0);
+                  const changedCount = effective.filter(p => p.count !== (stock[p.name]?.count ?? 0)).length;
                   return changedCount > 0 ? (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-sm">
                       <span className="text-blue-700">📊 Изменений: <strong>{changedCount}</strong> позиций, итого: <strong className={totalDiff >= 0 ? 'text-green-600' : 'text-red-600'}>{totalDiff > 0 ? '+' : ''}{totalDiff} шт</strong></span>
@@ -573,10 +655,39 @@ export default function StockView() {
               </div>
             )}
             
-            {(bulkParsed.length > 0 || bulkTotalBirds !== null || bulkPartnerMoves.length > 0) && (
-              <button onClick={applyBulkInventory} className="w-full bg-green-500 text-white py-3 rounded-lg font-semibold hover:bg-green-600">✅ Применить изменения</button>
+            {bulkNotRecognized.length > 0 && (
+              <details className="bg-red-50 border border-red-200 rounded-lg p-2 text-sm">
+                <summary className="font-semibold text-red-700 cursor-pointer select-none">❌ Не распознано ({bulkNotRecognized.length}) — нажмите чтобы посмотреть</summary>
+                <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
+                  {bulkNotRecognized.map((nr, i) => (
+                    <div key={i} className="text-xs text-red-600 bg-white rounded px-2 py-1 border border-red-100 break-words">
+                      «{nr.text}» <span className="text-gray-400">({nr.line})</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-red-500 mt-2">💡 Добавьте алиасы в Настройки → Алиасы товаров, либо поправьте текст и нажмите «Распознать» снова.</p>
+              </details>
             )}
-            {stockHistory.length > historyLimit && <button onClick={() => setHistoryLimit(prev => prev + 50)} className="w-full text-center py-2 text-purple-500 text-sm hover:text-purple-700">↑ Показать ещё ({stockHistory.length - historyLimit})</button>}
+            
+            {(() => {
+              // Apply активен только если есть что реально применять
+              const effective = bulkParsed.filter(p => p.found && !bulkSkipNames.has(p.name));
+              const hasStockChanges = effective.some(p => p.count !== (stock[p.name]?.count ?? 0));
+              const hasTotalBirdsChange = bulkTotalBirds !== null && bulkTotalBirds !== totalBirds;
+              const hasPartnerChanges = bulkPartnerMoves.length > 0;
+              const canApply = hasStockChanges || hasTotalBirdsChange || hasPartnerChanges;
+              if (!bulkParsed.length && bulkTotalBirds === null && bulkPartnerMoves.length === 0) return null;
+              return (
+                <button
+                  onClick={applyBulkInventory}
+                  disabled={!canApply}
+                  className={`w-full py-3 rounded-lg font-semibold text-white ${canApply ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-300 cursor-not-allowed'}`}
+                  title={canApply ? 'Применить изменения к складу' : 'Нет изменений для применения'}
+                >
+                  {canApply ? '✅ Применить изменения' : '✓ Нет изменений'}
+                </button>
+              );
+            })()}
           </div>
         )}
         
