@@ -380,6 +380,9 @@ function LikeBirdAppInner() {
   
   // История движения товара
   const [stockHistory, setStockHistory] = useState([]);
+  // Ref для актуального значения stockHistory (защита от stale-closure при батч-вызовах addStockHistoryEntry в forEach)
+  const stockHistoryRef = useRef([]);
+  useEffect(() => { stockHistoryRef.current = stockHistory; }, [stockHistory]);
   
   // Брак и списания
   const [writeOffs, setWriteOffs] = useState([]);
@@ -1632,10 +1635,30 @@ function LikeBirdAppInner() {
   };
   
   // История склада
-  const updateStockHistory = (h) => { setStockHistory(h); save('likebird-stock-history', h); };
+  const updateStockHistory = (h) => { setStockHistory(h); stockHistoryRef.current = h; save('likebird-stock-history', h); };
   const addStockHistoryEntry = (productName, action, quantity, note = '') => {
     const entry = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), productName, action, quantity, note, date: new Date().toISOString(), user: employeeName || 'Система' };
-    updateStockHistory([entry, ...stockHistory].slice(0, 1000));
+    // ВАЖНО: читаем из ref, а не из stockHistory из замыкания — иначе при подряд идущих вызовах
+    // (forEach в applyBulkInventory / resetAllStock) сохраняется только последняя запись.
+    const next = [entry, ...stockHistoryRef.current].slice(0, 1000);
+    updateStockHistory(next);
+  };
+  // Батч-вариант для массовых операций (ревизия, обнуление категории) — одна запись в Firebase вместо N.
+  const addStockHistoryEntries = (entries) => {
+    if (!entries || entries.length === 0) return;
+    const stamp = Date.now();
+    const enriched = entries.map((e, i) => ({
+      id: stamp + '_' + i + '_' + Math.random().toString(36).slice(2, 6),
+      productName: e.productName,
+      action: e.action,
+      quantity: e.quantity,
+      note: e.note || '',
+      date: new Date().toISOString(),
+      user: employeeName || 'Система',
+    }));
+    // Новые записи — впереди, в порядке вставки (последняя из enriched будет самой свежей сверху).
+    const next = [...enriched.slice().reverse(), ...stockHistoryRef.current].slice(0, 1000);
+    updateStockHistory(next);
   };
   
   // Брак и списания
@@ -2821,7 +2844,7 @@ function LikeBirdAppInner() {
     updateProfilesData, updateChatMessages, sendMessage, markAsRead,
     getUnreadMessages, rateEmployee, getEmployeeAverageRating,
     setEmployeeGoal, getEmployeeProgress, addSystemNotification,
-    addStockHistoryEntry, saveAlias, removeAlias, checkAdminPassword,
+    addStockHistoryEntry, addStockHistoryEntries, saveAlias, removeAlias, checkAdminPassword,
     setAdminPass, getAnalytics, getBreakEvenPoint, predictDemand,
     getAllDates, getReportsByDate, getExpensesByDate, navigateDate,
     handleParseText, getLowStockItems, getWeekSales, copyDayReport,
