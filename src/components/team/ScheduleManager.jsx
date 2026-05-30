@@ -84,32 +84,36 @@ export default function ScheduleManager() {
   };
 
   const addShift = (employee) => {
-    const newShifts = { ...shifts };
-    if (!newShifts[employee]) newShifts[employee] = [];
-    newShifts[employee].push({
+    const newShift = {
       date: '',
       startTime: '10:00',
       endTime: '19:00',
       breakStart: '',
       breakEnd: '',
       hours: 9,
-    });
-    setShifts(newShifts);
+    };
+    // FIX: иммутабельно — раньше {...shifts} был только shallow copy, а .push() мутировал исходный массив.
+    setShifts({ ...shifts, [employee]: [...(shifts[employee] || []), newShift] });
   };
 
   const updateShift = (employee, index, field, value) => {
-    const newShifts = { ...shifts };
-    newShifts[employee][index][field] = value;
-    const shift = newShifts[employee][index];
-    shift.hours = calculateHours(shift.startTime, shift.endTime, shift.breakStart, shift.breakEnd);
-    setShifts(newShifts);
+    // FIX: иммутабельно — раньше прямая мутация массива и объекта
+    const empShifts = shifts[employee] || [];
+    const updatedShift = { ...empShifts[index], [field]: value };
+    updatedShift.hours = calculateHours(updatedShift.startTime, updatedShift.endTime, updatedShift.breakStart, updatedShift.breakEnd);
+    const newEmpShifts = empShifts.map((s, i) => i === index ? updatedShift : s);
+    setShifts({ ...shifts, [employee]: newEmpShifts });
   };
 
   const removeShift = (employee, index) => {
-    const newShifts = { ...shifts };
-    newShifts[employee].splice(index, 1);
-    if (newShifts[employee].length === 0) delete newShifts[employee];
-    setShifts(newShifts);
+    // FIX: иммутабельно — раньше .splice() мутировал исходный массив
+    const newEmpShifts = (shifts[employee] || []).filter((_, i) => i !== index);
+    if (newEmpShifts.length === 0) {
+      const { [employee]: _removed, ...rest } = shifts;
+      setShifts(rest);
+    } else {
+      setShifts({ ...shifts, [employee]: newEmpShifts });
+    }
   };
 
   const clearAllShifts = () => {
@@ -133,10 +137,9 @@ export default function ScheduleManager() {
   };
 
   const applyTemplate = (employee, templateKey) => {
-    const newShifts = { ...shifts };
-    if (!newShifts[employee]) newShifts[employee] = [];
-    newShifts[employee].push({ date: '', ...TEMPLATES[templateKey] });
-    setShifts(newShifts);
+    // FIX: иммутабельно
+    const newShift = { date: '', ...TEMPLATES[templateKey] };
+    setShifts({ ...shifts, [employee]: [...(shifts[employee] || []), newShift] });
   };
 
   // Табличный вид: вычисляем дни недели
@@ -160,25 +163,34 @@ export default function ScheduleManager() {
 
     const toggleShiftType = (emp, day, type) => {
       const dayStr = day.toISOString().split('T')[0];
-      const newShifts = { ...shifts };
-      if (!newShifts[emp]) newShifts[emp] = [];
-      const existingIdx = newShifts[emp].findIndex(s => s.date === dayStr);
+      // FIX: полностью иммутабельно — раньше {...shifts} был только верхним shallow copy
+      const empShifts = shifts[emp] || [];
+      const existingIdx = empShifts.findIndex(s => s.date === dayStr);
 
+      let newEmpShifts;
       if (existingIdx >= 0) {
-        const existing = newShifts[emp][existingIdx];
+        const existing = empShifts[existingIdx];
         if (
           existing.startTime === TEMPLATES[type].startTime &&
           existing.endTime === TEMPLATES[type].endTime
         ) {
-          newShifts[emp].splice(existingIdx, 1);
-          if (newShifts[emp].length === 0) delete newShifts[emp];
+          // Удаление этой смены
+          newEmpShifts = empShifts.filter((_, i) => i !== existingIdx);
         } else {
-          newShifts[emp][existingIdx] = { date: dayStr, ...TEMPLATES[type] };
+          // Замена на новый тип
+          newEmpShifts = empShifts.map((s, i) => i === existingIdx ? { date: dayStr, ...TEMPLATES[type] } : s);
         }
       } else {
-        newShifts[emp].push({ date: dayStr, ...TEMPLATES[type] });
+        // Добавление новой смены
+        newEmpShifts = [...empShifts, { date: dayStr, ...TEMPLATES[type] }];
       }
-      setShifts(newShifts);
+      
+      if (newEmpShifts.length === 0) {
+        const { [emp]: _removed, ...rest } = shifts;
+        setShifts(rest);
+      } else {
+        setShifts({ ...shifts, [emp]: newEmpShifts });
+      }
     };
 
     return (

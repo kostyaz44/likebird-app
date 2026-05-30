@@ -343,7 +343,7 @@ export default function EmployeeManager() {
     if (!addForm.login.trim()) { setAddError('Введите логин'); return; }
     if (addForm.login.trim().length < 2) { setAddError('Логин минимум 2 символа'); return; }
     if (!addForm.password || addForm.password.length < 4) { setAddError('Пароль минимум 4 символа'); return; }
-    if (regUsers.find(u => u.login.toLowerCase() === addForm.login.trim().toLowerCase())) {
+    if (regUsers.find(u => (u.login || '').toLowerCase() === addForm.login.trim().toLowerCase())) {
       setAddError('Логин уже занят'); return;
     }
     if (addForm.role === 'deputy' && !addForm.deputyCity) {
