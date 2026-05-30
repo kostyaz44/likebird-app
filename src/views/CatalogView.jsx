@@ -19,11 +19,12 @@ export default function CatalogView() {
     compressImage, showNotification, updateProductPhotos,
     DYNAMIC_ALL_PRODUCTS, CUSTOM_ALIASES,
     // admin-only data
-    currentUser, customAliases, archivedProducts, stock, stockHistory,
+    currentUser, customAliases, stock, stockHistory,
     writeOffs, autoOrderList, totalBirds, employeeName,
     // admin-only fns
-    addCustomProduct, removeCustomProduct, setCustomProducts,
-    toggleArchiveProduct, saveAlias, removeAlias,
+    addCustomProduct, updateCustomProduct, removeCustomProduct, setCustomProducts,
+    updateBaseProduct, deleteBaseProduct,
+    saveAlias, removeAlias,
     deleteMediaPhoto, save,
     addStockHistoryEntry, addStockHistoryEntries, addWriteOff,
     updateStock, getLowStockItems,
@@ -183,16 +184,36 @@ export default function CatalogView() {
 
                     {isEditingThis ? (
                       <div className="flex-1 flex gap-1 items-center flex-wrap">
-                        <input type="text" value={editProductData.emoji} onChange={(e) => setEditProductData({...editProductData, emoji: e.target.value})} className="w-10 p-1 border rounded text-center text-xs" />
-                        <input type="number" value={editProductData.price} onChange={(e) => setEditProductData({...editProductData, price: e.target.value})} className="w-16 p-1 border rounded text-xs" placeholder="Цена" />
+                        <input type="text" value={editProductData.emoji} onChange={(e) => setEditProductData({...editProductData, emoji: e.target.value})} className="w-10 p-1 border rounded text-center text-xs" placeholder="🎁" title="Эмодзи" />
+                        <input type="text" value={editProductData.name} onChange={(e) => setEditProductData({...editProductData, name: e.target.value})} className="flex-1 min-w-[100px] p-1 border rounded text-xs" placeholder="Название" title="Название" />
+                        <input type="number" value={editProductData.price} onChange={(e) => setEditProductData({...editProductData, price: e.target.value})} className="w-16 p-1 border rounded text-xs" placeholder="Цена" title="Цена" />
                         <button onClick={() => {
-                          if (!isBase) {
-                            const updated = customProducts.map(cp => cp.name === p.name ? {...cp, emoji: editProductData.emoji, price: parseInt(editProductData.price) || cp.price} : cp);
-                            setCustomProducts(updated);
-                            save('likebird-custom-products', updated);
+                          const priceNum = parseInt(editProductData.price);
+                          if (isNaN(priceNum) || priceNum <= 0) { showNotification('Введите корректную цену', 'error'); return; }
+                          if (!editProductData.name?.trim()) { showNotification('Введите имя товара', 'error'); return; }
+                          let ok;
+                          if (isBase) {
+                            ok = updateBaseProduct(p.name, {
+                              name: editProductData.name.trim(),
+                              price: priceNum,
+                              emoji: editProductData.emoji || p.emoji,
+                              category: editProductData.category || p.category,
+                            });
+                          } else {
+                            const target = customProducts.find(cp => cp.name === p.name);
+                            if (target) {
+                              ok = updateCustomProduct(target.id, {
+                                name: editProductData.name.trim(),
+                                price: priceNum,
+                                emoji: editProductData.emoji || p.emoji,
+                                category: editProductData.category || p.category,
+                              });
+                            }
                           }
-                          setEditingProduct(null);
-                          showNotification('Сохранено');
+                          if (ok) {
+                            setEditingProduct(null);
+                            showNotification('Сохранено');
+                          }
                         }} className="px-2 py-1 bg-green-500 text-white rounded text-xs">✓</button>
                         <button onClick={() => setEditingProduct(null)} className="px-2 py-1 bg-gray-300 rounded text-xs">✕</button>
                       </div>
@@ -210,21 +231,26 @@ export default function CatalogView() {
                           }} />
                         </label>
 
-                        {/* Админские кнопки */}
+                        {/* Админские кнопки — теперь доступны для ЛЮБОГО товара (базового или кастомного) */}
                         {isAdmin && (
                           <div className="flex gap-1 items-center">
-                            {!isBase && <button onClick={() => { setEditingProduct(p.name); setEditProductData({ name: p.name, price: p.price, emoji: p.emoji, category: p.category }); }} className="text-gray-400 hover:text-blue-500" title="Изменить цену/эмодзи"><Edit3 className="w-3.5 h-3.5" /></button>}
-                            {!isBase && <button onClick={() => {
-                              const target = customProducts.find(cp => cp.name === p.name);
-                              if (target) showConfirm(`Удалить ${p.name}?`, () => removeCustomProduct(target.id));
-                            }} className="text-gray-400 hover:text-red-500" title="Удалить"><Trash2 className="w-3.5 h-3.5" /></button>}
-                            <button onClick={() => { toggleArchiveProduct(p.name); showNotification(archivedProducts.includes(p.name) ? 'Товар восстановлен' : 'Товар в архиве'); }} className={`text-xs ${archivedProducts.includes(p.name) ? 'text-green-500' : 'text-gray-400 hover:text-amber-500'}`} title={archivedProducts.includes(p.name) ? 'Восстановить' : 'Архивировать'}>{archivedProducts.includes(p.name) ? '♻️' : '📦'}</button>
+                            <button onClick={() => { setEditingProduct(p.name); setEditProductData({ name: p.name, price: p.price, emoji: p.emoji, category: p.category }); }} className="text-gray-400 hover:text-blue-500" title="Изменить"><Edit3 className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => {
+                              showConfirm(`Удалить «${p.name}»?\n\nЕсли товар используется в отчётах — будет показано предупреждение.`, () => {
+                                if (isBase) {
+                                  deleteBaseProduct(p.name);
+                                } else {
+                                  const target = customProducts.find(cp => cp.name === p.name);
+                                  if (target) removeCustomProduct(target.id);
+                                }
+                              });
+                            }} className="text-gray-400 hover:text-red-500" title="Удалить"><Trash2 className="w-3.5 h-3.5" /></button>
                             <button onClick={() => {
                               const alias = prompt(`Добавить алиас для «${p.name}»:\n(как товар называют в отчёте/ревизии)`);
                               if (alias?.trim()) saveAlias(alias.trim(), p.name);
                             }} className="text-gray-400 hover:text-purple-500" title="Добавить алиас">📝</button>
                             {productPhotos[p.name] && <button onClick={() => { deleteMediaPhoto(p.name); showNotification('Фото удалено'); }} className="text-gray-400 hover:text-red-500 text-xs" title="Удалить фото">🗑️</button>}
-                            {!isBase && <span className="text-gray-500 text-xs">{p.price}₽</span>}
+                            <span className="text-gray-500 text-xs">{p.price}₽</span>
                           </div>
                         )}
                       </>
