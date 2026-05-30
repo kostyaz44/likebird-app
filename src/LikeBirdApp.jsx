@@ -357,6 +357,11 @@ function LikeBirdAppInner() {
   const [customProducts, setCustomProducts] = useState([]);
   const [archivedProducts, setArchivedProducts] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-archived-products') || '[]'); } catch { return []; } });
   const toggleArchiveProduct = (name) => { const isArch = archivedProducts.includes(name); const upd = isArch ? archivedProducts.filter(n => n !== name) : [...archivedProducts, name]; setArchivedProducts(upd); save('likebird-archived-products', upd); };
+  // Оверрайды базовых товаров (правки цены/имени/эмодзи/категории + soft-delete)
+  // Структура: { [originalNameFromProductsJs]: { name?, price?, emoji?, category?, deleted?: true } }
+  // Ключом всегда служит исходное имя из data/products.js — это стабильный идентификатор товара.
+  const [productOverrides, setProductOverrides] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-product-overrides') || '{}'); } catch { return {}; } });
+  const updateProductOverrides = (next) => { setProductOverrides(next); save('likebird-product-overrides', next); };
 
   // ===== НОВЫЕ СОСТОЯНИЯ v2.4 =====
   
@@ -404,6 +409,10 @@ function LikeBirdAppInner() {
   const [employeeKPI, setEmployeeKPI] = useState({});
   // Пользовательские алиасы для распознавания товаров
   const [customAliases, setCustomAliases] = useState({});
+  // Авто-синхронизация глобальной CUSTOM_ALIASES при любом изменении state.
+  // Защита от рассинхрона: парсер использует CUSTOM_ALIASES напрямую (вне React),
+  // поэтому если state изменился через подписку — обновим и глобал.
+  useEffect(() => { CUSTOM_ALIASES = customAliases; }, [customAliases]);
   
   // Global alias save function
   const saveAlias = (alias, productName) => {
@@ -688,12 +697,16 @@ function LikeBirdAppInner() {
     loadJson('likebird-stock-history', setStockHistory, []);
     loadJson('likebird-writeoffs', setWriteOffs, []);
     loadJson('likebird-autoorder', setAutoOrderList, []);
+    loadJson('likebird-product-overrides', (val) => { if (val && typeof val === 'object' && !Array.isArray(val)) setProductOverrides(val); }, {});
     loadJson('likebird-kpi', setEmployeeKPI, {});
-    // Загрузка пользовательских алиасов
-    try {
-      const savedAliases = localStorage.getItem('likebird-custom-aliases');
-      if (savedAliases) setCustomAliases(JSON.parse(savedAliases));
-    } catch { /* silent */ }
+    // FIX: ранее алиасы грузились только из localStorage — поэтому при чистке кеша / новом устройстве пропадали.
+    // Теперь loadJson читает Firebase, fallback на localStorage, плюс работает подписка ниже.
+    loadJson('likebird-custom-aliases', (val) => {
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        setCustomAliases(val);
+        CUSTOM_ALIASES = val; // sync global reference
+      }
+    }, {});
     loadJson('likebird-invite-codes', setInviteCodes, []);
     loadJson('likebird-notif-settings', setNotifSettings, { shiftReminder: true, lowStockAlert: true, stockThreshold: 3 });
     loadJson('likebird-notifications', setUserNotifications, []);
@@ -843,6 +856,15 @@ function LikeBirdAppInner() {
       guardedSubscribe('likebird-kpi', (val) => { setEmployeeKPI(val); try { try { localStorage.setItem('likebird-kpi', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-custom-achievements', (val) => { if (Array.isArray(val)) { setCustomAchievements(val); try { try { localStorage.setItem('likebird-custom-achievements', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
       guardedSubscribe('likebird-archived-products', (val) => { if (Array.isArray(val)) setArchivedProducts(val); }),
+      guardedSubscribe('likebird-product-overrides', (val) => { if (val && typeof val === 'object' && !Array.isArray(val)) { setProductOverrides(val); try { localStorage.setItem('likebird-product-overrides', JSON.stringify(val)); } catch { /* silent */ } } }),
+      // FIX: ранее алиасы пропадали при чистке кеша / открытии на новом устройстве — подписка отсутствовала
+      guardedSubscribe('likebird-custom-aliases', (val) => {
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          setCustomAliases(val);
+          CUSTOM_ALIASES = val; // sync global reference (используется в парсере)
+          try { localStorage.setItem('likebird-custom-aliases', JSON.stringify(val)); } catch { /* silent */ }
+        }
+      }),
       guardedSubscribe('likebird-system-notifications', (val) => { if (Array.isArray(val)) { try { localStorage.setItem('likebird-system-notifications', JSON.stringify(val)); } catch { /* silent */ } } }),
       guardedSubscribe('likebird-challenges', (val) => { if (Array.isArray(val)) { setChallenges(val); try { try { localStorage.setItem('likebird-challenges', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
       // MediaStore: подписка на индекс фото → загрузка каждого фото отдельно
@@ -991,10 +1013,32 @@ function LikeBirdAppInner() {
     return () => clearInterval(interval);
   }, [currentUser?.login]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ===== Интеграция кастомных товаров в поиск =====
+  // ===== Интеграция кастомных товаров и оверрайдов базовых в поиск =====
   useEffect(() => {
+    // 1. Базовые товары с применением оверрайдов (правки/soft-delete)
+    const baseWithOverrides = ALL_PRODUCTS
+      .map(p => {
+        const ov = productOverrides[p.name]; // ключ = ОРИГИНАЛЬНОЕ имя из products.js
+        if (!ov) return p;
+        if (ov.deleted) return null; // soft-deleted базовый товар исключаем
+        // Применяем override полей, оригинальное имя помним в _originalName для синхронизации
+        return {
+          ...p,
+          name: ov.name || p.name,
+          price: ov.price !== undefined ? ov.price : p.price,
+          emoji: ov.emoji || p.emoji,
+          category: ov.category || p.category,
+          // Если имя переименовано — добавляем оригинал как алиас, чтобы старые тексты парсились
+          aliases: (ov.name && ov.name !== p.name)
+            ? [...new Set([...(p.aliases || []), p.name.toLowerCase()])]
+            : p.aliases,
+          _originalName: p.name,
+        };
+      })
+      .filter(Boolean);
+    
     DYNAMIC_ALL_PRODUCTS = [
-      ...ALL_PRODUCTS,
+      ...baseWithOverrides,
       ...customProducts.map(p => ({
         name: p.name, price: p.price, emoji: p.emoji || '📦',
         aliases: p.aliases || [p.name.toLowerCase()],
@@ -1013,7 +1057,7 @@ function LikeBirdAppInner() {
       });
       if (needUpdate) updateStock(newStock);
     }
-  }, [customProducts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [customProducts, productOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ===== Проверка низкого остатка при изменении склада =====
   useEffect(() => {
@@ -1535,11 +1579,48 @@ function LikeBirdAppInner() {
     }
     logAction('Добавлен товар', product.name);
   };
+  
+  // Обновление кастомного товара по id. Поддерживает смену имени с миграцией ключа stock.
+  const updateCustomProduct = (id, edits) => {
+    const target = customProducts.find(cp => cp.id === id);
+    if (!target) { showNotification('Товар не найден', 'error'); return false; }
+    
+    // Если имя меняется — валидируем
+    const newName = edits.name?.trim();
+    if (newName && newName !== target.name) {
+      const dup = DYNAMIC_ALL_PRODUCTS.find(p => p.name.toLowerCase() === newName.toLowerCase() && p.name !== target.name);
+      if (dup) { showNotification(`Товар "${newName}" уже существует`, 'error'); return false; }
+    }
+    
+    const updated = customProducts.map(cp => cp.id === id ? {
+      ...cp,
+      name: newName || cp.name,
+      price: edits.price !== undefined ? (parseInt(edits.price) || cp.price) : cp.price,
+      emoji: edits.emoji !== undefined ? edits.emoji : cp.emoji,
+      category: edits.category || cp.category,
+      // При переименовании добавляем старое имя как алиас
+      aliases: (newName && newName !== target.name)
+        ? [...new Set([...(cp.aliases || [cp.name.toLowerCase()]), target.name.toLowerCase()])]
+        : cp.aliases,
+    } : cp);
+    updateCustomProducts(updated);
+    
+    // Миграция ключа в stock при смене имени
+    if (newName && newName !== target.name && stock[target.name]) {
+      const newStock = { ...stock };
+      newStock[newName] = { ...newStock[target.name] };
+      delete newStock[target.name];
+      updateStock(newStock);
+    }
+    
+    logAction('Изменён товар', `${target.name}${newName && newName !== target.name ? ' → ' + newName : ''}`);
+    return true;
+  };
   const removeCustomProduct = (id) => {
     const prod = customProducts.find(p => p.id === id);
     if (prod) {
       const usedIn = reports.filter(r => getProductName(r.product) === prod.name).length;
-      if (usedIn > 0) { showNotification(`Товар используется в ${usedIn} отчётах. Лучше архивировать.`, 'error'); return; }
+      if (usedIn > 0) { showNotification(`Товар используется в ${usedIn} отчётах — удалить нельзя`, 'error'); return false; }
     }
     updateCustomProducts(customProducts.filter(p => p.id !== id));
     // FIX: Убираем запись из склада (ранее оставался «призрачный» товар)
@@ -1549,6 +1630,128 @@ function LikeBirdAppInner() {
       updateStock(newStock);
     }
     if (prod) logAction('Удалён товар', prod.name);
+    return true;
+  };
+
+  // ============================================================================
+  // Редактирование БАЗОВЫХ товаров (захардкоженных в data/products.js)
+  // ============================================================================
+  // Базовые товары не лежат в Firebase, но их можно «переопределить» через
+  // productOverrides — отдельный документ. Ключом всегда служит ОРИГИНАЛЬНОЕ имя
+  // (как в products.js), даже если товар переименован — это стабильный id.
+  
+  // Найти запись базового товара по текущему отображаемому имени.
+  // Возвращает { originalName, baseProduct } или null, если это не базовый.
+  const findBaseProductByDisplayName = (displayName) => {
+    // 1. Прямое совпадение — товар не переименован
+    let base = ALL_PRODUCTS.find(p => p.name === displayName);
+    if (base) return { originalName: base.name, baseProduct: base };
+    // 2. Поиск по оверрайду — товар был переименован
+    for (const [origName, ov] of Object.entries(productOverrides)) {
+      if (ov?.name === displayName) {
+        const b = ALL_PRODUCTS.find(p => p.name === origName);
+        if (b) return { originalName: origName, baseProduct: b };
+      }
+    }
+    return null;
+  };
+  
+  // Применить правки к базовому товару. Возвращает true если применено.
+  // editedFields: { name?, price?, emoji?, category? }
+  const updateBaseProduct = (displayName, editedFields) => {
+    const found = findBaseProductByDisplayName(displayName);
+    if (!found) { showNotification('Базовый товар не найден', 'error'); return false; }
+    const { originalName, baseProduct } = found;
+    
+    // Проверка дубликата имени — только если имя меняется
+    if (editedFields.name && editedFields.name !== displayName) {
+      const newName = editedFields.name.trim();
+      if (!newName) { showNotification('Имя не может быть пустым', 'error'); return false; }
+      const dup = DYNAMIC_ALL_PRODUCTS.find(p => p.name.toLowerCase() === newName.toLowerCase() && p.name !== displayName);
+      if (dup) { showNotification(`Товар "${newName}" уже существует`, 'error'); return false; }
+      editedFields.name = newName;
+    }
+    
+    // Собираем новый оверрайд только из полей, которые отличаются от базового товара
+    const prevOv = productOverrides[originalName] || {};
+    const nextOv = { ...prevOv };
+    ['name', 'price', 'emoji', 'category'].forEach(field => {
+      if (editedFields[field] !== undefined && editedFields[field] !== baseProduct[field]) {
+        nextOv[field] = editedFields[field];
+      } else if (editedFields[field] === baseProduct[field]) {
+        // Возврат к базовому значению — удаляем поле из оверрайда
+        delete nextOv[field];
+      }
+    });
+    
+    // Если оверрайд пустой (всё совпадает с базовым) — удаляем запись целиком
+    const isEmpty = Object.keys(nextOv).filter(k => k !== 'deleted').length === 0 && !nextOv.deleted;
+    const nextOverrides = { ...productOverrides };
+    if (isEmpty) {
+      delete nextOverrides[originalName];
+    } else {
+      nextOverrides[originalName] = nextOv;
+    }
+    updateProductOverrides(nextOverrides);
+    
+    // Если имя меняется — мигрируем ключ в stock (чтобы остатки не «потерялись»)
+    if (editedFields.name && editedFields.name !== displayName && stock[displayName]) {
+      const newStock = { ...stock };
+      newStock[editedFields.name] = { ...newStock[displayName] };
+      delete newStock[displayName];
+      updateStock(newStock);
+    }
+    
+    logAction('Изменён базовый товар', `${originalName}: ${JSON.stringify(editedFields)}`);
+    return true;
+  };
+  
+  // Soft-delete базового товара. Возвращает true, если удалено.
+  // Перед удалением проверяет использование в отчётах.
+  const deleteBaseProduct = (displayName, force = false) => {
+    const found = findBaseProductByDisplayName(displayName);
+    if (!found) { showNotification('Базовый товар не найден', 'error'); return false; }
+    const { originalName } = found;
+    
+    // Проверяем использование в отчётах (по любому из имён — оригинал и переименование)
+    if (!force) {
+      const ov = productOverrides[originalName] || {};
+      const possibleNames = [originalName, ov.name].filter(Boolean);
+      const usedIn = reports.filter(r => {
+        const rName = getProductName(r.product);
+        return possibleNames.includes(rName);
+      }).length;
+      if (usedIn > 0) { showNotification(`Товар используется в ${usedIn} отчётах — удалить нельзя`, 'error'); return false; }
+    }
+    
+    const nextOverrides = { ...productOverrides, [originalName]: { ...(productOverrides[originalName] || {}), deleted: true } };
+    updateProductOverrides(nextOverrides);
+    
+    // Подчищаем stock — раз товара больше нет, его остатки тоже не нужны
+    if (stock[displayName]) {
+      const newStock = { ...stock };
+      delete newStock[displayName];
+      updateStock(newStock);
+    }
+    
+    logAction('Удалён базовый товар', displayName);
+    return true;
+  };
+  
+  // Восстановить soft-deleted базовый товар или сбросить любые оверрайды
+  const restoreBaseProduct = (originalNameOrDisplayName) => {
+    // Принимаем как оригинальное имя, так и текущее отображаемое
+    let originalName = originalNameOrDisplayName;
+    if (!productOverrides[originalName]) {
+      const found = findBaseProductByDisplayName(originalNameOrDisplayName);
+      if (found) originalName = found.originalName;
+    }
+    if (!productOverrides[originalName]) return false;
+    const nextOverrides = { ...productOverrides };
+    delete nextOverrides[originalName];
+    updateProductOverrides(nextOverrides);
+    logAction('Восстановлен базовый товар', originalName);
+    return true;
   };
 
   // ===== НОВЫЕ ФУНКЦИИ v2.4 =====
@@ -2930,7 +3133,8 @@ function LikeBirdAppInner() {
     updateLocations, addLocation, removeLocation, toggleLocationActive,
     getCities, getLocationsByCity, updateCostPrices, setCostPrice,
     getCostPrice, getProfit, fixUnrecognizedReport, updateManuals,
-    updateCustomProducts, addCustomProduct, removeCustomProduct,
+    updateCustomProducts, addCustomProduct, updateCustomProduct, removeCustomProduct,
+    productOverrides, updateBaseProduct, deleteBaseProduct, restoreBaseProduct,
     compressImage, saveMediaPhoto, deleteMediaPhoto, saveShiftPhoto,
     updateProductPhotos, updateShiftsData, updateChallenges,
     updateCustomAchievements, updateAchievementsGranted,
