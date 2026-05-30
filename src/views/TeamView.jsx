@@ -7,6 +7,7 @@ import ScheduleManager from '../components/team/ScheduleManager';
 import SalaryPanel from '../components/team/SalaryPanel';
 import EmployeesAdminTab from '../components/team/EmployeesAdminTab';
 import EventsManager from '../components/team/EventsManager';
+import EmployeeProfileModal from '../components/team/EmployeeProfileModal';
 
 export default function TeamView() {
   const { chatEndRef, chatLimit, chatMessages, chatText, compressImage, currentUser, darkMode, employeeName, employees, visibleEmployees, eventsCalendar, isOnline, lbPeriod, manuals, presenceData, profilesData, reactionMsgId, visibleReports, save, scheduleData, setChatLimit, setChatText, setCurrentView, setLbPeriod, setReactionMsgId, setShowMentions, setTeamTab, setUserNotifications, shiftsData, showMentions, showNotification, teamTab, updateChatMessages, userNotifications } = useApp();
@@ -36,6 +37,8 @@ export default function TeamView() {
   const shiftsCount = Object.values(scheduleData.shifts || {}).reduce((sum, emp) => sum + (emp?.length || 0), 0);
   const [manualFilter, setManualFilter] = useState('all');
   const [manualSearch, setManualSearch] = useState('');
+  // Профиль сотрудника — модалка с полной аналитикой и админскими действиями
+  const [profileLogin, setProfileLogin] = useState(null);
 
   // Онлайн-статус: онлайн если lastSeen < 5 минут назад
   const ONLINE_THRESHOLD = 5 * 60 * 1000;
@@ -178,7 +181,12 @@ export default function TeamView() {
                     ).length;
 
                     return (
-                      <div key={u.login} className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all ${isOnline ? 'border-green-100 bg-green-50' : 'border-gray-100 bg-gray-50'}`}>
+                      <button
+                        key={u.login}
+                        onClick={() => setProfileLogin(u.login)}
+                        className={`w-full text-left flex items-center gap-3 p-3 rounded-xl border-2 transition-all hover:shadow-md hover:scale-[1.01] active:scale-100 cursor-pointer ${isOnline ? 'border-green-100 bg-green-50' : 'border-gray-100 bg-gray-50'}`}
+                        title="Открыть профиль"
+                      >
                         {/* Аватар + индикатор */}
                         <div className="relative flex-shrink-0">
                           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold text-lg overflow-hidden">
@@ -211,7 +219,7 @@ export default function TeamView() {
                             <p className="text-xs text-gray-400">сегодня</p>
                           </div>
                         )}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -735,6 +743,11 @@ export default function TeamView() {
           );
         })()}
       </div>
+      
+      {/* Модалка профиля сотрудника */}
+      {profileLogin && (
+        <EmployeeProfileModal login={profileLogin} onClose={() => setProfileLogin(null)} />
+      )}
     </div>
   );
 }
