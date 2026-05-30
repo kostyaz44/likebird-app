@@ -11,7 +11,7 @@ export default function MenuView() {
   const todayAllReports = getReportsByDate(formatDate(new Date()));
   // Показываем только МОИ продажи
   const todayReports = todayAllReports.filter(r => r.employee === employeeName);
-  const todayTotal = todayReports.reduce((s, r) => s + r.total, 0);
+  const todayTotal = todayReports.reduce((s, r) => s + (r.total || 0), 0);
   const todayTips = todayReports.reduce((s, r) => s + (r.tips || 0), 0);
   const todayCash = todayReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
   const todayCashless = todayReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);

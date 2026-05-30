@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, ArrowLeft, Trash2, X, ChevronLeft, ChevronRight, Settings, Calendar, Edit3 } from 'lucide-react';
+import { Search, ArrowLeft, Trash2, X, ChevronLeft, ChevronRight, Settings, Calendar, Edit3, Lock } from 'lucide-react';
 import { parseYear } from '../utils/dates.js';
 import { isBelowBasePrice } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
@@ -26,7 +26,7 @@ function FixUnrecognizedButton({ report }) {
 }
 
 export default function ReportsView() {
-  const { darkMode, deleteReport, getAllDates, getEffectiveSalary, getProductName, getReportsByDate, navigateDate, visibleReports, selectedDate, setCurrentView, setSelectedDate } = useApp();
+  const { canEditReport, darkMode, deleteReport, getAllDates, getEffectiveSalary, getProductName, getReportsByDate, navigateDate, visibleReports, selectedDate, setCurrentView, setSelectedDate } = useApp();
   const reports = visibleReports; // фильтрация по городам уже применена в контексте
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -73,7 +73,7 @@ export default function ReportsView() {
     });
   }, [reports, selectedDate, searchQuery, filterEmployee, filterLocation, filterDateFrom, filterDateTo]);
   
-  const dateTotal = filteredReports.reduce((s, r) => s + r.total, 0);
+  const dateTotal = filteredReports.reduce((s, r) => s + (r.total || 0), 0);
   const dateTips = filteredReports.reduce((s, r) => s + (r.tips || 0), 0);
   
   return (
@@ -125,7 +125,7 @@ export default function ReportsView() {
         
         <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between mb-4">
           <button onClick={() => navigateDate('prev')} disabled={idx >= dates.length - 1} className={`p-2 rounded-lg ${idx >= dates.length - 1 ? 'text-gray-300' : 'text-amber-600 hover:bg-amber-50'}`}><ChevronLeft className="w-6 h-6" /></button>
-          <div className="text-center"><p className="font-bold">{selectedDate}</p><p className="text-xs text-gray-400">{filteredReports.length} продаж • {filteredReports.reduce((s, r) => s + r.total, 0).toLocaleString()}₽</p></div>
+          <div className="text-center"><p className="font-bold">{selectedDate}</p><p className="text-xs text-gray-400">{filteredReports.length} продаж • {dateTotal.toLocaleString()}₽</p></div>
           <button onClick={() => navigateDate('next')} disabled={idx <= 0} className={`p-2 rounded-lg ${idx <= 0 ? 'text-gray-300' : 'text-amber-600 hover:bg-amber-50'}`}><ChevronRight className="w-6 h-6" /></button>
         </div>
         {filteredReports.length > 0 ? (
@@ -147,7 +147,7 @@ export default function ReportsView() {
                   {r.location && <p className="text-xs text-blue-500">📍 {r.location}</p>}
                   {r.photo && <img src={r.photo} alt="" className="w-8 h-8 rounded object-cover mt-1 inline-block" />}
                 </div>
-                <div className="flex items-center gap-2"><div className="text-right"><p className="font-bold text-green-600 text-sm">{r.total}₽{r.tips > 0 && <span className="text-amber-500 font-normal"> ({r.tips})</span>}</p><p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p></div><button onClick={() => deleteReport(r.id)} className="text-red-400 p-1 hover:text-red-600" aria-label="Удалить отчёт"><Trash2 className="w-4 h-4" /></button></div>
+                <div className="flex items-center gap-2"><div className="text-right"><p className="font-bold text-green-600 text-sm">{r.total}₽{r.tips > 0 && <span className="text-amber-500 font-normal"> ({r.tips})</span>}</p><p className="text-xs text-amber-600">ЗП: {getEffectiveSalary(r)}₽</p></div>{(() => { const perm = canEditReport(r); return perm.allowed ? <button onClick={() => deleteReport(r.id)} className="text-red-400 p-1 hover:text-red-600" aria-label="Удалить отчёт"><Trash2 className="w-4 h-4" /></button> : <span className="p-1 text-gray-300" title={perm.reason || 'Редактирование запрещено'}><Lock className="w-4 h-4" /></span>; })()}</div>
               </div>
               <FixUnrecognizedButton report={r} />
               {r.editHistory && r.editHistory.length > 0 && (

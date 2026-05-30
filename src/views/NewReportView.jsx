@@ -5,7 +5,7 @@ import { calculateSalary } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
 
 export default function NewReportView() {
-  const { DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, archivedProducts, compressImage, customProducts, darkMode, employeeName, locations, mixedCash, mixedCashless, paymentType, profilesData, quantity, reports, salarySettings, salePrice, saveReport, selectedCategory, selectedProduct, setCurrentView, setEmployeeName, setPaymentType, setQuantity, setSelectedCategory, setSelectedProduct, showNotification, stock, stockHistory, tipsAmount, updateProfilesData, updateReports, updateStock } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addStockHistoryEntries, archivedProducts, compressImage, customProducts, darkMode, employeeName, locations, mixedCash, mixedCashless, paymentType, profilesData, quantity, reports, salarySettings, salePrice, saveReport, selectedCategory, selectedProduct, setCurrentView, setEmployeeName, setPaymentType, setQuantity, setSelectedCategory, setSelectedProduct, showNotification, stock, tipsAmount, updateProfilesData, updateReports, updateStock } = useApp();
 
   // Берём locations прямо из состояния родителя (обновляется через Firebase subscription)
   const activeLocations = locations.filter(l => l.active);
@@ -134,15 +134,17 @@ export default function NewReportView() {
     const dateStr = new Date().toLocaleString('ru-RU');
     let saved = 0;
     const newReports = [];
+    const historyBatch = []; // FIX: батчуем записи истории — раньше N forEach-вызовов = N Firebase writes
     
     quickParsed.forEach((sale, idx) => {
+      const tipsNum = parseInt(sale.tips) || 0; // FIX: защита от NaN/undefined в calculateSalary
       const report = {
         id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6) + idx,
         date: dateStr,
         employee: localName.trim(),
         total: sale.price,
         salePrice: sale.price,
-        tips: sale.tips,
+        tips: tipsNum,
         tipsModel: 'v2', // FIX: без этого миграция обнулит чаевые при перезагрузке
         cashAmount: sale.paymentType === 'cash' ? sale.price : 0,
         cashlessAmount: sale.paymentType === 'cashless' ? sale.price : 0,
@@ -158,10 +160,10 @@ export default function NewReportView() {
         report.product = sale.product.name; // Строка, не объект!
         report.category = sale.product.category;
         report.basePrice = sale.product.price;
-        report.salary = calculateSalary(sale.product.price, sale.price, sale.product.category, sale.tips, 'normal', salarySettings);
+        report.salary = calculateSalary(sale.product.price, sale.price, sale.product.category, tipsNum, 'normal', salarySettings);
         report.isUnrecognized = false;
-        // Добавляем в историю склада
-        addStockHistoryEntry(sale.product.name, 'sale', -1, `Продажа ${localName.trim()}`);
+        // Добавляем в историю склада (батчем — внизу единым вызовом)
+        historyBatch.push({ productName: sale.product.name, action: 'sale', quantity: -1, note: `Продажа ${localName.trim()}` });
       } else {
         report.product = sale.productName; // Нераспознанный - используем введённое имя
         report.extractedName = sale.productName;
@@ -175,6 +177,9 @@ export default function NewReportView() {
       newReports.push(report);
       saved++;
     });
+    
+    // Один батч в историю склада
+    addStockHistoryEntries(historyBatch);
     
     // FIX: Обновляем остатки на складе (ранее только stockHistory обновлялся)
     const newStock = {...stock};

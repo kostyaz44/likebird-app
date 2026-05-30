@@ -25,7 +25,7 @@ export default function CatalogView() {
     addCustomProduct, removeCustomProduct, setCustomProducts,
     toggleArchiveProduct, saveAlias, removeAlias,
     deleteMediaPhoto, save,
-    addStockHistoryEntry, addWriteOff,
+    addStockHistoryEntry, addStockHistoryEntries, addWriteOff,
     updateStock, getLowStockItems,
     generateAutoOrder, getAutoOrderText, updateAutoOrderList,
     setTotalBirds, showConfirm, logAction,
@@ -428,6 +428,7 @@ export default function CatalogView() {
       const newStock = { ...stock };
       let updatedCount = 0;
       let createdWriteoffs = 0;
+      const historyBatch = []; // батч-запись истории — один write в Firebase вместо N
 
       parsed.items.forEach(item => {
         if (!item.matchedProduct) return;
@@ -436,12 +437,12 @@ export default function CatalogView() {
           const oldCount = newStock[pName].count;
           newStock[pName] = { ...newStock[pName], count: item.currentCount };
           if (oldCount !== item.currentCount) {
-            addStockHistoryEntry(pName, 'revision', item.currentCount - oldCount, `Ревизия: ${oldCount} → ${item.currentCount}`);
+            historyBatch.push({ productName: pName, action: 'revision', quantity: item.currentCount - oldCount, note: `Ревизия: ${oldCount} → ${item.currentCount}` });
             updatedCount++;
           }
         }
         if (item.startCount > 0 && item.salesCount >= 0) {
-          const expected = item.startCount + item.arrivals.reduce((s, a) => s + a.count, 0) - item.salesCount;
+          const expected = item.startCount + item.arrivals.reduce((s, a) => s + (a.count || 0), 0) - item.salesCount;
           const diff = expected - item.currentCount;
           if (diff > 0) {
             addWriteOff(item.matchedProduct.name, diff, `Ревизия: недосдача (ожидалось ${expected}, факт ${item.currentCount})`);
@@ -459,6 +460,7 @@ export default function CatalogView() {
       }
 
       updateStock(newStock);
+      addStockHistoryEntries(historyBatch);
 
       const doc = {
         id: Date.now() + '_rev',

@@ -25,7 +25,7 @@ export default function AnalyticsView() {
         return true;
       } catch { return false; }
     });
-  }, [reports, period, isAdmin, employeeName]);
+  }, [reports, period, isAdmin, employeeName, filterLoc]);
 
   // Revenue chart data
   const revenueData = useMemo(() => {
@@ -217,8 +217,9 @@ export default function AnalyticsView() {
           const salaryByDay = {};
           filteredReports.forEach(r => {
             const d = (r.date||'').split(',')[0].trim();
+            if (!d) return;
             if (!salaryByDay[d]) salaryByDay[d] = 0;
-            salaryByDay[d] += getEffectiveSalary(r);
+            salaryByDay[d] += (getEffectiveSalary(r) || 0);
           });
           const salaryData = Object.entries(salaryByDay).map(([date, sal]) => ({ date, salary: Math.round(sal) })).sort((a, b) => {
             const [ad,am,ay] = a.date.split('.'); const [bd,bm,by] = b.date.split('.');
@@ -307,8 +308,8 @@ export default function AnalyticsView() {
               <div className={`rounded-xl p-4 shadow ${darkMode ? "bg-gray-800" : "bg-white"}`}>
                 <h3 className="font-bold text-sm mb-3">План / Факт</h3>
                 {employeeRanking.map(e => {
-                  const target = salesPlan.daily ? salesPlan.daily * period : salesPlan.monthly || 300000;
-                  const pct = Math.round(e.revenue / target * 100);
+                  const target = (salesPlan.daily ? salesPlan.daily * period : salesPlan.monthly) || 300000;
+                  const pct = target > 0 ? Math.round(e.revenue / target * 100) : 0;
                   return (
                     <div key={e.name} className="mb-3">
                       <div className="flex justify-between text-sm mb-1">

@@ -171,19 +171,21 @@ export default function AdminView() {
     return reportDate >= monthAgo && !r.isUnrecognized;
   });
 
-  const todayRevenue = todayReports.reduce((s, r) => s + r.total, 0);
-  const weekRevenue = weekReports.reduce((s, r) => s + r.total, 0);
-  const monthRevenue = monthReports.reduce((s, r) => s + r.total, 0);
-  const todaySalary = todayReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
-  const weekSalary = weekReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+  const todayRevenue = todayReports.reduce((s, r) => s + (r.total || 0), 0);
+  const weekRevenue = weekReports.reduce((s, r) => s + (r.total || 0), 0);
+  const monthRevenue = monthReports.reduce((s, r) => s + (r.total || 0), 0);
+  const todaySalary = todayReports.reduce((s, r) => s + (getEffectiveSalary(r) || 0), 0);
+  const weekSalary = weekReports.reduce((s, r) => s + (getEffectiveSalary(r) || 0), 0);
   
-  const todayExpenses = expenses.filter(e => e.date.startsWith(todayStr)).reduce((s, e) => s + e.amount, 0);
+  const todayExpenses = expenses.filter(e => e.date && e.date.startsWith(todayStr)).reduce((s, e) => s + (e.amount || 0), 0);
   const weekExpenses = expenses.filter(e => {
     const [datePart] = (e.date||'').split(',');
+    if (!datePart) return false;
     const [d, m, y] = datePart.split('.');
+    if (!d || !m || !y) return false;
     const expDate = new Date(parseYear(y), m - 1, d);
     return expDate >= weekAgo;
-  }).reduce((s, e) => s + e.amount, 0);
+  }).reduce((s, e) => s + (e.amount || 0), 0);
 
   // Топ продаж за неделю
   const topProducts = weekReports.reduce((acc, r) => {
@@ -597,8 +599,8 @@ export default function AdminView() {
                     </div>
                     
                     {Object.entries(byEmployee).map(([empName, empReports]) => {
-                      const empTotal = empReports.reduce((s, r) => s + r.total, 0);
-                      const empSalary = empReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+                      const empTotal = empReports.reduce((s, r) => s + (r.total || 0), 0);
+                      const empSalary = empReports.reduce((s, r) => s + (getEffectiveSalary(r) || 0), 0);
                       const status = empReports[0]?.reviewStatus || 'pending';
                       const hasOriginalText = empReports.some(r => r.originalReportText);
                       

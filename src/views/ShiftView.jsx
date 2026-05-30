@@ -8,7 +8,7 @@ import { calculateSalary } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
 
 export default function ShiftView() {
-  const { DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, archivedProducts, compressImage, currentUser, customProducts, darkMode, employeeName, getEffectiveSalary, getProductName, isAdminUnlocked, reports, salaryDecisions, salarySettings, save, saveShiftPhoto, setCurrentView, setSalaryDecisions, setTotalBirds, shiftPhotos, shiftsData: shiftsDataRaw, showConfirm, showNotification, stock, totalBirds, updateReports, updateShiftsData, updateStock } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addStockHistoryEntry, archivedProducts, canEditReport, compressImage, currentUser, customProducts, darkMode, employeeName, getEffectiveSalary, getProductName, isAdminUnlocked, reports, salaryDecisions, salarySettings, save, saveShiftPhoto, setCurrentView, setSalaryDecisions, setTotalBirds, shiftPhotos, shiftsData: shiftsDataRaw, showConfirm, showNotification, stock, totalBirds, updateReports, updateShiftsData, updateStock } = useApp();
 
   // Защита от null/undefined из Firebase подписки
   const shiftsData = shiftsDataRaw && typeof shiftsDataRaw === 'object' ? shiftsDataRaw : {};
@@ -45,7 +45,7 @@ export default function ShiftView() {
   const draftReports = myTodayReports.filter(r => r.reviewStatus === 'pending' || r.reviewStatus === 'draft');
   const confirmedReports = myTodayReports.filter(r => r.reviewStatus === 'approved' || r.reviewStatus === 'submitted');
 
-  const myTotal = myTodayReports.reduce((s, r) => s + r.total, 0);
+  const myTotal = myTodayReports.reduce((s, r) => s + (r.total || 0), 0);
   const myCash = myTodayReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
   const myCashless = myTodayReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
   const mySalary = myTodayReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
@@ -445,6 +445,13 @@ export default function ShiftView() {
   };
 
   const saveEditReport = (r) => {
+    // Централизованная проверка прав
+    const perm = canEditReport(r);
+    if (!perm.allowed) {
+      showNotification(perm.reason || 'Редактирование запрещено', 'error');
+      setEditingReport(null);
+      return;
+    }
     const priceNum = parseInt(editForm.salePrice) || r.salePrice;
     const tipsNum = parseInt(editForm.tips) || 0;
     const prod = DYNAMIC_ALL_PRODUCTS.find(p => p.name === editForm.product) || { name: editForm.product, price: r.basePrice, category: r.category };
@@ -467,11 +474,20 @@ export default function ShiftView() {
   };
 
   const deleteMyReport = (id) => {
+    const r = reports.find(x => x.id === id);
+    if (!r) { showNotification('Запись не найдена', 'error'); return; }
+    
+    // Централизованная проверка прав
+    const perm = canEditReport(r);
+    if (!perm.allowed) {
+      showNotification(perm.reason || 'Удаление запрещено', 'error');
+      return;
+    }
+    
     showConfirm('Удалить эту продажу?', () => {
       // FIX: Восстанавливаем склад при удалении (ранее не возвращался)
-      const r = reports.find(x => x.id === id);
-      const productName = r ? getProductName(r.product) : null;
-      if (r && !r.isUnrecognized && productName && stock[productName]) {
+      const productName = getProductName(r.product);
+      if (!r.isUnrecognized && productName && stock[productName]) {
         const newStock = {...stock};
         newStock[productName] = {...newStock[productName], count: newStock[productName].count + (r.quantity || 1)};
         updateStock(newStock);
@@ -748,14 +764,25 @@ export default function ShiftView() {
                         <p className="text-xs text-gray-400">{(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
                       </div>
                       <p className="font-bold text-gray-800">{r.total.toLocaleString()}₽</p>
-                      {(r.reviewStatus === 'pending' || r.reviewStatus === 'draft') && (
-                        <div className="flex gap-1">
-                          <button onClick={() => startEditReport(r)} className="p-1.5 text-blue-400 hover:bg-blue-50 rounded-lg"><Edit3 className="w-4 h-4" /></button>
-                          <button onClick={() => deleteMyReport(r.id)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                      )}
-                      {r.reviewStatus === 'submitted' && <span className="text-xs text-blue-500 font-semibold">📤</span>}
-                      {r.reviewStatus === 'approved' && <span className="text-xs text-green-500 font-semibold">✅</span>}
+                      {(() => {
+                        const perm = canEditReport(r);
+                        if (perm.allowed) {
+                          return (
+                            <div className="flex gap-1">
+                              <button onClick={() => startEditReport(r)} className="p-1.5 text-blue-400 hover:bg-blue-50 rounded-lg" title="Редактировать"><Edit3 className="w-4 h-4" /></button>
+                              <button onClick={() => deleteMyReport(r.id)} className="p-1.5 text-red-400 hover:bg-red-50 rounded-lg" title="Удалить"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                          );
+                        }
+                        // Заблокировано — показываем статус-иконку с tooltip-причиной
+                        const statusIcon = r.reviewStatus === 'approved' ? '✅'
+                          : r.reviewStatus === 'submitted' ? '📤'
+                          : '🔒';
+                        const statusColor = r.reviewStatus === 'approved' ? 'text-green-500'
+                          : r.reviewStatus === 'submitted' ? 'text-blue-500'
+                          : 'text-gray-400';
+                        return <span className={`text-xs ${statusColor} font-semibold`} title={perm.reason || ''}>{statusIcon}</span>;
+                      })()}
                     </div>
                   )}
                 </div>

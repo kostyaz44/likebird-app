@@ -54,7 +54,7 @@ function SalaryDecisionButtons({ report, compact }) {
 }
 
 export default function DayReportView() {
-  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData: shiftsDataRaw, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, canEditReport, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData: shiftsDataRaw, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
 
   // Защита от null/undefined из Firebase подписки
   const shiftsData = shiftsDataRaw && typeof shiftsDataRaw === 'object' ? shiftsDataRaw : {};
@@ -90,12 +90,12 @@ export default function DayReportView() {
 
   const byEmployee = visibleReports.reduce((acc, r) => { if (!acc[r.employee]) acc[r.employee] = []; acc[r.employee].push(r); return acc; }, {});
   const expByEmp = visibleExpenses.reduce((acc, e) => { if (!acc[e.employee]) acc[e.employee] = []; acc[e.employee].push(e); return acc; }, {});
-  const dayTotal = visibleReports.reduce((s, r) => s + r.total, 0);
+  const dayTotal = visibleReports.reduce((s, r) => s + (r.total || 0), 0);
   const dayCash = visibleReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
   const dayCashless = visibleReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
   const dayTips = visibleReports.reduce((s, r) => s + (r.tips || 0), 0);
-  const daySalary = visibleReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
-  const dayExpenses = visibleExpenses.reduce((s, e) => s + e.amount, 0);
+  const daySalary = visibleReports.reduce((s, r) => s + (getEffectiveSalary(r) || 0), 0);
+  const dayExpenses = visibleExpenses.reduce((s, e) => s + (e.amount || 0), 0);
   
   // Редактирование смены
   const [editingShift, setEditingShift] = useState(null); // login сотрудника
@@ -329,23 +329,10 @@ export default function DayReportView() {
     showNotification('Время смены обновлено');
   };
   
-  // Проверка можно ли редактировать (20 минут = 1200000 мс)
-  // Администраторы могут редактировать без ограничений
-  const EDIT_TIME_LIMIT = 20 * 60 * 1000;
+  // canEdit теперь использует централизованную canEditReport из context
+  // (раньше была локальная проверка по 20-минутному окну; новая логика — до конца смены ИЛИ до подтверждения админом)
   const isAdminUser = isAdminUnlocked || currentUser?.role === 'admin' || currentUser?.role === 'deputy' || currentUser?.role === 'director' || currentUser?.isAdmin;
-  const canEdit = (report) => {
-    if (isAdminUser) return true; // Админ может редактировать всегда
-    if (!report.createdAt) return true;
-    return Date.now() - report.createdAt < EDIT_TIME_LIMIT;
-  };
-  
-  const getRemainingTime = (report) => {
-    if (!report.createdAt) return null;
-    const remaining = EDIT_TIME_LIMIT - (Date.now() - report.createdAt);
-    if (remaining <= 0) return null;
-    const mins = Math.ceil(remaining / 60000);
-    return mins;
-  };
+  const canEdit = (report) => canEditReport(report).allowed;
   
   // Статус проверки для группы отчётов
   const getReviewStatus = (empReports) => {
@@ -380,7 +367,7 @@ export default function DayReportView() {
           const myShiftEarnings = getAdminShiftEarnings ? getAdminShiftEarnings(allDayReports, myName) : 0;
           // Мои личные продажи (как обычного сотрудника)
           const myOwnReports = allDayReports.filter(r => r.employee === myName);
-          const myOwnSalary = myOwnReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
+          const myOwnSalary = myOwnReports.reduce((s, r) => s + (getEffectiveSalary(r) || 0), 0);
           const myOwnTotal = myOwnReports.reduce((s, r) => s + (r.total || 0), 0);
           // Чужие продажи (от которых идёт надбавка)
           const othersReports = allDayReports.filter(r => {
@@ -473,8 +460,8 @@ export default function DayReportView() {
           const cashTotal = empReports.reduce((s, r) => s + (r.cashAmount || 0), 0);
           const cashlessTotal = empReports.reduce((s, r) => s + (r.cashlessAmount || 0), 0);
           const totalTips = empReports.reduce((s, r) => s + (r.tips || 0), 0);
-          const totalSalary = empReports.reduce((s, r) => s + getEffectiveSalary(r), 0);
-          const empExpenses = (expByEmp[emp] || []).reduce((s, e) => s + e.amount, 0);
+          const totalSalary = empReports.reduce((s, r) => s + (getEffectiveSalary(r) || 0), 0);
+          const empExpenses = (expByEmp[emp] || []).reduce((s, e) => s + (e.amount || 0), 0);
           const expensesList = expByEmp[emp] || [];
           const given = getGivenToAdmin(emp);
           const grandTotal = cashTotal + cashlessTotal;
@@ -564,10 +551,10 @@ export default function DayReportView() {
                     </div>
                   );
                 })()}
-                {/* Предупреждение о времени редактирования */}
+                {/* Подсказка: правила редактирования */}
                 {anyEditable && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs text-blue-700">
-                    ⏱️ Редактирование доступно {getRemainingTime(empReports[0]) || 20} мин. после создания
+                    ⏱️ Редактирование доступно пока смена открыта и админ не подтвердил
                   </div>
                 )}
                 

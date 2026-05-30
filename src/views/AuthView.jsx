@@ -151,7 +151,7 @@ export default function AuthView() {
       try { users = JSON.parse(localStorage.getItem('likebird-users') || '[]'); } catch { /* silent */ }
     }
 
-    if (users.find(u => u.login.toLowerCase() === login.trim().toLowerCase())) { setError('Этот логин уже занят'); return; }
+    if (users.find(u => (u.login || '').toLowerCase() === login.trim().toLowerCase())) { setError('Этот логин уже занят'); return; }
 
     setError('');
     const hashedPass = await hashPassword(password);
@@ -207,7 +207,7 @@ export default function AuthView() {
     // Кэшируем локально
     if (users.length > 0) localStorage.setItem('likebird-users', JSON.stringify(users));
 
-    const user = users.find(u => u.login.toLowerCase() === login.trim().toLowerCase());
+    const user = users.find(u => (u.login || '').toLowerCase() === login.trim().toLowerCase());
     if (!user) { setError('Пользователь не найден'); return; }
 
     const hashedPass = await hashPassword(password);

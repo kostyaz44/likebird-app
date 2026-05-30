@@ -6,7 +6,10 @@ export default function NotificationsView() {
   const { save, setCurrentView, setUserNotifications, userNotifications } = useApp();
 
   const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
-  const myNotifs = userNotifications.filter(n => n.targetLogin === myLogin).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  // FIX: уведомления создаются с полем `timestamp`, а UI раньше читал `createdAt` (которое всегда undefined).
+  // Из-за этого все уведомления сортировались как «0 - 0» (порядок неопределён) и формат времени всегда показывал «только что».
+  const getTs = (n) => n.timestamp || n.createdAt || 0;
+  const myNotifs = userNotifications.filter(n => n.targetLogin === myLogin).sort((a, b) => getTs(b) - getTs(a));
   const unread = myNotifs.filter(n => !n.read);
   const read = myNotifs.filter(n => n.read);
 
@@ -42,7 +45,7 @@ export default function NotificationsView() {
             <span className="font-bold text-sm truncate">{n.title || 'Уведомление'}</span>
           </div>
           <p className="text-sm text-gray-700">{n.body}</p>
-          <p className="text-xs text-gray-400 mt-1">{formatTime(n.createdAt)}</p>
+          <p className="text-xs text-gray-400 mt-1">{formatTime(getTs(n))}</p>
         </div>
         {isUnread && (
           <button onClick={() => markAsRead(n.id)} className="shrink-0 bg-amber-500 text-white text-xs px-2.5 py-1.5 rounded-lg font-semibold hover:bg-amber-600">
