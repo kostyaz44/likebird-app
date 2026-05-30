@@ -61,7 +61,7 @@ export const calculateSalary = (basePrice, salePrice, category, tips = 0, adj = 
     base += perSale;
   }
 
-  return Math.max(0, base) + tips;
+  return Math.max(0, base) + (Number(tips) || 0);
 };
 
 /**
@@ -105,4 +105,9 @@ export const calculateAdminEarnings = (periodReports = [], salarySettings = null
   return Math.round(totalRevenue * pct / 100);
 };
 
-export const isBelowBasePrice = (basePrice, salePrice) => salePrice < basePrice;
+export const isBelowBasePrice = (basePrice, salePrice) => {
+  const bp = Number(basePrice) || 0;
+  const sp = Number(salePrice) || 0;
+  if (bp === 0) return false; // нет базовой цены — не считаем скидкой (нераспознанные продажи и пр.)
+  return sp < bp;
+};
