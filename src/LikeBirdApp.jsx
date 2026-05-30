@@ -8,7 +8,7 @@ import { PRODUCTS, AMBIGUOUS_PRODUCTS, ALL_PRODUCTS, CAT_ICONS } from './data/pr
 import { checkCashless, parseWorkTime, findProductByPrice, parseExpenses, parseInventory, countSoldProducts, compareInventory, parseTextReport } from './utils/parser.js';
 import { hashPassword } from './utils/auth.js';
 import { formatDate, dateForFile, useDebounce, parseRuDate, parseYear } from './utils/dates.js';
-import { APP_VERSION, DATA_VERSION } from './utils/constants.js';
+import { APP_VERSION } from './utils/constants.js';
 import { downloadBlob, getInitialStock, logErr } from './utils/helpers.js';
 import { SyncManager } from './services/sync.js';
 import { AppProvider } from './context/AppContext.jsx';
@@ -121,6 +121,10 @@ function LikeBirdAppInner() {
   const [reports, setReports] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [stock, setStock] = useState(getInitialStock);
+  // Ref для актуального значения stock — нужен для последовательных операций (addWriteOff в forEach и т.п.),
+  // когда между вызовами React ещё не перерендерил компонент и обычная переменная stock остаётся stale.
+  const stockRef = useRef(null);
+  useEffect(() => { stockRef.current = stock; }, [stock]);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [salePrice, setSalePrice] = useState('');
@@ -347,6 +351,9 @@ function LikeBirdAppInner() {
   ]);
   const [salesPlan, setSalesPlan] = useState({ daily: 10000, weekly: 70000, monthly: 300000 });
   const [auditLog, setAuditLog] = useState([]);
+  // Ref для актуального значения auditLog (защита от stale-closure при подряд идущих logAction в forEach)
+  const auditLogRef = useRef([]);
+  useEffect(() => { auditLogRef.current = auditLog; }, [auditLog]);
   const [customProducts, setCustomProducts] = useState([]);
   const [archivedProducts, setArchivedProducts] = useState(() => { try { return JSON.parse(localStorage.getItem('likebird-archived-products') || '[]'); } catch { return []; } });
   const toggleArchiveProduct = (name) => { const isArch = archivedProducts.includes(name); const upd = isArch ? archivedProducts.filter(n => n !== name) : [...archivedProducts, name]; setArchivedProducts(upd); save('likebird-archived-products', upd); };
@@ -386,6 +393,9 @@ function LikeBirdAppInner() {
   
   // Брак и списания
   const [writeOffs, setWriteOffs] = useState([]);
+  // Ref для актуального значения writeOffs (защита от stale-closure при batch-вызовах addWriteOff)
+  const writeOffsRef = useRef([]);
+  useEffect(() => { writeOffsRef.current = writeOffs; }, [writeOffs]);
   
   // Автозаказ (список для заказа)
   const [autoOrderList, setAutoOrderList] = useState([]);
@@ -1178,6 +1188,7 @@ function LikeBirdAppInner() {
     setReports(data); save('likebird-reports', data); };
   const updateStock = (s) => { 
     setStock(s); 
+    stockRef.current = s; // синхронно для последующих addWriteOff/...
     save('likebird-stock', s);
     try { checkLowStockAuto(s); } catch { /* silent */ }
     // Проверка низких остатков
@@ -1379,7 +1390,9 @@ function LikeBirdAppInner() {
   // НОВОЕ: Функция аудита действий
   const logAction = (action, details) => {
     const entry = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), timestamp: new Date().toISOString(), action, details, user: employeeName || 'Аноним' };
-    const updated = [entry, ...auditLog].slice(0, 500); // Храним последние 500 записей
+    // ВАЖНО: читаем из ref — иначе при вызовах logAction в forEach в state остаётся только последняя запись.
+    const updated = [entry, ...auditLogRef.current].slice(0, 500); // Храним последние 500 записей
+    auditLogRef.current = updated;
     setAuditLog(updated);
     save('likebird-audit-log', updated);
   };
@@ -1662,7 +1675,7 @@ function LikeBirdAppInner() {
   };
   
   // Брак и списания
-  const updateWriteOffs = (w) => { setWriteOffs(w); save('likebird-writeoffs', w); };
+  const updateWriteOffs = (w) => { setWriteOffs(w); writeOffsRef.current = w; save('likebird-writeoffs', w); };
   const checkLowStockAuto = (currentStock) => {
     try {
       const threshold = 3;
@@ -1682,10 +1695,12 @@ function LikeBirdAppInner() {
 
   const addWriteOff = (productName, quantity, reason) => {
     const writeOff = { id: Date.now() + Math.random().toString(36).slice(2,6) + Math.random().toString(36).slice(2, 6), productName, quantity, reason, date: new Date().toISOString(), user: employeeName || 'Админ' };
-    updateWriteOffs([...writeOffs, writeOff]);
-    // Уменьшаем склад
-    if (stock[productName]) {
-      const newStock = { ...stock };
+    // Используем ref для актуального state — иначе при подряд идущих addWriteOff (в forEach)
+    // в writeOffs останется только последняя запись, а stock «откатится» к старому.
+    updateWriteOffs([...(writeOffsRef.current || []), writeOff]);
+    const currentStock = stockRef.current || stock;
+    if (currentStock[productName]) {
+      const newStock = { ...currentStock };
       newStock[productName] = { ...newStock[productName], count: Math.max(0, newStock[productName].count - quantity) };
       updateStock(newStock);
     }
@@ -2202,11 +2217,7 @@ function LikeBirdAppInner() {
   const [reactionMsgId, setReactionMsgId] = useState(null);
   const chatEndRef = useRef(null);
 
-  // === BLOCK 11: Skeleton component ===
-  // eslint-disable-next-line no-unused-vars
-  const Skeleton = ({w = '100%', h = '1rem', r = '0.5rem'}) => (
-    <div className="animate-pulse bg-gray-200 rounded" style={{width:w, height:h, borderRadius:r}} />
-  );
+  // === BLOCK 11: Skeleton component удалён — был объявлен, ни разу не использовался ===
 
   const setEmployeeGoal = (employeeId, goalType, target, period = 'month') => {
     const key = `${employeeId}_${goalType}_${period}`;
@@ -2228,15 +2239,18 @@ function LikeBirdAppInner() {
       const emp = employees.find(e => e.id === employeeId);
       if (!emp || r.employee !== emp.name) return false;
       const [datePart] = (r.date||'').split(',');
+      if (!datePart) return false;
       const [d, m, y] = datePart.split('.');
+      if (!d || !m || !y) return false;
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= periodStart;
     });
     
     if (goalType === 'sales') current = empReports.length;
-    else if (goalType === 'revenue') current = empReports.reduce((sum, r) => sum + r.total, 0);
+    else if (goalType === 'revenue') current = empReports.reduce((sum, r) => sum + (r.total || 0), 0);
     
-    return { goal: goal.target, current, percentage: Math.min(100, Math.round((current / goal.target) * 100)) };
+    const targetNum = Number(goal.target) || 0;
+    return { goal: targetNum, current, percentage: targetNum > 0 ? Math.min(100, Math.round((current / targetNum) * 100)) : 0 };
   };
   
   // Системные уведомления (с сохранением)
@@ -2264,7 +2278,9 @@ function LikeBirdAppInner() {
     
     const periodReports = reports.filter(r => {
       const [datePart] = (r.date||'').split(',');
+      if (!datePart) return false;
       const [d, m, y] = datePart.split('.');
+      if (!d || !m || !y) return false;
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= periodStart && !r.isUnrecognized;
     });
@@ -2273,10 +2289,11 @@ function LikeBirdAppInner() {
     const byDay = {};
     periodReports.forEach(r => {
       const [datePart] = (r.date||'').split(',');
+      if (!datePart) return;
       if (!byDay[datePart]) byDay[datePart] = { sales: 0, revenue: 0, profit: 0 };
       byDay[datePart].sales += 1;
-      byDay[datePart].revenue += r.total;
-      byDay[datePart].profit += getProfit(r.product, r.total);
+      byDay[datePart].revenue += (r.total || 0);
+      byDay[datePart].profit += (getProfit(r.product, r.total) || 0);
     });
     
     // По сотрудникам
@@ -2284,7 +2301,7 @@ function LikeBirdAppInner() {
     periodReports.forEach(r => {
       if (!byEmployee[r.employee]) byEmployee[r.employee] = { sales: 0, revenue: 0 };
       byEmployee[r.employee].sales += 1;
-      byEmployee[r.employee].revenue += r.total;
+      byEmployee[r.employee].revenue += (r.total || 0);
     });
     
     // По товарам
@@ -2292,7 +2309,7 @@ function LikeBirdAppInner() {
     periodReports.forEach(r => {
       if (!byProduct[r.product]) byProduct[r.product] = { sales: 0, revenue: 0 };
       byProduct[r.product].sales += 1;
-      byProduct[r.product].revenue += r.total;
+      byProduct[r.product].revenue += (r.total || 0);
     });
     
     // По локациям
@@ -2301,13 +2318,13 @@ function LikeBirdAppInner() {
       const loc = r.location || 'Не указано';
       if (!byLocation[loc]) byLocation[loc] = { sales: 0, revenue: 0 };
       byLocation[loc].sales += 1;
-      byLocation[loc].revenue += r.total;
+      byLocation[loc].revenue += (r.total || 0);
     });
     
     // Общие метрики
     const totalSales = periodReports.length;
-    const totalRevenue = periodReports.reduce((sum, r) => sum + r.total, 0);
-    const totalProfit = periodReports.reduce((sum, r) => sum + getProfit(r.product, r.total), 0);
+    const totalRevenue = periodReports.reduce((sum, r) => sum + (r.total || 0), 0);
+    const totalProfit = periodReports.reduce((sum, r) => sum + (getProfit(r.product, r.total) || 0), 0);
     const avgCheck = totalSales > 0 ? Math.round(totalRevenue / totalSales) : 0;
     
     // Сравнение с предыдущим периодом
@@ -2315,11 +2332,13 @@ function LikeBirdAppInner() {
     prevStart.setDate(prevStart.getDate() - period);
     const prevReports = reports.filter(r => {
       const [datePart] = (r.date||'').split(',');
+      if (!datePart) return false;
       const [d, m, y] = datePart.split('.');
+      if (!d || !m || !y) return false;
       const reportDate = new Date(parseYear(y), m - 1, d);
       return reportDate >= prevStart && reportDate < periodStart && !r.isUnrecognized;
     });
-    const prevRevenue = prevReports.reduce((sum, r) => sum + r.total, 0);
+    const prevRevenue = prevReports.reduce((sum, r) => sum + (r.total || 0), 0);
     const revenueChange = prevRevenue > 0 ? Math.round(((totalRevenue - prevRevenue) / prevRevenue) * 100) : 0;
     
     return { byDay, byEmployee, byProduct, byLocation, totalSales, totalRevenue, totalProfit, avgCheck, revenueChange, period };
@@ -2361,7 +2380,9 @@ function LikeBirdAppInner() {
     const qty = params.quantity ? parseInt(params.quantity) : 1;
     
     if (!product || !price || !empName) { showNotification('Заполните все поля', 'error'); return; }
-    const priceNum = parseInt(price), tipsNum = parseInt(tips) || 0;
+    const priceNum = parseInt(price);
+    if (isNaN(priceNum) || priceNum <= 0) { showNotification('Введите корректную цену', 'error'); return; }
+    const tipsNum = parseInt(tips) || 0;
     const salary = calculateSalary(product.price, priceNum, category, tipsNum, 'normal', salarySettings);
     const now = Date.now();
     const dateStr = params.customDate || new Date().toLocaleString('ru-RU');
@@ -2435,8 +2456,25 @@ function LikeBirdAppInner() {
       save('likebird-expenses', updatedExpenses);
     }
     const newStock = {...stock};
-    parsedSales.forEach(s => { if (newStock[s.product.name]) newStock[s.product.name] = {...newStock[s.product.name], count: Math.max(0, newStock[s.product.name].count - 1)}; });
+    // FIX: раньше списывали склад без записи в историю — теперь батч-логируем каждую съеденную позицию.
+    const stockHistoryBatch = [];
+    parsedSales.forEach(s => {
+      if (newStock[s.product.name]) {
+        const oldCount = newStock[s.product.name].count;
+        const newCount = Math.max(0, oldCount - 1);
+        newStock[s.product.name] = {...newStock[s.product.name], count: newCount};
+        if (newCount !== oldCount) {
+          stockHistoryBatch.push({
+            productName: s.product.name,
+            action: 'sale',
+            quantity: -1,
+            note: `Импорт отчёта (${empName})`,
+          });
+        }
+      }
+    });
     updateStock(newStock);
+    addStockHistoryEntries(stockHistoryBatch);
     updateReports([...newReports, ...reports]);
     // Если админ импортит за другого сотрудника — НЕ меняем свою сессию
     if (!adminImportMode) {
@@ -2452,20 +2490,95 @@ function LikeBirdAppInner() {
     setCurrentView(adminImportMode ? 'admin' : 'menu');
   };
 
+  // ───────────────────────────────────────────────────────────────────
+  // Централизованная проверка прав на редактирование/удаление продажи.
+  // Правила (единственное место — раньше дублировалось в трёх view с разной логикой):
+  //   1. Админ / замдиректор / директор — всегда true.
+  //   2. Сотрудник может редактировать СВОЮ продажу, если ОБА условия:
+  //        a) reviewStatus !== 'approved' (админ ещё не подтвердил)
+  //        b) смена сотрудника за дату продажи ещё открыта (status !== 'closed')
+  //   3. Чужие продажи не-админ редактировать не может.
+  // Возвращает { allowed: bool, reason: string|null } — reason для UI/тултипа.
+  // ───────────────────────────────────────────────────────────────────
+  const canEditReport = (report) => {
+    if (!report) return { allowed: false, reason: 'Нет данных продажи' };
+    
+    const isAdminUser = isAdminUnlocked
+      || currentUser?.role === 'admin'
+      || currentUser?.role === 'deputy'
+      || currentUser?.role === 'director'
+      || currentUser?.isAdmin;
+    if (isAdminUser) return { allowed: true, reason: null };
+    
+    // Не-админ может трогать только свою продажу
+    if (report.employee !== employeeName) {
+      return { allowed: false, reason: 'Можно редактировать только свои продажи' };
+    }
+    
+    // Подтверждённую админом — нельзя
+    if (report.reviewStatus === 'approved') {
+      return { allowed: false, reason: 'Продажа уже подтверждена администратором' };
+    }
+    
+    // Проверка: смена за дату продажи ещё открыта?
+    // Дата в report.date в формате "DD.MM.YYYY, HH:MM:SS" или "DD.MM.YYYY"
+    const reportDate = (report.date || '').split(',')[0].trim();
+    if (!reportDate) {
+      // Нет даты — fallback: разрешаем (старые данные без date)
+      return { allowed: true, reason: null };
+    }
+    
+    const userLogin = currentUser?.login;
+    if (!userLogin) {
+      // Не залогинен под user — fallback запрещает (страховка)
+      return { allowed: false, reason: 'Не определён логин сотрудника' };
+    }
+    
+    const shiftKey = `${userLogin}_${reportDate}`;
+    const shift = shiftsData?.[shiftKey];
+    
+    if (!shift) {
+      // Смены за эту дату нет вообще. Возможные сценарии:
+      //   - продажа создана админом (например текстовым импортом) → нет shift у сотрудника
+      //   - очень старая продажа из эпохи без shifts
+      // В этом случае разрешаем редактирование пока reviewStatus pending/draft,
+      // и запрещаем когда submitted (отправлен админу на проверку).
+      if (report.reviewStatus === 'submitted') {
+        return { allowed: false, reason: 'Отчёт уже отправлен на проверку администратору' };
+      }
+      return { allowed: true, reason: null };
+    }
+    
+    if (shift.status === 'closed') {
+      return { allowed: false, reason: 'Смена за этот день закрыта' };
+    }
+    
+    return { allowed: true, reason: null };
+  };
+
   const deleteReport = (id) => {
+    const r = reports.find(x => x.id === id);
+    if (!r) { showNotification('Запись не найдена', 'error'); return; }
+    
+    // Централизованная проверка прав — не полагаемся на UI который мог быть обойдён.
+    const perm = canEditReport(r);
+    if (!perm.allowed) {
+      showNotification(perm.reason || 'Удаление запрещено', 'error');
+      return;
+    }
+    
     showConfirm('Удалить эту запись?', () => {
-      const r = reports.find(x => x.id === id);
-      const productName = r ? getProductName(r.product) : null;
-      if (r && !r.isUnrecognized && productName && stock[productName]) {
+      const productName = getProductName(r.product);
+      if (!r.isUnrecognized && productName && stock[productName]) {
         const qty = r.quantity || 1;
         const newStock = {...stock};
         newStock[productName] = {...newStock[productName], count: newStock[productName].count + qty};
         updateStock(newStock);
-        addStockHistoryEntry(productName, 'return', qty, 'Удалена продажа');
+        addStockHistoryEntry(productName, 'return', qty, `Удалена продажа (${employeeName})`);
       }
       updateReports(reports.filter(x => x.id !== id));
       const nd = {...salaryDecisions}; delete nd[id]; setSalaryDecisions(nd); save('likebird-salary-decisions', nd);
-      logAction('delete-report', JSON.stringify({ product: productName, total: r?.total, employee: r?.employee, deletedBy: employeeName, date: r?.date }));
+      logAction('delete-report', JSON.stringify({ product: productName, total: r.total, employee: r.employee, deletedBy: employeeName, date: r.date }));
       showNotification('Запись удалена');
     });
   };
@@ -2488,7 +2601,7 @@ function LikeBirdAppInner() {
   // Используем visibleReports/visibleExpenses чтобы автоматически применить городскую фильтрацию.
   const getReportsByDate = (date) => visibleReports.filter(r => (r.date||'').split(',')[0] === date);
   const getExpensesByDate = (date) => visibleExpenses.filter(e => (e.date||'').split(',')[0] === date);
-  const getAllDates = () => [...new Set(visibleReports.map(r => (r.date||'').split(',')[0]))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1); });
+  const getAllDates = () => [...new Set(visibleReports.map(r => (r.date||'').split(',')[0]).filter(d => d && /^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(d)))].sort((a, b) => { const [d1,m1,y1] = a.split('.'); const [d2,m2,y2] = b.split('.'); return new Date(parseYear(y2),m2-1,d2) - new Date(parseYear(y1),m1-1,d1); });
   const navigateDate = (dir) => { const dates = getAllDates(); const idx = dates.indexOf(selectedDate); if (dir === 'prev' && idx < dates.length - 1) setSelectedDate(dates[idx + 1]); else if (dir === 'next' && idx > 0) setSelectedDate(dates[idx - 1]); };
 
   const handleParseText = useCallback((inputText) => {
@@ -2544,9 +2657,29 @@ function LikeBirdAppInner() {
   }, [textReport, salarySettings]);
 
   // FIX: Условие count > 0 — при инициализации все count=0, не считаем их «низким остатком»
-  const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => data.count > 0 && data.count <= data.minStock).map(([name, data]) => ({name, ...data}));
+  const getLowStockItems = () => Object.entries(stock).filter(([name, data]) => {
+    const count = Number(data?.count) || 0;
+    const minStock = Number(data?.minStock) || 3; // дефолт 3 шт для товаров без явного minStock
+    return count > 0 && count <= minStock;
+  }).map(([name, data]) => ({name, ...data}));
   
-  const getWeekSales = () => { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0,0,0,0); const sales = {}; reports.filter(r => { const [d, m, y] = (r.date||'').split(',')[0].split('.'); return new Date(y, m-1, d) >= weekAgo && !r.isUnrecognized; }).forEach(r => { const pName = getProductName(r.product); sales[pName] = (sales[pName] || 0) + (r.quantity || 1); }); return sales; };
+  const getWeekSales = () => {
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    weekAgo.setHours(0,0,0,0);
+    const sales = {};
+    reports.filter(r => {
+      const [datePart] = (r.date||'').split(',');
+      if (!datePart) return false;
+      const [d, m, y] = datePart.split('.');
+      if (!d || !m || !y) return false;
+      return new Date(parseYear(y), m-1, d) >= weekAgo && !r.isUnrecognized;
+    }).forEach(r => {
+      const pName = getProductName(r.product);
+      sales[pName] = (sales[pName] || 0) + (r.quantity || 1);
+    });
+    return sales;
+  };
 
   // Helper: enrich backup with component-level media data
   const enrichBackup = (data) => ({
@@ -2669,49 +2802,9 @@ function LikeBirdAppInner() {
     navigator.clipboard.writeText(text).then(() => showNotification('Скопировано в буфер обмена'));
   };
 
-  const SalaryDecisionButtons = ({ report, compact }) => {
-    const decision = salaryDecisions[report.id] || 'normal';
-    const belowPrice = isBelowBasePrice(report.basePrice, report.salePrice);
-    const priceDiff = report.basePrice - report.salePrice;
-    if (!belowPrice || report.isUnrecognized) return null;
-    const baseSalary = calculateSalary(report.basePrice, report.salePrice, report.category, report.tips || 0, 'normal', salarySettings);
-    if (compact) return (
-      <div className="flex gap-1 mt-1">
-        <button onClick={() => updateSalaryDecision(report.id, 'normal')} className={`px-2 py-0.5 rounded text-xs ${decision === 'normal' ? 'bg-green-500 text-white' : 'bg-gray-200'}`}>ЗП {baseSalary}₽</button>
-        <button onClick={() => updateSalaryDecision(report.id, 'none')} className={`px-2 py-0.5 rounded text-xs ${decision === 'none' ? 'bg-red-500 text-white' : 'bg-gray-200'}`}>0₽</button>
-        <button onClick={() => updateSalaryDecision(report.id, 'deduct')} className={`px-2 py-0.5 rounded text-xs ${decision === 'deduct' ? 'bg-orange-500 text-white' : 'bg-gray-200'}`}>-{priceDiff}₽</button>
-      </div>
-    );
-    return (
-      <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-2 mt-2">
-        <p className="text-xs text-yellow-700 mb-2">⚠️ Ниже базовой цены на {priceDiff}₽</p>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={() => updateSalaryDecision(report.id, 'normal')} className={`px-3 py-1 rounded text-sm ${decision === 'normal' ? 'bg-green-500 text-white' : 'bg-gray-200'}`}>✅ ЗП ({baseSalary}₽)</button>
-          <button onClick={() => updateSalaryDecision(report.id, 'none')} className={`px-3 py-1 rounded text-sm ${decision === 'none' ? 'bg-red-500 text-white' : 'bg-gray-200'}`}>❌ Без ЗП</button>
-          <button onClick={() => updateSalaryDecision(report.id, 'deduct')} className={`px-3 py-1 rounded text-sm ${decision === 'deduct' ? 'bg-orange-500 text-white' : 'bg-gray-200'}`}>💸 -{priceDiff}₽</button>
-        </div>
-      </div>
-    );
-  };
-
-  const FixUnrecognizedButton = ({ report }) => {
-    const [editing, setEditing] = useState(false);
-    const [newName, setNewName] = useState('');
-    const [suggestions, setSuggestions] = useState([]);
-    if (!report.isUnrecognized) return null;
-    const handleSearch = (value) => { setNewName(value); if (value.length >= 2) setSuggestions(DYNAMIC_ALL_PRODUCTS.filter(p => p.name.toLowerCase().includes(value.toLowerCase()) || p.aliases.some(a => a.includes(value.toLowerCase()))).slice(0, 5)); else setSuggestions([]); };
-    if (editing) return (
-      <div className="mt-2 space-y-2">
-        <div className="flex gap-2">
-          <input type="text" value={newName} onChange={(e) => handleSearch(e.target.value)} placeholder="Название товара" className="flex-1 px-2 py-1 border-2 border-blue-300 rounded text-sm" autoFocus />
-          <button onClick={() => { if (fixUnrecognizedReport(report.id, newName)) { setEditing(false); setNewName(''); setSuggestions([]); } }} className="px-3 py-1 bg-green-500 text-white rounded text-sm font-bold">✓</button>
-          <button onClick={() => { setEditing(false); setNewName(''); setSuggestions([]); }} className="px-3 py-1 bg-gray-400 text-white rounded text-sm">✕</button>
-        </div>
-        {suggestions.length > 0 && <div className="bg-white border rounded-lg shadow-lg overflow-hidden">{suggestions.map((p, i) => (<button key={i} onClick={() => { if (fixUnrecognizedReport(report.id, p.name)) { setEditing(false); setNewName(''); setSuggestions([]); } }} className="w-full text-left px-3 py-2 hover:bg-amber-50 flex justify-between items-center border-b last:border-0"><span>{p.emoji} {p.name}</span><span className="text-amber-600 font-semibold">{p.price}₽</span></button>))}</div>}
-      </div>
-    );
-    return <button onClick={() => setEditing(true)} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить название</button>;
-  };
+  // SalaryDecisionButtons и FixUnrecognizedButton удалены — это были дубликаты компонентов,
+  // которые на самом деле живут в views/ReportsView.jsx и views/DayReportView.jsx
+  // и рендерятся именно оттуда. Внутри LikeBirdApp ни разу не использовались.
 
   // FIX #56b: ConfirmDialog теперь DOM-based через confirmDialogRef (см. showConfirm выше)
   // FIX #56: ToastNotification теперь DOM-based через notificationRef (см. showNotification выше)
@@ -2825,7 +2918,7 @@ function LikeBirdAppInner() {
     save, showNotification, showConfirm, showInputModal, logAction,
     setCurrentView, updateReports, updateStock,
     updateEmployees, addEmployee, removeEmployee, toggleEmployeeActive,
-    saveReport, saveParsedReports, deleteReport, addExpense,
+    saveReport, saveParsedReports, deleteReport, canEditReport, addExpense,
     deleteExpense, updateGivenToAdmin, getGivenToAdmin,
     getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName, migrateEmployeeName,
     hasAccess, exportData, importData, clearAllData,
