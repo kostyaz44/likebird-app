@@ -321,6 +321,29 @@ function LikeBirdAppInner() {
     adminSalaryPerSale: 50,        // используется когда mode === 'perSale' (фикс ₽ за каждую продажу)
   });
 
+  // Покрытие админа по дням и городам (отгулы / замены).
+  // Структура: { "DD.MM.YYYY": { "Город": { mode: 'off'|'substitute', substituteLogin?: 'login' } } }
+  // - mode === 'off'       → админ не работает, надбавка с чужих продаж в этом городе никому не начисляется
+  // - mode === 'substitute' → админская надбавка идёт сотруднику substituteLogin (любой роли)
+  // - запись отсутствует   → дефолт: надбавку получает обычный админ города
+  // Deputy-бонус (25₽ для Дарьи) ВСЕГДА начисляется ей независимо от покрытия — это её зам-надбавка от города.
+  const [adminCoverage, setAdminCoverage] = useState({});
+  const updateAdminCoverage = (next) => { setAdminCoverage(next); save('likebird-admin-coverage', next); };
+  
+  // Установить покрытие для конкретного дня и города
+  const setAdminCoverageDay = (date, city, coverage) => {
+    const next = { ...adminCoverage };
+    if (!next[date]) next[date] = {};
+    if (!coverage || coverage.mode === 'default') {
+      // Удаляем запись (возврат к дефолту)
+      delete next[date][city];
+      if (Object.keys(next[date]).length === 0) delete next[date];
+    } else {
+      next[date][city] = coverage;
+    }
+    updateAdminCoverage(next);
+  };
+
   // НОВОЕ: Расширенные состояния для админ-панели
   const [adminPassword, setAdminPassword] = useState('');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
@@ -674,6 +697,8 @@ function LikeBirdAppInner() {
       adminSalaryPercentage: 10,
       adminSalaryPerSale: 50,
     });
+    // Покрытие админа по дням (выключения / замены)
+    loadJson('likebird-admin-coverage', (val) => { if (val && typeof val === 'object' && !Array.isArray(val)) setAdminCoverage(val); }, {});
     // НОВОЕ: Загружаем данные админ-панели
     loadJson('likebird-admin-password', setAdminPassword, '');
     loadJson('likebird-employees', setEmployees, []);
@@ -801,6 +826,7 @@ function LikeBirdAppInner() {
       }),
       guardedSubscribe('likebird-manuals', (val) => { if (Array.isArray(val) && val.length > 0) { setManuals(val); try { try { localStorage.setItem('likebird-manuals', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } } }),
       guardedSubscribe('likebird-salary-settings', (val) => { setSalarySettings(val); try { try { localStorage.setItem('likebird-salary-settings', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
+      guardedSubscribe('likebird-admin-coverage', (val) => { if (val && typeof val === 'object' && !Array.isArray(val)) { setAdminCoverage(val); try { localStorage.setItem('likebird-admin-coverage', JSON.stringify(val)); } catch { /* silent */ } } }),
       guardedSubscribe('likebird-admin-password', (val) => { setAdminPassword(val); try { try { localStorage.setItem('likebird-admin-password', JSON.stringify(val)); } catch { /* silent */ } } catch { /* silent */ } }),
       guardedSubscribe('likebird-employees', (val) => {
         if (!Array.isArray(val)) return;
@@ -1282,36 +1308,105 @@ function LikeBirdAppInner() {
   // Заработок админа за смену (надбавка с продаж ДРУГИХ сотрудников за день).
   // Используется в "Итог дня" для отображения админу его заработка.
   // - В режиме 'percentage': % от выручки чужих продаж за день
-  // - В режиме 'perSale':    фикс ₽ × количество чужих продаж за день
-  // Возвращает 0 если у админа noSalary или режим не установлен.
+  // ============================================================================
+  // ЗП администратора — расчёт надбавки с конкретной продажи
+  // ============================================================================
+  // Возвращает { recipient, amount, mode, reason } или null, если надбавка не положена.
+  //   recipient: { login, name } — кому начислять
+  //   amount: ₽
+  //   mode: 'percentage' | 'perSale'
+  //   reason: текстовое объяснение для тултипа («10% от 800₽», «50₽ × смена с покрытием»)
+  //
+  // Учитывает adminCoverage[date][city]:
+  //   - { mode: 'off' }                → null (никому)
+  //   - { mode: 'substitute', login }  → надбавка идёт замене
+  //   - запись отсутствует             → дефолт: админ города из users (admin/deputy/director)
+  //
+  // ВАЖНО: эта функция считает ТОЛЬКО админскую часть. Deputy-бонус (например 25₽ для Дарьи)
+  // начисляется отдельно через applyDeputyBonusForReport и НЕ зависит от покрытия.
+  const getAdminPayForReport = (report) => {
+    if (!report || report.isUnrecognized) return null;
+    
+    // Продажи самих "admin-уровней" не дают надбавки (избегаем двойного учёта)
+    const reportEmpRole = getEmployeeRole(report.employee);
+    if (reportEmpRole === 'admin' || reportEmpRole === 'deputy' || reportEmpRole === 'director') return null;
+    
+    const city = extractCityFromReport(report);
+    const reportDate = (report.date || '').split(',')[0].trim();
+    
+    // Проверяем coverage за этот день и город
+    const coverage = adminCoverage?.[reportDate]?.[city];
+    let recipientUser = null;
+    
+    if (coverage?.mode === 'off') {
+      // Админ выключил → надбавка никому
+      return null;
+    } else if (coverage?.mode === 'substitute' && coverage.substituteLogin) {
+      // Назначена замена
+      try {
+        const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+        recipientUser = users.find(u => u.login === coverage.substituteLogin) || null;
+      } catch { recipientUser = null; }
+      if (!recipientUser) return null;
+    } else {
+      // Дефолт: ищем админа города
+      try {
+        const users = JSON.parse(localStorage.getItem('likebird-users') || '[]');
+        // Приоритет: admin/director > deputy (для города deputyCity)
+        recipientUser = users.find(u =>
+          (u.role === 'admin' || u.role === 'director' || (u.role === 'deputy' && u.deputyCity === city)) &&
+          !u.banned && !u.noSalary
+        ) || null;
+      } catch { recipientUser = null; }
+      if (!recipientUser) return null;
+    }
+    
+    // Считаем сумму надбавки за ЭТУ продажу
+    const mode = salarySettings?.adminSalaryMode || 'percentage';
+    let amount = 0;
+    let reason = '';
+    if (mode === 'perSale') {
+      amount = Number(salarySettings?.adminSalaryPerSale) || 0;
+      reason = `${amount}₽ за продажу`;
+    } else {
+      const pct = Number(salarySettings?.adminSalaryPercentage) || 0;
+      if (pct <= 0) return null;
+      amount = Math.round((Number(report.total) || 0) * pct / 100);
+      reason = `${pct}% от ${(Number(report.total) || 0).toLocaleString()}₽`;
+    }
+    
+    if (amount <= 0) return null;
+    
+    return {
+      recipient: { login: recipientUser.login, name: recipientUser.name || recipientUser.login },
+      amount,
+      mode,
+      reason,
+      coverage: coverage?.mode || 'default',
+    };
+  };
+  
+  // Считает заработок админа за смену (день).
+  // Идёт через getAdminPayForReport — один источник истины для всех правил
+  // (включая adminCoverage). Возвращает 0 если у админа noSalary.
   const getAdminShiftEarnings = (dayReports, adminName) => {
     if (!adminName || !Array.isArray(dayReports)) return 0;
     const adminUser = getUserByEmployeeName(adminName);
     if (adminUser?.noSalary) return 0;
-    const role = getEmployeeRole(adminName);
-    // Только админ или замдиректор получают надбавку
-    // Только админ, замдиректор или директор получают надбавку
-    if (role !== 'admin' && role !== 'deputy' && role !== 'director' && !adminUser?.isAdmin) return 0;
-    // Продажи ДРУГИХ сотрудников (не свои) и не от других "admin-уровней"
-    const othersReports = dayReports.filter(r => {
-      if (r.isUnrecognized) return false;
-      if (r.employee === adminName) return false;
-      const otherRole = getEmployeeRole(r.employee);
-      // Не считаем продажи других админов/замдиректоров/директоров (чтобы не было двойной надбавки)
-      if (otherRole === 'admin' || otherRole === 'deputy' || otherRole === 'director') return false;
-      return true;
-    });
-    if (othersReports.length === 0) return 0;
-    const mode = salarySettings?.adminSalaryMode || 'percentage';
-    if (mode === 'perSale') {
-      const perSale = Number(salarySettings?.adminSalaryPerSale) || 0;
-      return perSale * othersReports.length;
+    
+    let total = 0;
+    for (const r of dayReports) {
+      const pay = getAdminPayForReport(r);
+      if (!pay) continue;
+      // Сравниваем по login (надёжнее, чем имя — имена могут совпадать)
+      if (adminUser?.login && pay.recipient.login === adminUser.login) {
+        total += pay.amount;
+      } else if (pay.recipient.name === adminName) {
+        // Fallback по имени (для случаев, когда нет user в users)
+        total += pay.amount;
+      }
     }
-    // percentage
-    const pct = Number(salarySettings?.adminSalaryPercentage) || 0;
-    if (pct <= 0) return 0;
-    const totalRevenue = othersReports.reduce((s, r) => s + (Number(r.total) || 0), 0);
-    return Math.round(totalRevenue * pct / 100);
+    return total;
   };
 
   // === Замдиректор: автоматическое начисление бонусов за продажи в его городе ===
@@ -3123,7 +3218,7 @@ function LikeBirdAppInner() {
     updateEmployees, addEmployee, removeEmployee, toggleEmployeeActive,
     saveReport, saveParsedReports, deleteReport, canEditReport, addExpense,
     deleteExpense, updateGivenToAdmin, getGivenToAdmin,
-    getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getProductName, migrateEmployeeName,
+    getOwnCard, updateOwnCard, getEffectiveSalary, getAdminShiftEarnings, getAdminPayForReport, adminCoverage, setAdminCoverageDay, getProductName, migrateEmployeeName,
     hasAccess, exportData, importData, clearAllData,
     accessibleCities, canAccessCity, filterByAccessibleCities,
     visibleReports, visibleExpenses, visibleEmployees, extractCity,
