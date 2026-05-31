@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { BarChart3, Plus, ArrowLeft, Trash2, X, AlertTriangle, AlertCircle, ChevronLeft, ChevronRight, Copy, Lock, Edit3 } from 'lucide-react';
 import { CAT_ICONS } from '../data/products.js';
 import { calculateSalary, isBelowBasePrice } from '../utils/salary.js';
@@ -54,7 +54,7 @@ function SalaryDecisionButtons({ report, compact }) {
 }
 
 export default function DayReportView() {
-  const { DYNAMIC_ALL_PRODUCTS, addExpense, archivedProducts, canEditReport, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setCurrentView, setExpenseModal, shiftsData: shiftsDataRaw, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, addExpense, adminCoverage, archivedProducts, canEditReport, copyDayReport, currentUser, deleteExpense, deleteReport, employeeName, employees, expenseModal, getAdminPayForReport, getAdminShiftEarnings, getAllDates, getEffectiveSalary, getExpensesByDate, getGivenToAdmin, getOwnCard, getProductName, getReportsByDate, isAdminUnlocked, locations, navigateDate, salarySettings, saveReport, selectedDate, setAdminCoverageDay, setCurrentView, setExpenseModal, shiftsData: shiftsDataRaw, showConfirm, showNotification, updateGivenToAdmin, updateOwnCard, updateShiftsData } = useApp();
 
   // Защита от null/undefined из Firebase подписки
   const shiftsData = shiftsDataRaw && typeof shiftsDataRaw === 'object' ? shiftsDataRaw : {};
@@ -343,6 +343,99 @@ export default function DayReportView() {
     return 'pending';
   };
   
+  // ─────────────────────────────────────────────────────────────────
+  // Виджет управления покрытием админа (off / substitute / default)
+  // ─────────────────────────────────────────────────────────────────
+  const AdminCoverageWidget = ({ selectedDate, allDayReports }) => {
+    if (!setAdminCoverageDay) return null;
+    
+    // Города, где у админа сегодня есть продажи (по которым нужно решать)
+    const citiesForDay = useMemo(() => {
+      const set = new Set();
+      (allDayReports || []).forEach(r => {
+        const city = (r.location || '').split(' - ')[0].trim();
+        if (city) set.add(city);
+      });
+      return Array.from(set);
+    }, [allDayReports]);
+    
+    if (citiesForDay.length === 0) return null;
+    
+    return (
+      <details className="group mt-3">
+        <summary className="cursor-pointer text-xs font-semibold opacity-90 flex items-center gap-1">
+          <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+          Управление оплатой админа за день
+        </summary>
+        <div className="mt-2 space-y-2">
+          {citiesForDay.map(city => {
+            const cov = adminCoverage?.[selectedDate]?.[city];
+            const currentMode = cov?.mode || 'default';
+            const subLogin = cov?.substituteLogin;
+            
+            // Список кандидатов на замену (любые юзеры)
+            const users = (() => {
+              try { return JSON.parse(localStorage.getItem('likebird-users') || '[]'); }
+              catch { return []; }
+            })();
+            
+            const subUser = subLogin ? users.find(u => u.login === subLogin) : null;
+            
+            return (
+              <div key={city} className="bg-white/15 rounded-lg p-2 backdrop-blur-sm">
+                <p className="text-xs font-semibold mb-1.5">📍 {city}</p>
+                
+                <div className="flex gap-1 flex-wrap">
+                  <button
+                    onClick={() => setAdminCoverageDay(selectedDate, city, { mode: 'default' })}
+                    className={`text-[10px] px-2 py-1 rounded flex-1 ${currentMode === 'default' ? 'bg-white text-purple-600 font-bold' : 'bg-white/20 hover:bg-white/30'}`}
+                  >
+                    Как обычно
+                  </button>
+                  <button
+                    onClick={() => setAdminCoverageDay(selectedDate, city, { mode: 'off' })}
+                    className={`text-[10px] px-2 py-1 rounded flex-1 ${currentMode === 'off' ? 'bg-red-400 text-white font-bold' : 'bg-white/20 hover:bg-white/30'}`}
+                  >
+                    Не работал
+                  </button>
+                  <button
+                    onClick={() => {
+                      const choices = users.map(u => `${u.login} — ${u.name || u.login}`).join('\n');
+                      const ans = window.prompt(
+                        `Введите login сотрудника для замены в ${city}:\n\nДоступные логины:\n${choices}`,
+                        subLogin || ''
+                      );
+                      if (ans === null) return;
+                      const login = ans.trim();
+                      if (!login) {
+                        setAdminCoverageDay(selectedDate, city, { mode: 'default' });
+                        return;
+                      }
+                      const target = users.find(u => u.login === login);
+                      if (!target) { showNotification('Сотрудник с таким логином не найден', 'error'); return; }
+                      setAdminCoverageDay(selectedDate, city, { mode: 'substitute', substituteLogin: login });
+                      showNotification(`Замена в ${city}: ${target.name || target.login}`);
+                    }}
+                    className={`text-[10px] px-2 py-1 rounded flex-1 ${currentMode === 'substitute' ? 'bg-blue-400 text-white font-bold' : 'bg-white/20 hover:bg-white/30'}`}
+                  >
+                    {currentMode === 'substitute' && subUser ? `🔁 ${subUser.name || subUser.login}` : 'Замена'}
+                  </button>
+                </div>
+                
+                <p className="text-[10px] opacity-70 mt-1">
+                  {currentMode === 'off' && '🚫 Надбавка с продаж не начисляется никому'}
+                  {currentMode === 'substitute' && subUser && `📥 Надбавка идёт сотруднику «${subUser.name || subUser.login}»`}
+                  {currentMode === 'substitute' && !subUser && '⚠️ Замена не найдена — надбавка не начисляется'}
+                  {currentMode === 'default' && '✓ Дефолт: надбавку получает админ города'}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </details>
+    );
+  };
+  
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 pb-6">
       <div className="bg-gradient-to-r from-amber-400 to-orange-500 text-white p-4 pt-safe sticky top-0 z-10" style={{paddingTop: "max(1rem, env(safe-area-inset-top))"}}>
@@ -449,6 +542,9 @@ export default function DayReportView() {
                     </div>
                   </details>
                 )}
+                
+                {/* Управление покрытием за этот день */}
+                <AdminCoverageWidget selectedDate={selectedDate} allDayReports={allDayReports} />
               </div>
             </div>
           );
@@ -577,7 +673,53 @@ export default function DayReportView() {
                   <p className="text-xs opacity-80 mt-1">{ownCard ? `(${cashTotal}+${cashlessTotal}+${totalTips})-${totalSalary}-${empExpenses}-${given}` : `(${cashTotal}+${totalTips})-${totalSalary}-${empExpenses}-${given}`}</p>
                   {!ownCard && cashlessTotal > 0 && <p className="text-xs opacity-80">💳 Безнал {cashlessTotal}₽ на карте компании</p>}
                 </div>
-                <details className="group"><summary className="cursor-pointer text-amber-600 font-semibold text-sm flex items-center gap-1"><ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />Все продажи ({empReports.length})</summary><div className="mt-2 space-y-1 max-h-64 overflow-y-auto">{empReports.map(r => { const isDiscount = isBelowBasePrice(r.basePrice, r.salePrice); return (<div key={r.id} className={`py-1.5 text-xs px-2 rounded ${isDiscount ? 'bg-yellow-50 border border-yellow-200' : r.isUnrecognized ? 'bg-red-50' : 'bg-gray-50'}`}><div className="flex justify-between items-center"><span className="truncate flex-1">{r.isUnrecognized ? '❓ ' : ''}{getProductName(r.product)}{isDiscount && ' ⚠️'}</span><div className="flex items-center gap-1 ml-2"><span>{r.total}₽ {r.paymentType === 'cashless' ? '💳' : '💵'}</span><span className="text-amber-600">ЗП:{getEffectiveSalary(r)}</span>{canEdit(r) ? (<button onClick={() => deleteReport(r.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>) : (<Lock className="w-3 h-3 text-gray-400" title="Заблокировано" />)}</div></div>{isDiscount && <p className="text-yellow-600 mt-0.5">Скидка: {r.basePrice - r.salePrice}₽{r.discountReason ? ` — ${r.discountReason}` : ''}</p>}{r.addedBy && <p className="text-purple-500 mt-0.5">👤 {r.addedBy}</p>}</div>); })}</div></details>
+                <details className="group">
+                  <summary className="cursor-pointer text-amber-600 font-semibold text-sm flex items-center gap-1">
+                    <ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />Все продажи ({empReports.length})
+                  </summary>
+                  <div className="mt-2 space-y-1 max-h-96 overflow-y-auto">
+                    {empReports.map(r => {
+                      const isDiscount = isBelowBasePrice(r.basePrice, r.salePrice);
+                      const adminPay = getAdminPayForReport ? getAdminPayForReport(r) : null;
+                      return (
+                        <div key={r.id} className={`py-1.5 text-xs px-2 rounded ${isDiscount ? 'bg-yellow-50 border border-yellow-200' : r.isUnrecognized ? 'bg-red-50' : 'bg-gray-50'}`}>
+                          <div className="flex justify-between items-center">
+                            <span className="truncate flex-1">{r.isUnrecognized ? '❓ ' : ''}{getProductName(r.product)}{isDiscount && ' ⚠️'}</span>
+                            <div className="flex items-center gap-1 ml-2">
+                              <span>{r.total}₽ {r.paymentType === 'cashless' ? '💳' : '💵'}</span>
+                              <span className="text-amber-600">ЗП:{getEffectiveSalary(r)}</span>
+                              {canEdit(r) ? (
+                                <button onClick={() => deleteReport(r.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
+                              ) : (
+                                <Lock className="w-3 h-3 text-gray-400" title="Заблокировано" />
+                              )}
+                            </div>
+                          </div>
+                          {/* НОВОЕ: разбивка ЗП админа по продаже */}
+                          {adminPay && (
+                            <p className="text-purple-600 mt-0.5 text-xs flex items-center gap-1" title={adminPay.reason}>
+                              🛡️ Админ: <strong>+{adminPay.amount}₽</strong> → {adminPay.recipient.name}
+                              <span className="text-gray-400">({adminPay.reason})</span>
+                              {adminPay.coverage === 'substitute' && <span className="bg-blue-100 text-blue-700 px-1 rounded text-[10px]">замена</span>}
+                            </p>
+                          )}
+                          {/* Покрытие выключено — отдельная пометка чтобы было понятно почему 0 */}
+                          {!adminPay && !r.isUnrecognized && (() => {
+                            const reportDate = (r.date || '').split(',')[0].trim();
+                            const cityKey = (r.location || '').split(' - ')[0].trim();
+                            const cov = adminCoverage?.[reportDate]?.[cityKey];
+                            if (cov?.mode === 'off') {
+                              return <p className="text-gray-400 mt-0.5 text-xs italic">🛡️ Админ: оплата выключена на этот день</p>;
+                            }
+                            return null;
+                          })()}
+                          {isDiscount && <p className="text-yellow-600 mt-0.5">Скидка: {r.basePrice - r.salePrice}₽{r.discountReason ? ` — ${r.discountReason}` : ''}</p>}
+                          {r.addedBy && <p className="text-purple-500 mt-0.5">👤 {r.addedBy}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
               </div>
             </div>
           );
