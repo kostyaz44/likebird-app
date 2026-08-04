@@ -4,6 +4,15 @@ export const formatDate = (date) => typeof date === 'string' ? date : date.toLoc
 
 export const dateForFile = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
 
+// BUGFIX: `date.toISOString().split('T')[0]` вычисляет дату по UTC, а не по локальному времени.
+// В часовых поясах восточнее UTC (вся Россия) это даёт ВЧЕРАШНЮЮ дату в течение нескольких часов
+// после полуночи по местному времени (напр. в Москве, UTC+3, — с 00:00 до 02:59).
+// Из-за этого "сегодня" в графике смен, больничных/отпусках и дате импорта отчёта
+// в это время суток съезжало на день назад. Используем локальные getFullYear/getMonth/getDate
+// (как уже делает dateForFile выше), но для произвольной даты, а не только "сейчас".
+export const toLocalISODate = (date = new Date()) =>
+  date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+
 export const useDebounce = (value, delay = 300) => {
   const [deb, setDeb] = React.useState(value);
   React.useEffect(() => { const t = setTimeout(() => setDeb(value), delay); return () => clearTimeout(t); }, [value, delay]);
