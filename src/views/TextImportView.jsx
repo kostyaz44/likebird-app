@@ -3,6 +3,7 @@ import { ArrowLeft, X, AlertTriangle, Check, Edit3, Clock, RotateCcw } from 'luc
 import { CAT_ICONS } from '../data/products.js';
 import { findProductByPrice } from '../utils/parser.js';
 import { calculateSalary } from '../utils/salary.js';
+import { toLocalISODate } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
 
 export default function TextImportView() {
@@ -16,7 +17,7 @@ export default function TextImportView() {
   const [suggestions, setSuggestions] = useState([]);
   const [localName, setLocalName] = useState(() => adminImportMode ? '' : (employeeName || '')); // В админ-режиме имя стартует пустым
   // Дата отчёта (только для админ-импорта; формат YYYY-MM-DD для input[type=date])
-  const todayISO = new Date().toISOString().split('T')[0];
+  const todayISO = toLocalISODate();
   const [customDate, setCustomDate] = useState(todayISO);
   const [teachingIdx, setTeachingIdx] = useState(null); // Индекс нераспознанной позиции для обучения
   const [teachAlias, setTeachAlias] = useState('');

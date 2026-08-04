@@ -154,6 +154,7 @@ export default function NewReportView() {
         location: saleLocation || null,
         photo: salePhoto || null,
         quantity: 1,
+        source: 'manual', // BUGFIX: чтобы в истории показывалось реальное время, а не "Импорт" (это не text-импорт)
       };
       
       if (sale.product) {

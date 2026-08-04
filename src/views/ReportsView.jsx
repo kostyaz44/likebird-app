@@ -139,7 +139,9 @@ export default function ReportsView() {
                     <span>•</span>
                     <span>{r.paymentType === 'cashless' ? '💳' : '💵'}</span>
                     {r.quantity > 1 && <><span>•</span><span>{r.quantity} шт</span></>}
-                    {r.date && r.date.includes(',') && (
+                    {r.source === 'import' ? (
+                      <><span>•</span><span className="font-mono text-blue-500">📥 Импорт</span></>
+                    ) : r.date && r.date.includes(',') && (
                       <><span>•</span><span className="font-mono">🕐 {(r.date||'').split(',')[1]?.trim()?.slice(0,5)}</span></>
                     )}
                   </div>

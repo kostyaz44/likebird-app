@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeft, AlertCircle, Edit3, Clock, CheckCircle, Star, Camera, LogOut, Key, Eye, EyeOff } from 'lucide-react';
 import { fbSave } from '../firebase.js';
 import { hashPassword } from '../utils/auth.js';
@@ -6,9 +6,10 @@ import { parseYear } from '../utils/dates.js';
 import { useApp } from '../context/AppContext';
 
 export default function ProfileView() {
-  const { DYNAMIC_ALL_PRODUCTS, achievementsGranted, bonuses, compressImage, customAchievements, darkMode, employeeKPI, employeeName, employeeRatings, employees, getEffectiveSalary, getEmployeeAverageRating, getEmployeeProgress, penalties, profilesData, reports, setAuthName, setCurrentView, setEmployeeName, setIsAuthenticated, shiftsData, showConfirm, showNotification, updateProfilesData } = useApp();
+  const { DYNAMIC_ALL_PRODUCTS, achievementsGranted, bonuses, compressImage, customAchievements, darkMode, employeeKPI, employeeName, employeeRatings, employees, getEffectiveSalary, getEmployeeAverageRating, getEmployeeProgress, penalties, pendingAchievementId, setPendingAchievementId, profilesData, reports, setAuthName, setCurrentView, setEmployeeName, setIsAuthenticated, shiftsData, showConfirm, showNotification, updateProfilesData } = useApp();
 
   const [tab, setTab] = useState('salary'); // salary | goals | achievements | bonuses | account
+  const [selectedAch, setSelectedAch] = useState(null); // карточка достижения, открытая для просмотра
   const [period, setPeriod] = useState('week'); // week | month
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
@@ -132,6 +133,16 @@ export default function ProfileView() {
 
   const achievements = [...builtinAchievements, ...customAchievementsEvaluated];
   const doneCount = achievements.filter(a => a.done).length;
+
+  // BUGFIX/FEATURE: переход из уведомления «Новое достижение» — открываем вкладку и карточку с подробностями
+  useEffect(() => {
+    if (pendingAchievementId) {
+      const ach = achievements.find(a => a.id === pendingAchievementId);
+      if (ach) { setTab('achievements'); setSelectedAch(ach); }
+      setPendingAchievementId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAchievementId]);
 
   const handleSavePassword = async () => {
     setPassError('');
@@ -527,7 +538,7 @@ export default function ProfileView() {
 
             <div className="grid grid-cols-1 gap-2">
               {achievements.sort((a, b) => b.done - a.done).map(ach => (
-                <div key={ach.id} className={`bg-white rounded-xl p-4 shadow flex items-center gap-3 transition-all ${!ach.done ? 'opacity-50 grayscale' : ''}`}>
+                <button key={ach.id} onClick={() => setSelectedAch(ach)} className={`text-left bg-white rounded-xl p-4 shadow flex items-center gap-3 transition-all hover:shadow-md active:scale-[0.99] ${!ach.done ? 'opacity-50 grayscale' : ''}`}>
                   <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0 ${ach.done ? 'bg-amber-100' : 'bg-gray-100'}`}>
                     {ach.done ? ach.icon : '🔒'}
                   </div>
@@ -536,9 +547,54 @@ export default function ProfileView() {
                     <p className="text-xs text-gray-400">{ach.desc}</p>
                   </div>
                   {ach.done && <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />}
-                </div>
+                </button>
               ))}
             </div>
+
+            {/* Модалка с подробностями достижения */}
+            {selectedAch && (() => {
+              // Текущий прогресс для достижений с числовым условием
+              let current = null, target = null;
+              const condType = selectedAch.isCustom ? selectedAch.condType : (
+                selectedAch.id.startsWith('sales_') ? 'sales_count' :
+                selectedAch.id.startsWith('revenue_') ? 'revenue' :
+                selectedAch.id === 'big_sale' ? 'big_sale' : null
+              );
+              if (condType === 'sales_count') { current = allMyReports.length; target = selectedAch.isCustom ? Number(selectedAch.condValue) : Number(selectedAch.id.split('_')[1]); }
+              else if (condType === 'revenue') { current = totalRevenue; target = selectedAch.isCustom ? Number(selectedAch.condValue) : Number(selectedAch.id.split('_')[1].replace('k', '000')); }
+              return (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelectedAch(null)}>
+                  <div className={`rounded-2xl p-6 max-w-sm w-full shadow-xl ${darkMode ? "bg-gray-800" : "bg-white"}`} onClick={e => e.stopPropagation()}>
+                    <div className="flex flex-col items-center text-center">
+                      <div className={`w-20 h-20 rounded-3xl flex items-center justify-center text-5xl mb-3 ${selectedAch.done ? 'bg-amber-100' : 'bg-gray-100'}`}>
+                        {selectedAch.done ? selectedAch.icon : '🔒'}
+                      </div>
+                      <p className="font-black text-lg">{selectedAch.title}</p>
+                      <p className={`text-sm mt-1 ${darkMode ? "text-gray-300" : "text-gray-500"}`}>{selectedAch.desc}</p>
+                      {selectedAch.done ? (
+                        <span className="mt-3 inline-flex items-center gap-1.5 bg-green-100 text-green-700 px-3 py-1.5 rounded-full text-sm font-semibold"><CheckCircle className="w-4 h-4" /> Получено</span>
+                      ) : (
+                        <span className="mt-3 inline-flex items-center gap-1.5 bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full text-sm font-semibold">🔒 Ещё не получено</span>
+                      )}
+                      {!selectedAch.done && current !== null && target > 0 && (
+                        <div className="w-full mt-4">
+                          <div className="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>Прогресс</span><span>{current.toLocaleString()} / {target.toLocaleString()}</span>
+                          </div>
+                          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-amber-400 rounded-full" style={{ width: `${Math.min(100, Math.round(current / target * 100))}%` }} />
+                          </div>
+                        </div>
+                      )}
+                      {selectedAch.bonusAmount > 0 && (
+                        <p className="mt-3 text-sm font-semibold text-green-600">🎁 Бонус: {Number(selectedAch.bonusAmount).toLocaleString()}₽</p>
+                      )}
+                      <button onClick={() => setSelectedAch(null)} className="mt-5 w-full py-2.5 bg-gray-100 rounded-xl font-semibold text-gray-600 hover:bg-gray-200">Закрыть</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 

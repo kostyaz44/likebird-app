@@ -654,7 +654,7 @@ export default function ShiftView() {
                       <div className="text-2xl">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-sm truncate">{r.product}</p>
-                        <p className="text-xs text-gray-400">{(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
+                        <p className="text-xs text-gray-400">{r.source === 'import' ? '📥 Импорт' : (r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'}</p>
                       </div>
                       <div className="text-right">
                         <p className="font-bold text-blue-600">{r.total.toLocaleString()}₽</p>
@@ -761,7 +761,7 @@ export default function ShiftView() {
                       <div className="text-2xl flex-shrink-0">{DYNAMIC_ALL_PRODUCTS.find(p => p.name === r.product)?.emoji || '🐦'}</div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-sm truncate">{r.product}</p>
-                        <p className="text-xs text-gray-400">{(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
+                        <p className="text-xs text-gray-400">{r.source === 'import' ? '📥 Импорт' : (r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳' : '💵'} · ЗП: {getEffectiveSalary(r)}₽</p>
                       </div>
                       <p className="font-bold text-gray-800">{r.total.toLocaleString()}₽</p>
                       {(() => {
@@ -819,7 +819,7 @@ export default function ShiftView() {
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-sm truncate">{r.product}</p>
                       <p className="text-xs text-gray-400">
-                        {(r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳 Безнал' : '💵 Нал'}
+                        {r.source === 'import' ? '📥 Импорт' : (r.date||'').split(',')[1]?.trim()} · {r.paymentType === 'cashless' ? '💳 Безнал' : '💵 Нал'}
                         {r.location && ` · 📍 ${r.location.split(' - ').pop()}`}
                       </p>
                     </div>

@@ -120,17 +120,21 @@ export default function TeamView() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6">
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-50 pb-6 overflow-x-hidden">
       <div className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white p-4 sticky top-0 z-10 safe-area-top">
         <button onClick={() => setCurrentView('menu')} className="mb-2" aria-label="Назад"><ArrowLeft className="w-6 h-6" /></button>
         <h2 className="text-xl font-bold flex items-center gap-2"><Users className="w-6 h-6" />Команда</h2>
       </div>
 
       {/* Вкладки команды */}
-      <div className="bg-white shadow-sm sticky top-16 z-10">
-        <div className="flex px-2 py-2 gap-1">
+      {/* BUGFIX: раньше кнопки вкладок были flex-1 без ограничения переноса/сжатия — при 6-8 вкладках
+          с длинными подписями их суммарная минимальная ширина превышала ширину экрана, из-за чего
+          скроллилась вся страница целиком (утаскивая контент за край экрана), а не сама панель вкладок.
+          Теперь скроллится только сама панель, контент остаётся на месте. */}
+      <div className="bg-white shadow-sm sticky top-16 z-10 overflow-hidden">
+        <div className="flex px-2 py-2 gap-1 overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
           {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setTeamTab(tab.id)} className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${teamTab === tab.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            <button key={tab.id} onClick={() => setTeamTab(tab.id)} className={`flex-shrink-0 whitespace-nowrap px-3 py-2 rounded-lg text-sm font-medium transition-all ${teamTab === tab.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
               {tab.label}
             </button>
           ))}

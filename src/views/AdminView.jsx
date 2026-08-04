@@ -199,7 +199,7 @@ export default function AdminView() {
   const employeeStats = weekReports.reduce((acc, r) => {
     if (!acc[r.employee]) acc[r.employee] = { sales: 0, revenue: 0, count: 0 };
     acc[r.employee].sales += (r.quantity || 1);
-    acc[r.employee].revenue += r.total;
+    acc[r.employee].revenue += (r.total || 0); // BUGFIX: без || 0 один отчёт без total превращал всю сумму в NaN
     acc[r.employee].count++;
     return acc;
   }, {});
@@ -208,7 +208,7 @@ export default function AdminView() {
   const categoryStats = weekReports.reduce((acc, r) => {
     if (!acc[r.category]) acc[r.category] = { count: 0, revenue: 0 };
     acc[r.category].count += (r.quantity || 1);
-    acc[r.category].revenue += r.total;
+    acc[r.category].revenue += (r.total || 0); // BUGFIX: аналогично — защита от NaN
     return acc;
   }, {});
 
@@ -371,7 +371,7 @@ export default function AdminView() {
                     {Object.entries(todayReports.reduce((acc, r) => {
                       if (!acc[r.employee]) acc[r.employee] = { count: 0, revenue: 0 };
                       acc[r.employee].count++;
-                      acc[r.employee].revenue += r.total;
+                      acc[r.employee].revenue += (r.total || 0); // BUGFIX: защита от NaN, как в других агрегатах
                       return acc;
                     }, {})).sort((a, b) => b[1].revenue - a[1].revenue).map(([emp, data]) => (
                       <div key={emp} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">

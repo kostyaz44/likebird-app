@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { BarChart3, Plus, ArrowLeft, Trash2, X, AlertTriangle, AlertCircle, ChevronLeft, ChevronRight, Copy, Lock, Edit3 } from 'lucide-react';
-import { CAT_ICONS } from '../data/products.js';
+import { CAT_ICONS, AMBIGUOUS_PRODUCTS } from '../data/products.js';
 import { calculateSalary, isBelowBasePrice } from '../utils/salary.js';
 import { useApp } from '../context/AppContext';
 
@@ -25,6 +25,25 @@ function FixUnrecognizedButton({ report }) {
     </div>
   );
   return <button onClick={() => setEditing(true)} className="mt-2 w-full flex items-center justify-center gap-2 text-white bg-blue-500 hover:bg-blue-600 py-2 px-3 rounded-lg text-sm font-semibold"><Edit3 className="w-4 h-4" /> Исправить название</button>;
+}
+
+function ReclassifyButton({ report }) {
+  const { getProductName, reclassifyReport } = useApp();
+  const [confirming, setConfirming] = useState(false);
+  if (report.isUnrecognized) return null;
+  const currentName = getProductName(report.product);
+  // Ищем, не является ли текущий товар одной из двух сторон "двухсмысленной" пары
+  const rule = Object.values(AMBIGUOUS_PRODUCTS).find(r => r.name === currentName || r.nameAbove === currentName);
+  if (!rule) return null;
+  const altName = rule.name === currentName ? rule.nameAbove : rule.name;
+  if (confirming) return (
+    <div className="mt-2 flex items-center gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg p-2">
+      <span className="text-blue-700 flex-1">Заменить на «{altName}»? Цена продажи и оплата не изменятся.</span>
+      <button onClick={() => { reclassifyReport(report.id, altName); setConfirming(false); }} className="px-2 py-1 bg-blue-500 text-white rounded font-semibold">Да</button>
+      <button onClick={() => setConfirming(false)} className="px-2 py-1 bg-gray-200 rounded">Нет</button>
+    </div>
+  );
+  return <button onClick={() => setConfirming(true)} className="mt-1 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-semibold"><Edit3 className="w-3 h-3" /> Не тот вид? Исправить на «{altName}»</button>;
 }
 
 function SalaryDecisionButtons({ report, compact }) {
@@ -655,7 +674,7 @@ export default function DayReportView() {
                 )}
                 
                 {unrec.length > 0 && (<div className="bg-red-50 border border-red-200 rounded-lg p-2"><h4 className="font-bold text-red-700 text-xs mb-1"><AlertTriangle className="w-3 h-3 inline" /> Нераспознанные ({unrec.length})</h4>{unrec.map(r => (<div key={r.id} className="py-1 border-b border-red-200 last:border-0"><div className="flex justify-between items-center text-xs"><span className="text-red-600">❓ {getProductName(r.product)}</span><div className="flex items-center gap-1"><span>{r.total}₽</span>{canEdit(r) ? (<button onClick={() => deleteReport(r.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>) : (<Lock className="w-3 h-3 text-gray-400" />)}</div></div><FixUnrecognizedButton report={r} /></div>))}</div>)}
-                {belowPrice.length > 0 && (<div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2"><h4 className="font-bold text-yellow-700 text-xs mb-1"><AlertCircle className="w-3 h-3 inline" /> Со скидкой ({belowPrice.length})</h4>{belowPrice.map(r => (<div key={r.id} className="py-1 border-b border-yellow-200 last:border-0"><div className="flex justify-between items-center text-xs"><span>{getProductName(r.product)}</span><span>{r.total}₽ <span className="text-gray-400">(база: {r.basePrice}₽)</span></span></div>{r.discountReason && <p className="text-xs text-yellow-600 mt-0.5">💬 {r.discountReason}</p>}{isAdminUser && <SalaryDecisionButtons report={r} compact />}</div>))}</div>)}
+                {belowPrice.length > 0 && (<div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2"><h4 className="font-bold text-yellow-700 text-xs mb-1"><AlertCircle className="w-3 h-3 inline" /> Со скидкой ({belowPrice.length})</h4>{belowPrice.map(r => (<div key={r.id} className="py-1 border-b border-yellow-200 last:border-0"><div className="flex justify-between items-center text-xs"><span className="text-gray-800 font-medium">{getProductName(r.product)}</span><span className="text-gray-800 font-medium">{r.total}₽ <span className="text-gray-600">(база: {r.basePrice}₽)</span></span></div>{r.discountReason && <p className="text-xs text-yellow-700 mt-0.5">💬 {r.discountReason}</p>}{isAdminUser && <SalaryDecisionButtons report={r} compact />}<ReclassifyButton report={r} /></div>))}</div>)}
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between py-1 border-b"><span>💰 Итого</span><span className="font-bold">{grandTotal.toLocaleString()}{totalTips > 0 && <span className="text-amber-500"> ({(grandTotal+totalTips).toLocaleString()})</span>}₽</span></div>
                   <div className="flex justify-between py-1 border-b"><span>💵 Наличные</span><span className="font-bold text-green-600">{cashTotal.toLocaleString()}₽</span></div>
@@ -715,6 +734,7 @@ export default function DayReportView() {
                           })()}
                           {isDiscount && <p className="text-yellow-600 mt-0.5">Скидка: {r.basePrice - r.salePrice}₽{r.discountReason ? ` — ${r.discountReason}` : ''}</p>}
                           {r.addedBy && <p className="text-purple-500 mt-0.5">👤 {r.addedBy}</p>}
+                          <ReclassifyButton report={r} />
                         </div>
                       );
                     })}

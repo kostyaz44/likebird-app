@@ -3,7 +3,7 @@ import { ArrowLeft, Bell } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export default function NotificationsView() {
-  const { save, setCurrentView, setUserNotifications, userNotifications } = useApp();
+  const { save, setCurrentView, setUserNotifications, userNotifications, setPendingAchievementId } = useApp();
 
   const myLogin = (() => { try { return JSON.parse(localStorage.getItem('likebird-auth') || '{}').login; } catch { return ''; } })();
   // FIX: уведомления создаются с полем `timestamp`, а UI раньше читал `createdAt` (которое всегда undefined).
@@ -36,6 +36,12 @@ export default function NotificationsView() {
     return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   };
 
+  const openAchievement = (n) => {
+    if (!n.read) markAsRead(n.id);
+    if (n.achievementId) setPendingAchievementId(n.achievementId);
+    setCurrentView('profile');
+  };
+
   const NotifCard = ({ n, isUnread }) => (
     <div className={`rounded-xl p-3 shadow-sm border-l-4 ${isUnread ? 'bg-amber-50 border-amber-400' : 'bg-gray-50 border-gray-200'}`}>
       <div className="flex justify-between items-start gap-2">
@@ -47,11 +53,18 @@ export default function NotificationsView() {
           <p className="text-sm text-gray-700">{n.body}</p>
           <p className="text-xs text-gray-400 mt-1">{formatTime(getTs(n))}</p>
         </div>
-        {isUnread && (
-          <button onClick={() => markAsRead(n.id)} className="shrink-0 bg-amber-500 text-white text-xs px-2.5 py-1.5 rounded-lg font-semibold hover:bg-amber-600">
-            ✓ Прочитано
-          </button>
-        )}
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+          {n.type === 'achievement' && (
+            <button onClick={() => openAchievement(n)} className="bg-amber-500 text-white text-xs px-2.5 py-1.5 rounded-lg font-semibold hover:bg-amber-600 whitespace-nowrap">
+              Подробнее →
+            </button>
+          )}
+          {isUnread && (
+            <button onClick={() => markAsRead(n.id)} className="bg-gray-200 text-gray-600 text-xs px-2.5 py-1.5 rounded-lg font-semibold hover:bg-gray-300 whitespace-nowrap">
+              ✓ Прочитано
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
