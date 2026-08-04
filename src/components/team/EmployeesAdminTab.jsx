@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AlertTriangle, Gift, Palmtree, Edit3, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { parseYear } from '../../utils/dates.js';
+import { parseYear, toLocalISODate } from '../../utils/dates.js';
 
 /**
  * EmployeesAdminTab — обёртка для админских действий со штрафами/бонусами/отпусками.
@@ -74,7 +74,7 @@ export default function EmployeesAdminTab() {
 
   // === Активные отпуска/больничные (как getActiveTimeOff в оригинале) ===
   const getActiveTimeOff = () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = toLocalISODate();
     return (timeOff || []).filter(t => t.startDate <= today && t.endDate >= today);
   };
 
@@ -607,7 +607,7 @@ export default function EmployeesAdminTab() {
                 .slice(0, 40)
                 .map(t => {
                   const emp = employees.find(e => e.id === t.employeeId);
-                  const today = new Date().toISOString().split('T')[0];
+                  const today = toLocalISODate();
                   const isActive = t.startDate <= today && t.endDate >= today;
                   const isPast = t.endDate < today;
                   return (

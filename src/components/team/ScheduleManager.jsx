@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, CheckCircle, Trash2 } from 'lucide-react';
+import { toLocalISODate } from '../../utils/dates.js';
 import { useApp } from '../../context/AppContext';
 
 /**
@@ -153,16 +154,16 @@ export default function ScheduleManager() {
       return d;
     });
     const dayLabels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-    const todayDateStr = now.toISOString().split('T')[0];
+    const todayDateStr = toLocalISODate(now);
 
     const getShiftForDay = (emp, day) => {
-      const dayStr = day.toISOString().split('T')[0];
+      const dayStr = toLocalISODate(day);
       const empShifts = shifts[emp] || [];
       return empShifts.find(s => s.date === dayStr);
     };
 
     const toggleShiftType = (emp, day, type) => {
-      const dayStr = day.toISOString().split('T')[0];
+      const dayStr = toLocalISODate(day);
       // FIX: полностью иммутабельно — раньше {...shifts} был только верхним shallow copy
       const empShifts = shifts[emp] || [];
       const existingIdx = empShifts.findIndex(s => s.date === dayStr);
@@ -200,7 +201,7 @@ export default function ScheduleManager() {
             <tr className="border-b">
               <th className="text-left p-2 font-bold text-gray-700 min-w-[80px]">Сотрудник</th>
               {days.map((d, i) => {
-                const isToday = d.toISOString().split('T')[0] === todayDateStr;
+                const isToday = toLocalISODate(d) === todayDateStr;
                 return (
                   <th
                     key={i}
@@ -222,7 +223,7 @@ export default function ScheduleManager() {
               <tr key={emp} className="border-b last:border-0">
                 <td className="p-2 font-semibold text-gray-700">{emp}</td>
                 {days.map((d, i) => {
-                  const isToday = d.toISOString().split('T')[0] === todayDateStr;
+                  const isToday = toLocalISODate(d) === todayDateStr;
                   const shift = getShiftForDay(emp, d);
                   const shiftType = shift
                     ? shift.startTime === '09:00'
